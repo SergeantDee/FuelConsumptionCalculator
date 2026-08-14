@@ -1,0 +1,91 @@
+from __future__ import annotations
+
+import logging
+import sqlite3
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Iterator
+
+from fuel_consumption_calculator.config import SCHEMA_VERSION
+
+
+LOGGER = logging.getLogger(__name__)
+
+
+class Database:
+    def __init__(self, database_file: Path) -> None:
+        self.database_file = Path(database_file)
+
+    @contextmanager
+    def connect(self) -> Iterator[sqlite3.Connection]:
+        connection = sqlite3.connect(self.database_file, timeout=10)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        try:
+            yield connection
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def initialize(self) -> None:
+        self.database_file.parent.mkdir(parents=True, exist_ok=True)
+        with self.connect() as connection:
+            current_version = connection.execute("PRAGMA user_version").fetchone()[0]
+            if current_version > SCHEMA_VERSION:
+                raise RuntimeError(
+                    f"Database schema version {current_version} is newer than supported version {SCHEMA_VERSION}."
+                )
+            connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS vessels (
+                    id INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    imo TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS application_metadata (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+                """
+            )
+            if current_version < 2:
+                self._migrate_to_v2(connection)
+            connection.execute(
+                "INSERT OR REPLACE INTO application_metadata (key, value) VALUES ('schema_version', ?)",
+                (str(SCHEMA_VERSION),),
+            )
+            connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        LOGGER.info("Database initialized at %s with schema version %s", self.database_file, SCHEMA_VERSION)
+
+    def _migrate_to_v2(self, connection: sqlite3.Connection) -> None:
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS schedule_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vessel_id INTEGER NOT NULL,
+                sequence_number INTEGER NOT NULL,
+                port TEXT NOT NULL,
+                terminal TEXT,
+                event_type TEXT NOT NULL,
+                arrival_at TEXT NOT NULL,
+                departure_at TEXT,
+                source TEXT NOT NULL,
+                source_vessel_name TEXT NOT NULL,
+                source_from_date TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (vessel_id) REFERENCES vessels(id) ON DELETE CASCADE,
+                UNIQUE (vessel_id, sequence_number)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_schedule_events_vessel_sequence
+                ON schedule_events (vessel_id, sequence_number);
+            """
+        )
+        LOGGER.info("Database migrated to schema version 2.")
