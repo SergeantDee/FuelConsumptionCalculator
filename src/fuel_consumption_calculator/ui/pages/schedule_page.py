@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from fuel_consumption_calculator.domain.schedule import ScheduleCandidate, ScheduleEvent, ScheduleEventDraft
+from fuel_consumption_calculator.domain.schedule_timeline import ScheduleTimelineRow
 from fuel_consumption_calculator.services.schedule_service import ScheduleService
 from fuel_consumption_calculator.services.scraper_service import ScraperService
 from fuel_consumption_calculator.services.vessel_service import VesselService
@@ -32,9 +33,9 @@ from fuel_consumption_calculator.ui.widgets.page_header import PageHeader
 
 
 class ScheduleTableModel(QAbstractTableModel):
-    HEADERS = ("#", "Port", "Event", "Arrival", "Departure", "Source")
+    HEADERS = ("#", "Port", "Event", "Arrival", "Departure", "Port Stay", "From Previous", "Source")
 
-    def __init__(self, rows: list[ScheduleCandidate | ScheduleEvent] | None = None) -> None:
+    def __init__(self, rows: list[ScheduleCandidate | ScheduleEvent | ScheduleTimelineRow] | None = None) -> None:
         super().__init__()
         self._rows = rows or []
 
@@ -48,13 +49,17 @@ class ScheduleTableModel(QAbstractTableModel):
         if not index.isValid() or role != Qt.ItemDataRole.DisplayRole:
             return None
         row = self._rows[index.row()]
+        timeline_row = row if isinstance(row, ScheduleTimelineRow) else None
+        event = row.event if timeline_row else row
         values = (
-            row.sequence_number,
-            row.port,
-            row.event_type,
-            row.arrival_at.strftime("%d %b %Y %H:%M"),
-            row.departure_at.strftime("%d %b %Y %H:%M") if row.departure_at else "",
-            row.source,
+            event.sequence_number,
+            event.port,
+            event.event_type,
+            event.arrival_at.strftime("%d %b %Y %H:%M"),
+            event.departure_at.strftime("%d %b %Y %H:%M") if event.departure_at else "",
+            format_duration(timeline_row.port_stay_hours) if timeline_row else "",
+            format_duration(timeline_row.interval_from_previous_hours) if timeline_row else "",
+            event.source,
         )
         return str(values[index.column()])
 
@@ -65,7 +70,7 @@ class ScheduleTableModel(QAbstractTableModel):
             return self.HEADERS[section]
         return str(section + 1)
 
-    def set_rows(self, rows: list[ScheduleCandidate | ScheduleEvent]) -> None:
+    def set_rows(self, rows: list[ScheduleCandidate | ScheduleEvent | ScheduleTimelineRow]) -> None:
         self.beginResetModel()
         self._rows = rows
         self.endResetModel()
@@ -73,7 +78,24 @@ class ScheduleTableModel(QAbstractTableModel):
     def row_at(self, index: int) -> ScheduleCandidate | ScheduleEvent | None:
         if not 0 <= index < len(self._rows):
             return None
-        return self._rows[index]
+        row = self._rows[index]
+        return row.event if isinstance(row, ScheduleTimelineRow) else row
+
+
+def format_duration(hours: float | None) -> str:
+    if hours is None:
+        return ""
+    total_minutes = round(hours * 60)
+    days, remainder = divmod(total_minutes, 24 * 60)
+    whole_hours, minutes = divmod(remainder, 60)
+    parts = []
+    if days:
+        parts.append(f"{days} d")
+    if whole_hours or days:
+        parts.append(f"{whole_hours} h")
+    if minutes:
+        parts.append(f"{minutes} min")
+    return " ".join(parts) if parts else "0 h"
 
 
 class ScrapeWorkerSignals(QObject):
@@ -324,11 +346,14 @@ class SchedulePage(QWidget):
         self.add_button.setEnabled(True)
         self.edit_button.setEnabled(True)
         self.delete_button.setEnabled(True)
-        events = self._schedule_service.list_events(vessel.id)
-        self.table_model.set_rows(events)
-        self._set_empty_state(len(events) == 0)
+        timeline = self._schedule_service.get_timeline(vessel.id)
+        self.table_model.set_rows(timeline.rows)
+        self._set_empty_state(len(timeline.rows) == 0)
         if not self._scrape_running:
-            self.status_label.setText(f"{len(events)} saved schedule events.")
+            status = f"{len(timeline.rows)} saved schedule events."
+            if timeline.issues:
+                status = f"{status} Chronology warning: {timeline.issues[0].message}"
+            self.status_label.setText(status)
 
     def _set_empty_state(self, is_empty: bool) -> None:
         self.empty_state.setVisible(is_empty)
@@ -380,7 +405,8 @@ class SchedulePage(QWidget):
             QMessageBox.critical(self, "Schedule update failed", str(exc))
             self.status_label.setText("Schedule update failed. Existing saved schedule was preserved.")
             return
-        self.table_model.set_rows(events)
+        timeline = self._schedule_service.get_timeline(events[0].vessel_id) if events else None
+        self.table_model.set_rows(timeline.rows if timeline else [])
         self._set_empty_state(len(events) == 0)
         self.status_label.setText(f"Schedule updated with {len(events)} events.")
 
@@ -472,6 +498,10 @@ class SchedulePage(QWidget):
         self._apply_events(events, "Schedule event deleted.")
 
     def _apply_events(self, events: list[ScheduleEvent], message: str) -> None:
-        self.table_model.set_rows(events)
+        timeline = self._schedule_service.get_timeline(events[0].vessel_id) if events else None
+        self.table_model.set_rows(timeline.rows if timeline else [])
         self._set_empty_state(len(events) == 0)
-        self.status_label.setText(message)
+        if timeline and timeline.issues:
+            self.status_label.setText(f"{message} Chronology warning: {timeline.issues[0].message}")
+        else:
+            self.status_label.setText(message)

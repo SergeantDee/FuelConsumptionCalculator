@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fuel_consumption_calculator.domain.schedule import ScheduleCandidate, ScheduleEvent, ScheduleEventDraft
+from fuel_consumption_calculator.domain.schedule_timeline import ScheduleTimeline, build_schedule_timeline
 from fuel_consumption_calculator.repositories.schedule_repository import ScheduleRepository
 from fuel_consumption_calculator.scraper.validation import validate_schedule_candidates
 
@@ -11,6 +12,9 @@ class ScheduleService:
 
     def list_events(self, vessel_id: int) -> list[ScheduleEvent]:
         return self._repository.list_for_vessel(vessel_id)
+
+    def get_timeline(self, vessel_id: int) -> ScheduleTimeline:
+        return build_schedule_timeline(self.list_events(vessel_id))
 
     def confirm_schedule_update(self, vessel_id: int, candidates: list[ScheduleCandidate]) -> list[ScheduleEvent]:
         validate_schedule_candidates(candidates)
