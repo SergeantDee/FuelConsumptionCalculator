@@ -4,6 +4,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton, QStackedWidget, QVBoxLayout, QWidget
 
 from fuel_consumption_calculator.config import APPLICATION_NAME, APPLICATION_VERSION
+from fuel_consumption_calculator.services.consumption_service import ConsumptionService
 from fuel_consumption_calculator.services.schedule_service import ScheduleService
 from fuel_consumption_calculator.services.scraper_service import ScraperService
 from fuel_consumption_calculator.services.vessel_service import VesselService
@@ -23,6 +24,7 @@ class MainWindow(QMainWindow):
         vessel_service: VesselService,
         schedule_service: ScheduleService,
         scraper_service: ScraperService,
+        consumption_service: ConsumptionService,
     ) -> None:
         super().__init__()
         self.setWindowTitle(f"{APPLICATION_NAME} {APPLICATION_VERSION}")
@@ -51,11 +53,12 @@ class MainWindow(QMainWindow):
         self.page_stack = QStackedWidget()
         self.dashboard_page = DashboardPage(vessel_service)
         self.schedule_page = SchedulePage(vessel_service, schedule_service, scraper_service)
+        self.consumption_page = ConsumptionPage(vessel_service, consumption_service)
         self.settings_page = SettingsPage(vessel_service)
         pages = (
             self.dashboard_page,
             self.schedule_page,
-            ConsumptionPage(),
+            self.consumption_page,
             RobPage(),
             BunkerPage(),
             self.settings_page,
@@ -92,10 +95,13 @@ class MainWindow(QMainWindow):
             self.dashboard_page.refresh()
         elif index == 1:
             self.schedule_page.refresh()
+        elif index == 2:
+            self.consumption_page.refresh()
         elif index == 5:
             self.settings_page.refresh()
 
     def _vessel_configuration_changed(self) -> None:
         self.dashboard_page.refresh()
         self.schedule_page.refresh()
+        self.consumption_page.refresh()
         self.statusBar().showMessage("Vessel configuration saved", 4000)

@@ -56,6 +56,8 @@ class Database:
             )
             if current_version < 2:
                 self._migrate_to_v2(connection)
+            if current_version < 3:
+                self._migrate_to_v3(connection)
             connection.execute(
                 "INSERT OR REPLACE INTO application_metadata (key, value) VALUES ('schema_version', ?)",
                 (str(SCHEMA_VERSION),),
@@ -89,3 +91,25 @@ class Database:
             """
         )
         LOGGER.info("Database migrated to schema version 2.")
+
+    def _migrate_to_v3(self, connection: sqlite3.Connection) -> None:
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS vessel_consumption_rates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vessel_id INTEGER NOT NULL,
+                operating_mode TEXT NOT NULL,
+                fuel_type TEXT NOT NULL,
+                rate_mt_per_day REAL NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (vessel_id) REFERENCES vessels(id) ON DELETE CASCADE,
+                UNIQUE (vessel_id, operating_mode, fuel_type),
+                CHECK (rate_mt_per_day >= 0)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_consumption_rates_vessel
+                ON vessel_consumption_rates (vessel_id);
+            """
+        )
+        LOGGER.info("Database migrated to schema version 3.")

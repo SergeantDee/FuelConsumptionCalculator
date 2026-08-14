@@ -9,9 +9,11 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from fuel_consumption_calculator.config import APPLICATION_NAME, APPLICATION_VERSION
 from fuel_consumption_calculator.infrastructure.logging_config import configure_logging
 from fuel_consumption_calculator.paths import AppPaths
+from fuel_consumption_calculator.repositories.consumption_repository import ConsumptionRepository
 from fuel_consumption_calculator.repositories.database import Database
 from fuel_consumption_calculator.repositories.schedule_repository import ScheduleRepository
 from fuel_consumption_calculator.repositories.vessel_repository import VesselRepository
+from fuel_consumption_calculator.services.consumption_service import ConsumptionService
 from fuel_consumption_calculator.services.schedule_service import ScheduleService
 from fuel_consumption_calculator.services.scraper_service import ScraperService
 from fuel_consumption_calculator.services.vessel_service import VesselService
@@ -27,8 +29,9 @@ def build_main_window(paths: AppPaths) -> MainWindow:
     database.initialize()
     vessel_service = VesselService(VesselRepository(database))
     schedule_service = ScheduleService(ScheduleRepository(database))
+    consumption_service = ConsumptionService(ConsumptionRepository(database))
     scraper_service = ScraperService()
-    return MainWindow(vessel_service, schedule_service, scraper_service)
+    return MainWindow(vessel_service, schedule_service, scraper_service, consumption_service)
 
 
 def install_global_exception_handler() -> None:

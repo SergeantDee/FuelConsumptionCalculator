@@ -5,7 +5,7 @@ import sqlite3
 from fuel_consumption_calculator.repositories.database import Database
 
 
-def test_schema_migration_v1_to_v2_preserves_vessel(tmp_path):
+def test_schema_migration_v1_to_current_preserves_vessel(tmp_path):
     database_file = tmp_path / "legacy_v1.db"
     with sqlite3.connect(database_file) as connection:
         connection.executescript(
@@ -31,11 +31,12 @@ def test_schema_migration_v1_to_v2_preserves_vessel(tmp_path):
 
     with sqlite3.connect(database_file) as connection:
         vessel = connection.execute("SELECT name, imo FROM vessels WHERE id = 1").fetchone()
-        table = connection.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schedule_events'"
-        ).fetchone()
+        tables = {
+            row[0]
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
         user_version = connection.execute("PRAGMA user_version").fetchone()[0]
 
     assert vessel == ("Existing Vessel", "7654321")
-    assert table == ("schedule_events",)
-    assert user_version == 2
+    assert {"schedule_events", "vessel_consumption_rates"}.issubset(tables)
+    assert user_version == 3
