@@ -53,7 +53,7 @@ class MainWindow(QMainWindow):
         self.page_stack = QStackedWidget()
         self.dashboard_page = DashboardPage(vessel_service)
         self.schedule_page = SchedulePage(vessel_service, schedule_service, scraper_service)
-        self.consumption_page = ConsumptionPage(vessel_service, consumption_service)
+        self.consumption_page = ConsumptionPage(vessel_service, consumption_service, schedule_service)
         self.settings_page = SettingsPage(vessel_service)
         pages = (
             self.dashboard_page,

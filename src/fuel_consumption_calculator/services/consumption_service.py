@@ -6,6 +6,11 @@ from fuel_consumption_calculator.domain.consumption import (
     ConsumptionProfile,
     ConsumptionRate,
 )
+from fuel_consumption_calculator.calculations.consumption_engine import (
+    ScheduleFuelConsumption,
+    calculate_schedule_consumption,
+)
+from fuel_consumption_calculator.domain.schedule_timeline import ScheduleTimeline
 from fuel_consumption_calculator.repositories.consumption_repository import ConsumptionRepository
 
 
@@ -33,6 +38,14 @@ class ConsumptionService:
     def save_profile(self, profile: ConsumptionProfile) -> ConsumptionProfile:
         self._validate_profile(profile)
         return self.load_profile(self._repository.save_profile(profile).vessel_id)
+
+    def calculate_schedule_consumption(
+        self,
+        vessel_id: int,
+        timeline: ScheduleTimeline,
+    ) -> ScheduleFuelConsumption:
+        profile = self.load_profile(vessel_id)
+        return calculate_schedule_consumption(timeline, profile)
 
     def build_profile(self, vessel_id: int, rates: dict[tuple[str, str], float]) -> ConsumptionProfile:
         profile = ConsumptionProfile(
