@@ -24,6 +24,12 @@ def test_database_initialization_creates_deterministic_schema(tmp_path):
         ).fetchone()[0]
         user_version = connection.execute("PRAGMA user_version").fetchone()[0]
 
-    assert {"vessels", "application_metadata", "schedule_events", "vessel_consumption_rates"}.issubset(tables)
+    assert {
+        "vessels",
+        "application_metadata",
+        "schedule_events",
+        "vessel_consumption_rates",
+        "vessel_starting_rob",
+    }.issubset(tables)
     assert schema_version == str(SCHEMA_VERSION)
     assert user_version == SCHEMA_VERSION

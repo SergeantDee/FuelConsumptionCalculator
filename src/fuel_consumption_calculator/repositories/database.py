@@ -58,6 +58,8 @@ class Database:
                 self._migrate_to_v2(connection)
             if current_version < 3:
                 self._migrate_to_v3(connection)
+            if current_version < 4:
+                self._migrate_to_v4(connection)
             connection.execute(
                 "INSERT OR REPLACE INTO application_metadata (key, value) VALUES ('schema_version', ?)",
                 (str(SCHEMA_VERSION),),
@@ -113,3 +115,23 @@ class Database:
             """
         )
         LOGGER.info("Database migrated to schema version 3.")
+
+    def _migrate_to_v4(self, connection: sqlite3.Connection) -> None:
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS vessel_starting_rob (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vessel_id INTEGER NOT NULL,
+                fuel_type TEXT NOT NULL,
+                quantity_mt REAL NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (vessel_id) REFERENCES vessels(id) ON DELETE CASCADE,
+                UNIQUE (vessel_id, fuel_type),
+                CHECK (quantity_mt >= 0)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_starting_rob_vessel
+                ON vessel_starting_rob (vessel_id);
+            """
+        )
+        LOGGER.info("Database migrated to schema version 4.")

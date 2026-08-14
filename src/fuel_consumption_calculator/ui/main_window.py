@@ -5,6 +5,7 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMainWindow, QPushBut
 
 from fuel_consumption_calculator.config import APPLICATION_NAME, APPLICATION_VERSION
 from fuel_consumption_calculator.services.consumption_service import ConsumptionService
+from fuel_consumption_calculator.services.rob_service import ROBService
 from fuel_consumption_calculator.services.schedule_service import ScheduleService
 from fuel_consumption_calculator.services.scraper_service import ScraperService
 from fuel_consumption_calculator.services.vessel_service import VesselService
@@ -25,6 +26,7 @@ class MainWindow(QMainWindow):
         schedule_service: ScheduleService,
         scraper_service: ScraperService,
         consumption_service: ConsumptionService,
+        rob_service: ROBService,
     ) -> None:
         super().__init__()
         self.setWindowTitle(f"{APPLICATION_NAME} {APPLICATION_VERSION}")
@@ -54,12 +56,13 @@ class MainWindow(QMainWindow):
         self.dashboard_page = DashboardPage(vessel_service)
         self.schedule_page = SchedulePage(vessel_service, schedule_service, scraper_service)
         self.consumption_page = ConsumptionPage(vessel_service, consumption_service, schedule_service)
+        self.rob_page = RobPage(vessel_service, rob_service, schedule_service, consumption_service)
         self.settings_page = SettingsPage(vessel_service)
         pages = (
             self.dashboard_page,
             self.schedule_page,
             self.consumption_page,
-            RobPage(),
+            self.rob_page,
             BunkerPage(),
             self.settings_page,
         )
@@ -97,6 +100,8 @@ class MainWindow(QMainWindow):
             self.schedule_page.refresh()
         elif index == 2:
             self.consumption_page.refresh()
+        elif index == 3:
+            self.rob_page.refresh()
         elif index == 5:
             self.settings_page.refresh()
 
@@ -104,4 +109,5 @@ class MainWindow(QMainWindow):
         self.dashboard_page.refresh()
         self.schedule_page.refresh()
         self.consumption_page.refresh()
+        self.rob_page.refresh()
         self.statusBar().showMessage("Vessel configuration saved", 4000)

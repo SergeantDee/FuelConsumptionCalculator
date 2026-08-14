@@ -38,5 +38,5 @@ def test_schema_migration_v1_to_current_preserves_vessel(tmp_path):
         user_version = connection.execute("PRAGMA user_version").fetchone()[0]
 
     assert vessel == ("Existing Vessel", "7654321")
-    assert {"schedule_events", "vessel_consumption_rates"}.issubset(tables)
-    assert user_version == 3
+    assert {"schedule_events", "vessel_consumption_rates", "vessel_starting_rob"}.issubset(tables)
+    assert user_version == 4
