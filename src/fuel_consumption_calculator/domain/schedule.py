@@ -32,3 +32,16 @@ class ScheduleEvent:
     created_at: str
     updated_at: str
     terminal: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ScheduleEventDraft:
+    sequence_number: int
+    port: str
+    event_type: str
+    arrival_at: datetime
+    departure_at: datetime | None
+    source: str
+    source_vessel_name: str
+    source_from_date: date
+    terminal: str | None = None
