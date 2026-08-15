@@ -62,6 +62,8 @@ class Database:
                 self._migrate_to_v4(connection)
             if current_version < 5:
                 self._migrate_to_v5(connection)
+            if current_version < 6:
+                self._migrate_to_v6(connection)
             connection.execute(
                 "INSERT OR REPLACE INTO application_metadata (key, value) VALUES ('schema_version', ?)",
                 (str(SCHEMA_VERSION),),
@@ -178,3 +180,24 @@ class Database:
             """
         )
         LOGGER.info("Database migrated to schema version 5.")
+
+    def _migrate_to_v6(self, connection: sqlite3.Connection) -> None:
+        columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(planned_bunker_quantities)").fetchall()
+        }
+        if "status" not in columns:
+            connection.execute(
+                """
+                ALTER TABLE planned_bunker_quantities
+                ADD COLUMN status TEXT NOT NULL DEFAULT 'DRAFT'
+                """
+            )
+        connection.execute(
+            """
+            UPDATE planned_bunker_quantities
+            SET status = 'DRAFT'
+            WHERE status IS NULL OR status NOT IN ('DRAFT', 'CONFIRMED')
+            """
+        )
+        LOGGER.info("Database migrated to schema version 6.")

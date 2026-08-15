@@ -148,6 +148,7 @@ class BunkerPage(QWidget):
         self._arrival_rob_labels: dict[str, QLabel] = {}
         self._max_lift_labels: dict[str, QLabel] = {}
         self._lift_limits: dict[str, BunkerLiftLimit] = {}
+        self._loading_plan = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(32, 28, 32, 28)
@@ -191,6 +192,9 @@ class BunkerPage(QWidget):
         self.event_combo = QComboBox()
         self.event_combo.currentIndexChanged.connect(self._selection_changed)
         plan_layout.addWidget(self.event_combo)
+        self.plan_status_label = QLabel("Status: DRAFT")
+        self.plan_status_label.setObjectName("fieldLabel")
+        plan_layout.addWidget(self.plan_status_label)
         plan_grid = QGridLayout()
         headers = ("Fuel", "Capacity", "Target %", "Target ROB", "Arrival ROB", "Max Lift", "Planned Lift")
         for column, header in enumerate(headers):
@@ -213,18 +217,22 @@ class BunkerPage(QWidget):
             self._arrival_rob_labels[fuel_type] = arrival_label
             self._max_lift_labels[fuel_type] = max_lift_label
             self._planned_inputs[fuel_type] = planned_input
+            planned_input.valueChanged.connect(self._planned_quantity_changed)
             setattr(self, f"_{fuel_type.lower()}_capacity_label", capacity_label)
             setattr(self, f"_{fuel_type.lower()}_target_label", target_label)
         plan_layout.addLayout(plan_grid)
         actions = QHBoxLayout()
-        self.save_plan_button = QPushButton("Save / Update Bunker Plan")
+        self.save_plan_button = QPushButton("Save Planned Bunker")
         self.save_plan_button.setObjectName("primaryButton")
         self.save_plan_button.clicked.connect(self._save_plan)
+        self.confirm_plan_button = QPushButton("Confirm Planned Bunker")
+        self.confirm_plan_button.clicked.connect(self._confirm_plan)
         self.use_max_button = QPushButton("Use Max Lift")
         self.use_max_button.clicked.connect(self._use_max_lift)
         self.clear_plan_button = QPushButton("Clear Bunker Plan")
         self.clear_plan_button.clicked.connect(self._clear_plan)
         actions.addWidget(self.save_plan_button)
+        actions.addWidget(self.confirm_plan_button)
         actions.addWidget(self.use_max_button)
         actions.addWidget(self.clear_plan_button)
         actions.addStretch()
@@ -309,7 +317,30 @@ class BunkerPage(QWidget):
             QMessageBox.warning(self, "Bunker plan not saved", str(exc))
             return
         self._refresh_projection(vessel.id)
-        self.status_label.setText("Bunker plan saved.")
+        self._selection_changed()
+        self.status_label.setText("Bunker plan saved as DRAFT.")
+
+    def _confirm_plan(self) -> None:
+        vessel = self._vessel_service.get_active_vessel()
+        event = self._selected_event()
+        if vessel is None or event is None:
+            QMessageBox.warning(self, "Schedule event required", "Select a schedule event before confirming a bunker plan.")
+            return
+        matching_status = self._matching_plan_status(vessel.id, event)
+        if matching_status is None:
+            QMessageBox.warning(self, "Bunker plan required", "Save a planned bunker before confirming it.")
+            return
+        if matching_status.status == "STALE":
+            QMessageBox.warning(self, "Stale bunker plan", "This bunker plan no longer matches the current schedule event.")
+            return
+        try:
+            self._bunker_service.confirm_plan(matching_status.plan)
+        except Exception as exc:
+            QMessageBox.warning(self, "Bunker plan not confirmed", str(exc))
+            return
+        self._refresh_projection(vessel.id)
+        self._selection_changed()
+        self.status_label.setText("Bunker plan confirmed.")
 
     def _clear_plan(self) -> None:
         vessel = self._vessel_service.get_active_vessel()
@@ -334,17 +365,43 @@ class BunkerPage(QWidget):
         self.status_label.setText("Bunker plan cleared.")
 
     def _selection_changed(self) -> None:
+        self._loading_plan = True
         for spinbox in self._planned_inputs.values():
             spinbox.setValue(0)
         vessel = self._vessel_service.get_active_vessel()
         event = self._selected_event()
         if vessel is not None and event is not None:
-            for status in self._bunker_service.list_plan_statuses(vessel.id, self._events):
-                if status.plan.sequence_number == event.sequence_number and status.plan.port_snapshot == event.port:
-                    for fuel_type in FUEL_TYPES:
-                        self._planned_inputs[fuel_type].setValue(status.plan.quantity_for(fuel_type))
-                    break
+            matching_status = self._matching_plan_status(vessel.id, event)
+            if matching_status is not None:
+                for fuel_type in FUEL_TYPES:
+                    self._planned_inputs[fuel_type].setValue(matching_status.plan.quantity_for(fuel_type))
+                self.plan_status_label.setText(f"Status: {matching_status.status}")
+            else:
+                self.plan_status_label.setText("Status: DRAFT")
+        else:
+            self.plan_status_label.setText("Status: DRAFT")
+        self._loading_plan = False
         self._update_lift_limits()
+
+    def _planned_quantity_changed(self) -> None:
+        if self._loading_plan:
+            return
+        vessel = self._vessel_service.get_active_vessel()
+        event = self._selected_event()
+        if vessel is None or event is None:
+            return
+        matching_status = self._matching_plan_status(vessel.id, event)
+        if matching_status is None:
+            self.plan_status_label.setText("Status: DRAFT")
+            return
+        changed = any(
+            abs(self._planned_inputs[fuel_type].value() - matching_status.plan.quantity_for(fuel_type)) > 0.001
+            for fuel_type in FUEL_TYPES
+        )
+        if changed:
+            self.plan_status_label.setText("Status: DRAFT")
+        else:
+            self.plan_status_label.setText(f"Status: {matching_status.status}")
 
     def _use_max_lift(self) -> None:
         for fuel_type, limit in self._lift_limits.items():
@@ -364,7 +421,7 @@ class BunkerPage(QWidget):
             projection = self._bunker_service.project_schedule_rob_with_bunkers(
                 starting_rob=starting_rob,
                 consumption=consumption,
-                active_bunker_plans=[status.plan for status in plan_statuses if status.status == "ACTIVE"],
+                active_bunker_plans=[status.plan for status in plan_statuses if status.status == "CONFIRMED"],
             )
         except Exception as exc:
             self.projection_model.set_rows([])
@@ -409,8 +466,19 @@ class BunkerPage(QWidget):
             return None
         return self.plans_model.row_at(selected_rows[0].row())
 
+    def _matching_plan_status(self, vessel_id: int, event: ScheduleEvent) -> BunkerPlanStatus | None:
+        arrival_snapshot = event.arrival_at.isoformat(timespec="minutes")
+        for status in self._bunker_service.list_plan_statuses(vessel_id, self._events):
+            if (
+                status.plan.sequence_number == event.sequence_number
+                and status.plan.port_snapshot == event.port
+                and status.plan.arrival_snapshot == arrival_snapshot
+            ):
+                return status
+        return None
+
     def _set_controls_enabled(self, enabled: bool) -> None:
-        for widget in [self.event_combo, self.save_capacity_button, self.save_plan_button, self.use_max_button, self.clear_plan_button]:
+        for widget in [self.event_combo, self.save_capacity_button, self.save_plan_button, self.confirm_plan_button, self.use_max_button, self.clear_plan_button]:
             widget.setEnabled(enabled)
         for inputs in (self._capacity_inputs, self._target_inputs, self._planned_inputs):
             for spinbox in inputs.values():

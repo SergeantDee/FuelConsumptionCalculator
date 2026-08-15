@@ -49,6 +49,30 @@ def consumption_result(rows: list[EventFuelConsumption]) -> ScheduleFuelConsumpt
     )
 
 
+def _one_event_bunker_context(tmp_path):
+    database = Database(tmp_path / "test.db")
+    database.initialize()
+    vessel = VesselRepository(database).save_active("Maersk Labrea", "1234567")
+    schedule_repository = ScheduleRepository(database)
+    events = schedule_repository.replace_for_vessel(
+        vessel.id,
+        [
+            ScheduleCandidate(
+                sequence_number=1,
+                port="Original Port",
+                event_type="Port Call",
+                arrival_at=datetime(2026, 9, 1, 8),
+                departure_at=None,
+                source="manual",
+                source_vessel_name=vessel.name,
+                source_from_date=date(2026, 9, 1),
+            )
+        ],
+    )
+    service = BunkerService(BunkerRepository(database))
+    return database, vessel, schedule_repository, events, service
+
+
 def test_max_lift_uses_target_percent_and_arrival_rob():
     service = BunkerService(BunkerRepository(Database(":memory:")))
     profile = BunkerCapacityProfile(
@@ -119,26 +143,7 @@ def test_bunker_projection_keeps_fuels_independent_and_negative_before_bunker():
 
 
 def test_stale_bunker_plan_is_not_applied(tmp_path):
-    database = Database(tmp_path / "test.db")
-    database.initialize()
-    vessel = VesselRepository(database).save_active("Maersk Labrea", "1234567")
-    schedule_repository = ScheduleRepository(database)
-    events = schedule_repository.replace_for_vessel(
-        vessel.id,
-        [
-            ScheduleCandidate(
-                sequence_number=1,
-                port="Original Port",
-                event_type="Port Call",
-                arrival_at=datetime(2026, 9, 1, 8),
-                departure_at=None,
-                source="manual",
-                source_vessel_name=vessel.name,
-                source_from_date=date(2026, 9, 1),
-            )
-        ],
-    )
-    service = BunkerService(BunkerRepository(database))
+    _database, vessel, schedule_repository, events, service = _one_event_bunker_context(tmp_path)
     service.save_plan(service.build_plan(vessel_id=vessel.id, event=events[0], quantities={"ULSFO": 50}))
 
     changed_events = schedule_repository.replace_for_vessel(
@@ -161,3 +166,51 @@ def test_stale_bunker_plan_is_not_applied(tmp_path):
 
     assert statuses[0].status == "STALE"
     assert service.active_plans(vessel.id, changed_events) == []
+
+
+def test_new_saved_bunker_plan_is_draft(tmp_path):
+    _database, vessel, _schedule_repository, events, service = _one_event_bunker_context(tmp_path)
+
+    saved_plan = service.save_plan(service.build_plan(vessel_id=vessel.id, event=events[0], quantities={"ULSFO": 50}))
+    statuses = service.list_plan_statuses(vessel.id, events)
+
+    assert saved_plan is not None
+    assert saved_plan.status == "DRAFT"
+    assert statuses[0].status == "DRAFT"
+    assert service.active_plans(vessel.id, events) == []
+
+
+def test_confirmed_bunker_plan_is_applied_to_projection(tmp_path):
+    _database, vessel, _schedule_repository, events, service = _one_event_bunker_context(tmp_path)
+    draft_plan = service.save_plan(service.build_plan(vessel_id=vessel.id, event=events[0], quantities={"ULSFO": 50}))
+
+    confirmed_plan = service.confirm_plan(draft_plan)
+    projection = project_schedule_rob_with_bunkers(
+        starting_rob(ulsfo=100),
+        consumption_result([consumption_row(1, ulsfo=10)]),
+        service.active_plans(vessel.id, events),
+    )
+
+    assert confirmed_plan is not None
+    assert confirmed_plan.status == "CONFIRMED"
+    assert service.list_plan_statuses(vessel.id, events)[0].status == "CONFIRMED"
+    assert projection.rows[0].arrival_rob_mt["ULSFO"] == 90
+    assert projection.rows[0].post_bunker_rob_mt["ULSFO"] == 140
+
+
+def test_editing_confirmed_plan_returns_to_draft_and_is_not_applied(tmp_path):
+    _database, vessel, _schedule_repository, events, service = _one_event_bunker_context(tmp_path)
+    draft_plan = service.save_plan(service.build_plan(vessel_id=vessel.id, event=events[0], quantities={"ULSFO": 50}))
+    service.confirm_plan(draft_plan)
+
+    edited_plan = service.save_plan(service.build_plan(vessel_id=vessel.id, event=events[0], quantities={"ULSFO": 70}))
+    projection = project_schedule_rob_with_bunkers(
+        starting_rob(ulsfo=100),
+        consumption_result([consumption_row(1, ulsfo=10)]),
+        service.active_plans(vessel.id, events),
+    )
+
+    assert edited_plan is not None
+    assert edited_plan.status == "DRAFT"
+    assert service.list_plan_statuses(vessel.id, events)[0].status == "DRAFT"
+    assert projection.rows[0].post_bunker_rob_mt["ULSFO"] == 90

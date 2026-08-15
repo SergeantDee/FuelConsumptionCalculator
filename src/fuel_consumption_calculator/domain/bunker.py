@@ -18,6 +18,7 @@ class PlannedBunker:
     port_snapshot: str
     arrival_snapshot: str | None
     quantities: tuple[BunkerQuantity, ...]
+    status: str = "DRAFT"
 
     def quantity_for(self, fuel_type: str) -> float:
         for quantity in self.quantities:
@@ -72,6 +73,7 @@ def complete_bunker_plan(
     port_snapshot: str,
     arrival_snapshot: str | None,
     quantities: dict[str, float],
+    status: str = "DRAFT",
 ) -> PlannedBunker:
     return PlannedBunker(
         vessel_id=vessel_id,
@@ -82,4 +84,5 @@ def complete_bunker_plan(
             BunkerQuantity(fuel_type=fuel_type, quantity_mt=float(quantities.get(fuel_type, 0.0)))
             for fuel_type in FUEL_TYPES
         ),
+        status=status,
     )

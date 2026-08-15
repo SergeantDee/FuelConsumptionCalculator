@@ -4,6 +4,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 
 from fuel_consumption_calculator.domain.bunker import BunkerCapacity, BunkerCapacityProfile, BunkerQuantity, PlannedBunker
+from fuel_consumption_calculator.domain.consumption import FUEL_TYPES
 from fuel_consumption_calculator.repositories.database import Database
 
 
@@ -15,7 +16,7 @@ class BunkerRepository:
         with self._database.connect() as connection:
             rows = connection.execute(
                 """
-                SELECT sequence_number, port_snapshot, arrival_snapshot, fuel_type, quantity_mt
+                SELECT sequence_number, port_snapshot, arrival_snapshot, fuel_type, quantity_mt, status
                 FROM planned_bunker_quantities
                 WHERE vessel_id = ?
                 ORDER BY sequence_number, port_snapshot, arrival_snapshot, fuel_type
@@ -23,24 +24,26 @@ class BunkerRepository:
                 (vessel_id,),
             ).fetchall()
 
-        grouped: dict[tuple[int, str, str | None], list[BunkerQuantity]] = defaultdict(list)
+        grouped: dict[tuple[int, str, str | None, str], dict[str, float]] = defaultdict(dict)
         for row in rows:
-            key = (row["sequence_number"], row["port_snapshot"], row["arrival_snapshot"])
-            grouped[key].append(
-                BunkerQuantity(fuel_type=row["fuel_type"], quantity_mt=float(row["quantity_mt"]))
-            )
+            key = (row["sequence_number"], row["port_snapshot"], row["arrival_snapshot"], row["status"])
+            grouped[key][row["fuel_type"]] = float(row["quantity_mt"])
         return [
             PlannedBunker(
                 vessel_id=vessel_id,
                 sequence_number=sequence_number,
                 port_snapshot=port_snapshot,
                 arrival_snapshot=arrival_snapshot,
-                quantities=tuple(quantities),
+                quantities=tuple(
+                    BunkerQuantity(fuel_type=fuel_type, quantity_mt=quantities.get(fuel_type, 0.0))
+                    for fuel_type in FUEL_TYPES
+                ),
+                status=status,
             )
-            for (sequence_number, port_snapshot, arrival_snapshot), quantities in grouped.items()
+            for (sequence_number, port_snapshot, arrival_snapshot, status), quantities in grouped.items()
         ]
 
-    def save_plan(self, plan: PlannedBunker) -> PlannedBunker | None:
+    def save_plan(self, plan: PlannedBunker, status: str = "DRAFT") -> PlannedBunker | None:
         timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
         non_zero_quantities = [quantity for quantity in plan.quantities if quantity.quantity_mt > 0]
         with self._database.connect() as connection:
@@ -59,9 +62,9 @@ class BunkerRepository:
                     """
                     INSERT INTO planned_bunker_quantities (
                         vessel_id, sequence_number, port_snapshot, arrival_snapshot,
-                        fuel_type, quantity_mt, created_at, updated_at
+                        fuel_type, quantity_mt, status, created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         plan.vessel_id,
@@ -70,10 +73,34 @@ class BunkerRepository:
                         plan.arrival_snapshot,
                         quantity.fuel_type,
                         quantity.quantity_mt,
+                        status,
                         timestamp,
                         timestamp,
                     ),
                 )
+        for saved_plan in self.list_plans(plan.vessel_id):
+            if (
+                saved_plan.sequence_number == plan.sequence_number
+                and saved_plan.port_snapshot == plan.port_snapshot
+                and saved_plan.arrival_snapshot == plan.arrival_snapshot
+            ):
+                return saved_plan
+        return None
+
+    def confirm_plan(self, plan: PlannedBunker) -> PlannedBunker | None:
+        timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with self._database.connect() as connection:
+            connection.execute(
+                """
+                UPDATE planned_bunker_quantities
+                SET status = 'CONFIRMED', updated_at = ?
+                WHERE vessel_id = ?
+                  AND sequence_number = ?
+                  AND port_snapshot = ?
+                  AND arrival_snapshot = ?
+                """,
+                (timestamp, plan.vessel_id, plan.sequence_number, plan.port_snapshot, plan.arrival_snapshot),
+            )
         for saved_plan in self.list_plans(plan.vessel_id):
             if (
                 saved_plan.sequence_number == plan.sequence_number

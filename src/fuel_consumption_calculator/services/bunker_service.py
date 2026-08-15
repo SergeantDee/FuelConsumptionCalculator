@@ -45,7 +45,11 @@ class BunkerService:
 
     def save_plan(self, plan: PlannedBunker) -> PlannedBunker | None:
         self._validate_plan(plan)
-        return self._repository.save_plan(plan)
+        return self._repository.save_plan(plan, status="DRAFT")
+
+    def confirm_plan(self, plan: PlannedBunker) -> PlannedBunker | None:
+        self._validate_plan(plan)
+        return self._repository.confirm_plan(plan)
 
     def load_capacity_profile(self, vessel_id: int) -> BunkerCapacityProfile:
         stored = self._repository.load_capacity_profile(vessel_id)
@@ -123,13 +127,14 @@ class BunkerService:
         for plan in self._repository.list_plans(vessel_id):
             current_event = current_by_sequence.get(plan.sequence_number)
             current_arrival_snapshot = current_event.arrival_at.isoformat(timespec="minutes") if current_event else None
-            status = (
-                "ACTIVE"
-                if current_event is not None
+            if (
+                current_event is not None
                 and current_event.port == plan.port_snapshot
                 and current_arrival_snapshot == plan.arrival_snapshot
-                else "STALE"
-            )
+            ):
+                status = plan.status
+            else:
+                status = "STALE"
             statuses.append(BunkerPlanStatus(plan=plan, status=status))
         return statuses
 
@@ -137,7 +142,7 @@ class BunkerService:
         return [
             status.plan
             for status in self.list_plan_statuses(vessel_id, current_events)
-            if status.status == "ACTIVE"
+            if status.status == "CONFIRMED"
         ]
 
     def project_schedule_rob_with_bunkers(
@@ -161,6 +166,8 @@ class BunkerService:
             seen_fuels.add(quantity.fuel_type)
         if seen_fuels != set(FUEL_TYPES):
             raise ValueError("Bunker plan must include ULSFO, VLSFO, and MDO.")
+        if plan.status not in {"DRAFT", "CONFIRMED"}:
+            raise ValueError("Bunker plan status must be DRAFT or CONFIRMED.")
 
     def _validate_capacity_profile(self, profile: BunkerCapacityProfile) -> None:
         seen_fuels = set()

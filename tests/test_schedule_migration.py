@@ -45,4 +45,4 @@ def test_schema_migration_v1_to_current_preserves_vessel(tmp_path):
         "planned_bunker_quantities",
         "vessel_bunker_capacities",
     }.issubset(tables)
-    assert user_version == 5
+    assert user_version == 6
