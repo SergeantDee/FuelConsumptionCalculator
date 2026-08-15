@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QComboBox, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import QComboBox, QFormLayout, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 
 from fuel_consumption_calculator.services.schedule_service import ScheduleService
 from fuel_consumption_calculator.services.settings_service import SettingsService
@@ -23,29 +23,41 @@ class SettingsPage(QWidget):
         self._schedule_service = schedule_service
         self._settings_service = settings_service
 
-        layout = QVBoxLayout(self)
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.content = QWidget()
+        self.content.setMinimumWidth(900)
+        layout = QVBoxLayout(self.content)
         layout.setContentsMargins(32, 28, 32, 28)
-        layout.setSpacing(16)
+        layout.setSpacing(14)
         layout.addWidget(PageHeader("Settings", "Configure the active vessel used by this installation."))
 
         panel = QFrame()
         panel.setObjectName("card")
-        panel.setMaximumWidth(650)
+        panel.setMinimumHeight(150)
         panel_layout = QVBoxLayout(panel)
-        panel_layout.setContentsMargins(22, 20, 22, 20)
-        panel_layout.setSpacing(16)
+        panel_layout.setContentsMargins(20, 18, 20, 18)
+        panel_layout.setSpacing(12)
         section_title = QLabel("Vessel configuration")
         section_title.setObjectName("cardValue")
         panel_layout.addWidget(section_title)
 
         form = QFormLayout()
         form.setHorizontalSpacing(24)
-        form.setVerticalSpacing(14)
+        form.setVerticalSpacing(10)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
         self.vessel_name_input = QLineEdit()
         self.vessel_name_input.setPlaceholderText("e.g. MV Ocean Star")
+        self.vessel_name_input.setMinimumHeight(32)
         self.imo_input = QLineEdit()
         self.imo_input.setPlaceholderText("7 digits")
         self.imo_input.setMaxLength(7)
+        self.imo_input.setMinimumHeight(32)
         form.addRow(self._field_label("Vessel name"), self.vessel_name_input)
         form.addRow(self._field_label("IMO number"), self.imo_input)
         panel_layout.addLayout(form)
@@ -61,17 +73,22 @@ class SettingsPage(QWidget):
 
         timezone_panel = QFrame()
         timezone_panel.setObjectName("card")
+        timezone_panel.setMinimumHeight(300)
         timezone_layout = QVBoxLayout(timezone_panel)
-        timezone_layout.setContentsMargins(22, 20, 22, 20)
-        timezone_layout.setSpacing(12)
+        timezone_layout.setContentsMargins(20, 18, 20, 18)
+        timezone_layout.setSpacing(10)
         timezone_title = QLabel("Port timezones")
         timezone_title.setObjectName("cardValue")
         timezone_layout.addWidget(timezone_title)
         timezone_form = QFormLayout()
+        timezone_form.setVerticalSpacing(10)
+        timezone_form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
         self.port_input = QLineEdit()
         self.port_input.setPlaceholderText("e.g. Santos")
+        self.port_input.setMinimumHeight(32)
         self.timezone_input = QLineEdit()
         self.timezone_input.setPlaceholderText("e.g. America/Sao_Paulo")
+        self.timezone_input.setMinimumHeight(32)
         timezone_form.addRow(self._field_label("Port"), self.port_input)
         timezone_form.addRow(self._field_label("Timezone ID"), self.timezone_input)
         timezone_layout.addLayout(timezone_form)
@@ -83,6 +100,9 @@ class SettingsPage(QWidget):
         timezone_layout.addLayout(tz_actions)
         self.timezone_table = QTableWidget(0, 2)
         self.timezone_table.setHorizontalHeaderLabels(["Port", "Timezone ID"])
+        self.timezone_table.setMinimumHeight(190)
+        self.timezone_table.verticalHeader().setDefaultSectionSize(28)
+        self.timezone_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.timezone_table.horizontalHeader().setStretchLastSection(True)
         self.timezone_table.cellClicked.connect(self._select_timezone_row)
         timezone_layout.addWidget(self.timezone_table)
@@ -90,13 +110,17 @@ class SettingsPage(QWidget):
 
         scraper_panel = QFrame()
         scraper_panel.setObjectName("card")
+        scraper_panel.setMinimumHeight(145)
         scraper_layout = QVBoxLayout(scraper_panel)
-        scraper_layout.setContentsMargins(22, 20, 22, 20)
+        scraper_layout.setContentsMargins(20, 18, 20, 18)
+        scraper_layout.setSpacing(10)
         scraper_title = QLabel("Scraper")
         scraper_title.setObjectName("cardValue")
         scraper_layout.addWidget(scraper_title)
         scraper_form = QFormLayout()
+        scraper_form.setVerticalSpacing(10)
         self.scraper_mode_input = QComboBox()
+        self.scraper_mode_input.setMinimumHeight(32)
         self.scraper_mode_input.addItem("Visible Browser", "visible")
         self.scraper_mode_input.addItem("Background / Headless", "headless")
         scraper_form.addRow(self._field_label("Browser Mode"), self.scraper_mode_input)
@@ -109,6 +133,8 @@ class SettingsPage(QWidget):
         scraper_layout.addLayout(scraper_actions)
         layout.addWidget(scraper_panel)
         layout.addStretch()
+        self.scroll.setWidget(self.content)
+        root_layout.addWidget(self.scroll)
         self.refresh()
 
     @staticmethod

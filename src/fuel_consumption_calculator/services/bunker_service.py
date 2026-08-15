@@ -88,7 +88,7 @@ class BunkerService:
     def calculate_lift_limits(
         self,
         capacity_profile: BunkerCapacityProfile,
-        arrival_rob_mt: dict[str, float],
+        arrival_rob_mt: dict[str, float | None],
         target_overrides: dict[str, float] | None = None,
     ) -> dict[str, BunkerLiftLimit]:
         limits = {}
@@ -99,13 +99,14 @@ class BunkerService:
                 raise ValueError("Target fill percentage must be between 0 and 100.")
             target_rob = capacity.maximum_capacity_mt * target_percent / 100
             arrival_rob = arrival_rob_mt.get(fuel_type, 0.0)
+            max_lift = None if arrival_rob is None else max(0.0, target_rob - arrival_rob)
             limits[fuel_type] = BunkerLiftLimit(
                 fuel_type=fuel_type,
                 capacity_mt=capacity.maximum_capacity_mt,
                 target_fill_percent=target_percent,
                 target_rob_mt=target_rob,
                 arrival_rob_mt=arrival_rob,
-                max_lift_mt=max(0.0, target_rob - arrival_rob),
+                max_lift_mt=max_lift,
             )
         return limits
 
@@ -187,5 +188,7 @@ class BunkerService:
     def _validate_lift_limits(self, plan: PlannedBunker, lift_limits: dict[str, BunkerLiftLimit]) -> None:
         for quantity in plan.quantities:
             limit = lift_limits.get(quantity.fuel_type)
-            if limit is not None and quantity.quantity_mt > limit.max_lift_mt:
+            if limit is not None and limit.max_lift_mt is None and quantity.quantity_mt > 0:
+                raise ValueError(f"Planned {quantity.fuel_type} lift cannot be validated because Max Lift is unavailable.")
+            if limit is not None and limit.max_lift_mt is not None and quantity.quantity_mt > limit.max_lift_mt:
                 raise ValueError(f"Planned {quantity.fuel_type} lift exceeds calculated Max Lift.")

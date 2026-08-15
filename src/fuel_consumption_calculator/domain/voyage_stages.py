@@ -21,8 +21,8 @@ STATUS_PLANNED = "PLANNED"
 
 @dataclass(frozen=True, slots=True)
 class StageROB:
-    start_mt: dict[str, float]
-    end_mt: dict[str, float]
+    start_mt: dict[str, float | None]
+    end_mt: dict[str, float | None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,14 +37,17 @@ class OperationalStage:
     event: ScheduleEvent | None
     leg: CalculatedVoyageLeg | None
     incoming_leg: CalculatedVoyageLeg | None
-    consumption_mt: dict[str, float]
+    consumption_mt: dict[str, float | None]
     rob: StageROB
     changeovers: tuple[FuelChangeoverEvent, ...] = ()
     port_breakdown: PortEnergyBreakdown | None = None
 
     @property
-    def total_consumption_mt(self) -> float:
-        return sum(self.consumption_mt.get(fuel_type, 0.0) for fuel_type in FUEL_TYPES)
+    def total_consumption_mt(self) -> float | None:
+        values = [self.consumption_mt.get(fuel_type) for fuel_type in FUEL_TYPES]
+        if any(value is None for value in values):
+            return None
+        return sum(float(value or 0.0) for value in values)
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,7 +55,7 @@ class VoyageStageTimeline:
     stages: list[OperationalStage]
     current_stage: OperationalStage | None
     next_port: str | None
-    current_predicted_rob_mt: dict[str, float]
+    current_predicted_rob_mt: dict[str, float | None]
 
 
 def build_voyage_stage_timeline(
@@ -69,7 +72,8 @@ def build_voyage_stage_timeline(
     port_breakdowns = plan.port_breakdowns or {}
     changeovers = tuple(sorted(plan.fuel_changeovers, key=lambda event: _instant(event.effective_at_utc) or datetime.min))
     observations = tuple(sorted(rob_observations, key=lambda observation: _instant(observation.effective_at_utc) or datetime.min))
-    cursor_rob = {fuel_type: starting_rob.quantity_for(fuel_type) for fuel_type in FUEL_TYPES}
+    applied_observation_indexes: set[int] = set()
+    cursor_rob: dict[str, float | None] = {fuel_type: starting_rob.quantity_for(fuel_type) for fuel_type in FUEL_TYPES}
     stages: list[OperationalStage] = []
     now = _instant(now_utc or datetime.now(timezone.utc))
 
@@ -94,6 +98,7 @@ def build_voyage_stage_timeline(
             consumption=port_consumption,
             cursor_rob=cursor_rob,
             observations=observations,
+            applied_observation_indexes=applied_observation_indexes,
             changeovers=_changeovers_between(changeovers, port_start, port_end),
             port_breakdown=port_breakdown,
         )
@@ -122,6 +127,7 @@ def build_voyage_stage_timeline(
             consumption=outgoing.departure_maneuvering_consumed_mt,
             cursor_rob=cursor_rob,
             observations=observations,
+            applied_observation_indexes=applied_observation_indexes,
             changeovers=_changeovers_between(changeovers, outgoing.effective_berth_departure, outgoing.pilot_off),
         )
         stages.append(stage)
@@ -146,6 +152,7 @@ def build_voyage_stage_timeline(
             consumption=outgoing.sea_consumed_mt,
             cursor_rob=cursor_rob,
             observations=observations,
+            applied_observation_indexes=applied_observation_indexes,
             changeovers=_changeovers_between(changeovers, outgoing.pilot_off, outgoing.pilot_on),
         )
         stages.append(stage)
@@ -170,17 +177,19 @@ def build_voyage_stage_timeline(
             consumption=outgoing.arrival_maneuvering_consumed_mt,
             cursor_rob=cursor_rob,
             observations=observations,
+            applied_observation_indexes=applied_observation_indexes,
             changeovers=_changeovers_between(changeovers, outgoing.pilot_on, outgoing.effective_berth_arrival),
         )
         stages.append(stage)
 
     current_stage = next((stage for stage in stages if stage.status == STATUS_CURRENT), None)
+    pre_voyage = _is_before_first_stage(stages, now)
     next_port = _next_port(current_stage, ordered_events, plan.legs)
     return VoyageStageTimeline(
         stages=stages,
         current_stage=current_stage,
         next_port=next_port,
-        current_predicted_rob_mt=dict(current_stage.rob.start_mt if current_stage else cursor_rob),
+        current_predicted_rob_mt=dict(stages[0].rob.start_mt if pre_voyage else (current_stage.rob.start_mt if current_stage else cursor_rob)),
     )
 
 
@@ -196,15 +205,26 @@ def _stage(
     event: ScheduleEvent | None,
     leg: CalculatedVoyageLeg | None,
     incoming_leg: CalculatedVoyageLeg | None,
-    consumption: dict[str, float],
-    cursor_rob: dict[str, float],
+    consumption: dict[str, float | None],
+    cursor_rob: dict[str, float | None],
     observations: tuple[ActualROBObservation, ...],
+    applied_observation_indexes: set[int],
     changeovers: tuple[FuelChangeoverEvent, ...],
     port_breakdown: PortEnergyBreakdown | None = None,
 ) -> OperationalStage:
+    normalized_start = _instant(start_utc)
+    normalized_end = _instant(end_utc)
+    _apply_observations_through(cursor_rob, observations, applied_observation_indexes, normalized_start)
     start_rob = dict(cursor_rob)
     normalized_consumption = {fuel_type: consumption.get(fuel_type, 0.0) for fuel_type in FUEL_TYPES}
-    _apply_consumption_with_observations(cursor_rob, normalized_consumption, _instant(start_utc), _instant(end_utc), observations)
+    _apply_consumption_with_observations(
+        cursor_rob,
+        normalized_consumption,
+        normalized_start,
+        normalized_end,
+        observations,
+        applied_observation_indexes,
+    )
     return OperationalStage(
         key=key,
         stage_type=stage_type,
@@ -224,32 +244,73 @@ def _stage(
 
 
 def _apply_consumption_with_observations(
-    cursor_rob: dict[str, float],
-    consumption: dict[str, float],
+    cursor_rob: dict[str, float | None],
+    consumption: dict[str, float | None],
     start_utc: datetime | None,
     end_utc: datetime | None,
     observations: tuple[ActualROBObservation, ...],
+    applied_observation_indexes: set[int],
 ) -> None:
+    if any(value is None for value in consumption.values()):
+        exact_end_observation: ActualROBObservation | None = None
+        for index, observation in enumerate(observations):
+            if index in applied_observation_indexes:
+                continue
+            obs_time = _instant(observation.effective_at_utc)
+            if obs_time is None or start_utc is None or end_utc is None or not (start_utc < obs_time <= end_utc):
+                continue
+            applied_observation_indexes.add(index)
+            if obs_time == end_utc:
+                exact_end_observation = observation
+        if exact_end_observation is not None:
+            for fuel_type in FUEL_TYPES:
+                cursor_rob[fuel_type] = exact_end_observation.quantity_for(fuel_type)
+            return
+        for fuel_type in FUEL_TYPES:
+            cursor_rob[fuel_type] = None
+        return
     if start_utc is None or end_utc is None or end_utc <= start_utc:
         for fuel_type in FUEL_TYPES:
-            cursor_rob[fuel_type] -= consumption[fuel_type]
+            cursor_rob[fuel_type] = _subtract_optional(cursor_rob[fuel_type], consumption[fuel_type])
         return
     stage_hours = (end_utc - start_utc).total_seconds() / 3600
     cursor = start_utc
-    for observation in observations:
+    for index, observation in enumerate(observations):
+        if index in applied_observation_indexes:
+            continue
         obs_time = _instant(observation.effective_at_utc)
         if obs_time is None or not (start_utc < obs_time <= end_utc):
             continue
+        applied_observation_indexes.add(index)
         elapsed = (obs_time - cursor).total_seconds() / 3600
         fraction = max(0.0, elapsed / stage_hours)
         for fuel_type in FUEL_TYPES:
-            cursor_rob[fuel_type] -= consumption[fuel_type] * fraction
+            cursor_rob[fuel_type] = _subtract_optional(cursor_rob[fuel_type], consumption[fuel_type] * fraction)
             cursor_rob[fuel_type] = observation.quantity_for(fuel_type)
         cursor = obs_time
     elapsed = (end_utc - cursor).total_seconds() / 3600
     fraction = max(0.0, elapsed / stage_hours)
     for fuel_type in FUEL_TYPES:
-        cursor_rob[fuel_type] -= consumption[fuel_type] * fraction
+        cursor_rob[fuel_type] = _subtract_optional(cursor_rob[fuel_type], consumption[fuel_type] * fraction)
+
+
+def _apply_observations_through(
+    cursor_rob: dict[str, float | None],
+    observations: tuple[ActualROBObservation, ...],
+    applied_observation_indexes: set[int],
+    through_utc: datetime | None,
+) -> None:
+    if through_utc is None:
+        return
+    for index, observation in enumerate(observations):
+        if index in applied_observation_indexes:
+            continue
+        obs_time = _instant(observation.effective_at_utc)
+        if obs_time is None or obs_time > through_utc:
+            continue
+        for fuel_type in FUEL_TYPES:
+            cursor_rob[fuel_type] = observation.quantity_for(fuel_type)
+        applied_observation_indexes.add(index)
 
 
 def _port_status(
@@ -318,6 +379,13 @@ def _next_port(current_stage: OperationalStage | None, events: list[ScheduleEven
     return legs[0].leg.destination_port if legs else None
 
 
+def _is_before_first_stage(stages: list[OperationalStage], now_utc: datetime | None) -> bool:
+    if not stages or now_utc is None:
+        return False
+    first_start = next((_instant(stage.start_utc) for stage in stages if stage.start_utc is not None), None)
+    return first_start is not None and now_utc < first_start
+
+
 def _instant(value) -> datetime | None:
     if value is None:
         return None
@@ -328,3 +396,9 @@ def _instant(value) -> datetime | None:
 
 def _empty_totals() -> dict[str, float]:
     return {fuel_type: 0.0 for fuel_type in FUEL_TYPES}
+
+
+def _subtract_optional(value: float | None, consumption: float | None) -> float | None:
+    if value is None or consumption is None:
+        return None
+    return value - consumption

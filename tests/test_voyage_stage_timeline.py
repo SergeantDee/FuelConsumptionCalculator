@@ -10,8 +10,10 @@ from fuel_consumption_calculator.domain.schedule_timeline import build_schedule_
 from fuel_consumption_calculator.domain.voyage import (
     ActualROBObservation,
     FuelChangeoverEvent,
+    GeneratorSfocPoint,
     MachineryFuelState,
     RouteDefinition,
+    VesselEnergyConfig,
     VoyageLeg,
     VoyageLegOverride,
 )
@@ -41,6 +43,18 @@ def test_stage_timeline_uses_port_departure_sea_arrival_sequence():
         STAGE_PORT_STAY,
     ]
     assert timeline.stages[0].rob.end_mt == timeline.stages[1].rob.start_mt
+
+
+def test_pre_voyage_timeline_keeps_current_rob_at_starting_anchor():
+    events = _events()
+    plan = _plan()
+    calculate_consumption_with_voyage(build_schedule_timeline(events), events, plan, _profile())
+
+    timeline = build_voyage_stage_timeline(events, plan, _starting_rob(), now_utc=datetime(2025, 12, 30, tzinfo=timezone.utc))
+
+    assert timeline.current_stage is None
+    assert timeline.current_predicted_rob_mt == {"ULSFO": 100.0, "VLSFO": 100.0, "MDO": 100.0}
+    assert timeline.next_port == "Origin"
 
 
 def test_actual_departure_moves_port_stay_to_completed_and_departure_to_current():
@@ -75,7 +89,7 @@ def test_stage_changeovers_include_actual_timestamp_and_do_not_create_default_ev
         planned_at_utc=datetime(2026, 1, 1, 12, tzinfo=timezone.utc),
         actual_at_utc=datetime(2026, 1, 1, 18, tzinfo=timezone.utc),
     )
-    plan = _plan(changeovers=[changeover])
+    plan = _plan(changeovers=[changeover], detailed=True)
     calculate_consumption_with_voyage(build_schedule_timeline(events), events, plan, _profile())
 
     timeline = build_voyage_stage_timeline(events, plan, _starting_rob(), now_utc=datetime(2025, 12, 30, tzinfo=timezone.utc))
@@ -107,7 +121,7 @@ def test_actual_rob_observation_resets_downstream_forecast_anchor():
 def test_actual_rob_observation_inside_sea_stage_splits_remaining_consumption():
     events = _events()
     changeover = FuelChangeoverEvent(None, 1, "MAIN_ENGINE", "VLSFO", "ULSFO", datetime(2026, 1, 1, 12, tzinfo=timezone.utc))
-    plan = _plan(changeovers=[changeover])
+    plan = _plan(changeovers=[changeover], detailed=True)
     calculate_consumption_with_voyage(build_schedule_timeline(events), events, plan, _profile())
     observation = ActualROBObservation(
         None,
@@ -123,7 +137,27 @@ def test_actual_rob_observation_inside_sea_stage_splits_remaining_consumption():
     assert sea_stage.rob.end_mt["ULSFO"] <= 50.0
 
 
-def _plan(override: VoyageLegOverride | None = None, changeovers: list[FuelChangeoverEvent] | None = None):
+def test_actual_rob_observation_restores_forecast_after_unknown_stage():
+    events = _events()
+    plan = _plan()
+    calculate_consumption_with_voyage(build_schedule_timeline(events), events, plan, _profile())
+    observation = ActualROBObservation(
+        None,
+        1,
+        datetime(2026, 1, 2, 11, tzinfo=timezone.utc),
+        {"ULSFO": 70.0, "VLSFO": 80.0, "MDO": 90.0},
+    )
+
+    timeline = build_voyage_stage_timeline(events, plan, _starting_rob(), now_utc=datetime(2025, 12, 30, tzinfo=timezone.utc), rob_observations=[observation])
+
+    sea_stage = next(stage for stage in timeline.stages if stage.stage_type == STAGE_SEA_PASSAGE)
+    arrival_stage = next(stage for stage in timeline.stages if stage.stage_type == STAGE_ARRIVAL_MANEUVERING)
+    assert sea_stage.rob.end_mt == {"ULSFO": None, "VLSFO": None, "MDO": None}
+    assert arrival_stage.rob.start_mt == {"ULSFO": None, "VLSFO": None, "MDO": None}
+    assert arrival_stage.rob.end_mt["ULSFO"] == 70.0
+
+
+def _plan(override: VoyageLegOverride | None = None, changeovers: list[FuelChangeoverEvent] | None = None, detailed: bool = False):
     leg = VoyageLeg(
         vessel_id=1,
         sequence_number=2,
@@ -140,6 +174,8 @@ def _plan(override: VoyageLegOverride | None = None, changeovers: list[FuelChang
         [leg],
         _profile(),
         [],
+        _energy_config() if detailed else None,
+        _sfoc_points() if detailed else None,
         initial_fuel_state=MachineryFuelState(1, "VLSFO", "VLSFO", "VLSFO"),
         fuel_changeovers=changeovers or [],
     )
@@ -196,3 +232,19 @@ def _profile() -> ConsumptionProfile:
 
 def _starting_rob() -> StartingROB:
     return StartingROB(1, tuple(ROBQuantity(fuel, 100.0) for fuel in FUEL_TYPES))
+
+
+def _energy_config() -> VesselEnergyConfig:
+    return VesselEnergyConfig(
+        vessel_id=1,
+        sea_base_load_kw=1000,
+        generator_rated_kw=5000,
+        sea_running_generators=1,
+        aux_boiler_mt_per_hour=0.1,
+        generator_fuel_type="VLSFO",
+        boiler_fuel_type="MDO",
+    )
+
+
+def _sfoc_points() -> list[GeneratorSfocPoint]:
+    return [GeneratorSfocPoint(1, 0, 220), GeneratorSfocPoint(1, 100, 200)]

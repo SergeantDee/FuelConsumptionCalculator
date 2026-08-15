@@ -62,8 +62,8 @@ class BunkerLiftLimit:
     capacity_mt: float
     target_fill_percent: float
     target_rob_mt: float
-    arrival_rob_mt: float
-    max_lift_mt: float
+    arrival_rob_mt: float | None
+    max_lift_mt: float | None
 
 
 def complete_bunker_plan(

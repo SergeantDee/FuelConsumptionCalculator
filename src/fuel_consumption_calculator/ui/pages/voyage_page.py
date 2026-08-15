@@ -41,6 +41,8 @@ from fuel_consumption_calculator.ui.widgets.page_header import PageHeader
 
 
 class VoyagePage(QWidget):
+    TIMELINE_MINIMUM_WIDTH = 1150
+
     def __init__(
         self,
         vessel_service: VesselService,
@@ -89,9 +91,11 @@ class VoyagePage(QWidget):
         layout.addWidget(self.empty_state)
 
         self.scroll = QScrollArea()
-        self.scroll.setWidgetResizable(True)
+        self.scroll.setWidgetResizable(False)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.card_container = QWidget()
+        self.card_container.setMinimumWidth(self.TIMELINE_MINIMUM_WIDTH)
         self.card_layout = QVBoxLayout(self.card_container)
         self.card_layout.setContentsMargins(0, 0, 0, 0)
         self.card_layout.setSpacing(14)
@@ -135,7 +139,7 @@ class VoyagePage(QWidget):
 
         self.vessel_label.setText(f"Vessel: {vessel.name}  |  IMO {vessel.imo}")
         current = self._timeline.current_stage
-        self.current_stage_label.setText(f"Current Stage: {current.title if current else 'Not determined'}")
+        self.current_stage_label.setText(f"Current Stage: {_current_stage_text(self._timeline)}")
         self.next_port_label.setText(f"Next Port: {self._timeline.next_port or '-'}")
         next_major = next((stage for stage in self._timeline.stages if stage.status != "COMPLETED"), None)
         self.next_event_label.setText(f"Next Major Event: {next_major.title if next_major else '-'}")
@@ -146,7 +150,23 @@ class VoyagePage(QWidget):
         for stage in self._timeline.stages:
             self.card_layout.addWidget(self._build_card(stage))
         self.card_layout.addStretch()
+        self._sync_timeline_width()
         self.status_label.setText(f"Loaded {len(self._timeline.stages)} operational voyage stages.")
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._sync_timeline_width()
+
+    def _sync_timeline_width(self) -> None:
+        if not hasattr(self, "card_container"):
+            return
+        viewport_width = self.scroll.viewport().width() if hasattr(self, "scroll") else 0
+        width = max(self.TIMELINE_MINIMUM_WIDTH, viewport_width)
+        self.card_container.setMinimumWidth(width)
+        if self.card_container.layout() is not None:
+            self.card_container.layout().activate()
+        self.card_container.adjustSize()
+        self.card_container.resize(width, self.card_container.height())
 
     def _clear_cards(self) -> None:
         while self.card_layout.count():
@@ -158,9 +178,10 @@ class VoyagePage(QWidget):
     def _build_card(self, stage: OperationalStage) -> QFrame:
         card = QFrame()
         card.setObjectName({"CURRENT": "voyageStageCurrent", "COMPLETED": "voyageStageCompleted"}.get(stage.status, "voyageStagePlanned"))
+        card.setMinimumWidth(self.TIMELINE_MINIMUM_WIDTH - 24)
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(18, 16, 18, 16)
-        layout.setSpacing(12)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(7)
 
         header = QHBoxLayout()
         badge = QLabel(stage.status)
@@ -169,7 +190,7 @@ class VoyagePage(QWidget):
         title.setObjectName("sectionTitle")
         subtitle = QLabel(stage.subtitle)
         subtitle.setObjectName("mutedText")
-        edit_button = QPushButton("Edit Stage Values")
+        edit_button = QPushButton("Edit")
         edit_button.clicked.connect(lambda checked=False, selected=stage: self._edit_stage(selected))
         edit_button.setEnabled(stage.leg is not None or stage.incoming_leg is not None)
         rob_button = QPushButton("Update Actual ROB")
@@ -181,112 +202,133 @@ class VoyagePage(QWidget):
         header.addWidget(rob_button)
         layout.addLayout(header)
 
-        groups = QGridLayout()
-        groups.setHorizontalSpacing(12)
-        groups.setVerticalSpacing(12)
-        groups.addWidget(self._time_group(stage), 0, 0)
-        groups.addWidget(self._operations_group(stage), 0, 1)
-        groups.addWidget(self._consumption_group(stage), 1, 0)
-        groups.addWidget(self._rob_group(stage), 1, 1)
-        groups.setColumnStretch(0, 1)
-        groups.setColumnStretch(1, 1)
-        layout.addLayout(groups)
-        layout.addWidget(self._changeover_group(stage))
+        for title, widget in (
+            ("TIME", self._time_group(stage)),
+            ("OPERATIONS", self._operations_group(stage)),
+            ("CONSUMPTION", self._consumption_group(stage)),
+            ("ROB", self._rob_group(stage)),
+        ):
+            layout.addWidget(_flat_section_label(title))
+            layout.addWidget(widget)
+        changeover = self._changeover_group(stage)
+        if changeover is not None:
+            layout.addWidget(_flat_section_label("FUEL CHANGEOVER"))
+            layout.addWidget(changeover)
         return card
 
-    def _time_group(self, stage: OperationalStage) -> QFrame:
-        frame, grid = _group("TIME")
+    def _time_group(self, stage: OperationalStage) -> QWidget:
+        frame, grid = _flat_grid()
+        frame.setMinimumHeight(46)
         if stage.stage_type == STAGE_PORT_STAY:
-            _add_field(grid, 1, 0, "Arrival Scheduled / Maersk Local", _fmt_dt(stage.event.arrival_at if stage.event else None))
-            _add_field(grid, 1, 1, "Actual Arrival", _fmt_actual(stage.incoming_leg, "actual_berth_arrival"))
-            _add_field(grid, 2, 0, "Departure Scheduled / Maersk Local", _fmt_dt(stage.event.departure_at if stage.event else None))
-            _add_field(grid, 2, 1, "Actual Departure", _fmt_actual(stage.leg, "actual_berth_departure"))
-            _add_field(grid, 3, 0, "Predicted Port Stay", _fmt_duration(_hours(stage.start_utc, stage.end_utc)))
-            _add_field(grid, 3, 1, "Calculation Basis", "Authoritative UTC")
+            _add_metric(grid, 0, 0, "Arrival Scheduled", _fmt_dt(stage.event.arrival_at if stage.event else None))
+            _add_metric(grid, 0, 1, "Actual Arrival", _fmt_actual(stage.incoming_leg, "actual_berth_arrival"))
+            _add_metric(grid, 0, 2, "Departure Scheduled", _fmt_dt(stage.event.departure_at if stage.event else None))
+            _add_metric(grid, 0, 3, "Actual Departure", _fmt_actual(stage.leg, "actual_berth_departure"))
+            _add_metric(grid, 0, 4, "Predicted Duration", _fmt_duration(_hours(stage.start_utc, stage.end_utc)))
         elif stage.stage_type == STAGE_DEPARTURE_MANEUVERING:
-            _add_field(grid, 1, 0, "Berth Departure", _fmt_dt(stage.start_utc))
-            _add_field(grid, 1, 1, "Pilot Off", _fmt_dt(stage.end_utc))
-            _add_field(grid, 2, 0, "Duration", _fmt_duration(stage.leg.departure_pilotage_hours if stage.leg else 0))
-            _add_field(grid, 2, 1, "Display Basis", "UTC")
+            _add_metric(grid, 0, 0, "Berth Departure", _fmt_dt(stage.start_utc))
+            _add_metric(grid, 0, 1, "Pilot Off", _fmt_dt(stage.end_utc))
+            _add_metric(grid, 0, 2, "Duration", _fmt_duration(stage.leg.departure_pilotage_hours if stage.leg else 0))
+            _add_metric(grid, 0, 3, "Basis", "UTC")
         elif stage.stage_type == STAGE_SEA_PASSAGE:
-            _add_field(grid, 1, 0, "Pilot Off", _fmt_dt(stage.start_utc))
-            _add_field(grid, 1, 1, "Pilot On Target", _fmt_dt(stage.end_utc))
-            _add_field(grid, 2, 0, "Available Sea Time", _fmt_duration(stage.leg.sea_hours if stage.leg else 0))
-            _add_field(grid, 2, 1, "Display Basis", "UTC")
+            _add_metric(grid, 0, 0, "Pilot Off", _fmt_dt(stage.start_utc))
+            _add_metric(grid, 0, 1, "Pilot On Target", _fmt_dt(stage.end_utc))
+            _add_metric(grid, 0, 2, "Sea Time", _fmt_duration(stage.leg.sea_hours if stage.leg else 0))
+            _add_metric(grid, 0, 3, "Basis", "UTC")
         else:
-            _add_field(grid, 1, 0, "Pilot On", _fmt_dt(stage.start_utc))
-            _add_field(grid, 1, 1, "Berth Arrival", _fmt_dt(stage.end_utc))
-            _add_field(grid, 2, 0, "Duration", _fmt_duration(stage.leg.arrival_pilotage_hours if stage.leg else 0))
-            _add_field(grid, 2, 1, "Display Basis", "UTC")
+            _add_metric(grid, 0, 0, "Pilot On", _fmt_dt(stage.start_utc))
+            _add_metric(grid, 0, 1, "Berth Arrival", _fmt_dt(stage.end_utc))
+            _add_metric(grid, 0, 2, "Duration", _fmt_duration(stage.leg.arrival_pilotage_hours if stage.leg else 0))
+            _add_metric(grid, 0, 3, "Basis", "UTC")
         return frame
 
-    def _operations_group(self, stage: OperationalStage) -> QFrame:
-        frame, grid = _group("OPERATIONS")
+    def _operations_group(self, stage: OperationalStage) -> QWidget:
+        frame, grid = _flat_grid()
         if stage.stage_type == STAGE_PORT_STAY:
+            frame.setMinimumHeight(46)
             breakdown = stage.port_breakdown
-            _add_field(grid, 1, 0, "Arrival Reefers", _fmt_number(breakdown.reefers if breakdown else 0))
-            _add_field(grid, 1, 1, "Expected / Actual Departure Reefers", f"{_fmt_number(_override_value(stage.leg, 'departure_reefers'))} / {_fmt_number(_override_value(stage.leg, 'actual_departure_reefers'))}")
-            _add_field(grid, 2, 0, "Electrical Load", _fmt_kw(breakdown.total_electrical_load_kw if breakdown else None))
-            _add_field(grid, 2, 1, "Generator Load", _fmt_percent(breakdown.generator_load_percent if breakdown else None))
-            _add_field(grid, 3, 0, "Port Ambient / Reefer", f"{_fmt_c(_override_value_or_none(stage.leg, 'port_ambient_c'))} / {_fmt_kw(breakdown.reefer_kw_per_unit if breakdown else None)} each")
+            _add_metric(grid, 0, 0, "Arrival Reefers", _fmt_number(breakdown.reefers if breakdown else 0))
+            _add_metric(grid, 0, 1, "Expected Dep. Reefers", _fmt_number(_override_value(stage.leg, "departure_reefers")))
+            _add_metric(grid, 0, 2, "Actual Dep. Reefers", _fmt_optional_number(_override_value_or_none(stage.leg, "actual_departure_reefers")))
+            _add_metric(grid, 0, 3, "Ambient", _fmt_c(_override_value_or_none(stage.leg, "port_ambient_c")))
+            _add_metric(grid, 0, 4, "kW / Reefer", _fmt_kw(breakdown.reefer_kw_per_unit if breakdown else None))
+            _add_metric(grid, 0, 5, "Electrical Load", _fmt_kw(breakdown.total_electrical_load_kw if breakdown else None))
+            _add_metric(grid, 0, 6, "DG Load", _fmt_percent(breakdown.generator_load_percent if breakdown else None))
         elif stage.stage_type == STAGE_DEPARTURE_MANEUVERING:
-            _add_field(grid, 1, 0, "Pilot Distance", _fmt_nm(_route_value(stage.leg, "departure_pilot_distance_nm")))
-            _add_field(grid, 1, 1, "Pilot Duration", _fmt_duration(stage.leg.departure_pilotage_hours if stage.leg else 0))
-            _add_field(grid, 2, 0, "Actual Berth Departure", _fmt_actual(stage.leg, "actual_berth_departure"))
-            _add_field(grid, 2, 1, "Actual Pilot Off", _fmt_actual(stage.leg, "actual_pilot_off"))
+            frame.setMinimumHeight(46)
+            _add_metric(grid, 0, 0, "Pilot Distance", _fmt_nm(_route_value(stage.leg, "departure_pilot_distance_nm")))
+            _add_metric(grid, 0, 1, "Pilot Duration", _fmt_duration(stage.leg.departure_pilotage_hours if stage.leg else 0))
+            _add_metric(grid, 0, 2, "Actual Departure", _fmt_actual(stage.leg, "actual_berth_departure"))
+            _add_metric(grid, 0, 3, "Actual Pilot Off", _fmt_actual(stage.leg, "actual_pilot_off"))
         elif stage.stage_type == STAGE_SEA_PASSAGE:
-            _add_field(grid, 1, 0, "Sea Distance", _fmt_nm(stage.leg.sea_distance_nm if stage.leg else 0))
-            _add_field(grid, 1, 1, "Required Avg Speed", _fmt_kn(stage.leg.required_speed_knots if stage.leg else None))
-            _add_field(grid, 2, 0, "Predicted ME Load", _fmt_percent(stage.leg.predicted_me_load_percent if stage.leg else None))
-            _add_field(grid, 2, 1, "RPM / Power", f"{_fmt_rpm(stage.leg.predicted_rpm if stage.leg else None)} / {_fmt_kw(stage.leg.predicted_me_power_kw if stage.leg else None)}")
-            _add_field(grid, 3, 0, "ME SFOC / Fuel Rate", f"{_fmt_sfoc(stage.leg.predicted_me_sfoc_g_per_kwh if stage.leg else None)} / {_fmt_mtph(stage.leg.predicted_me_fuel_mt_per_hour if stage.leg else None)}")
-            _add_field(grid, 3, 1, "Hull Coefficient", _fmt_factor(stage.leg.hull_coefficient if stage.leg else None))
-            _add_field(grid, 4, 0, "Departure Reefers", f"{_fmt_number(_override_value(stage.leg, 'departure_reefers'))} exp / {_fmt_number(_override_value(stage.leg, 'actual_departure_reefers'))} actual")
-            _add_field(grid, 4, 1, "Sea Ambient / Reefer", f"{_fmt_c(_override_value_or_none(stage.leg, 'sea_ambient_c'))} / {_fmt_kw(stage.leg.departure_reefer_kw_per_unit if stage.leg else None)} each")
-            _add_field(grid, 5, 0, "Generator Load", _fmt_kw(stage.leg.sea_total_electrical_load_kw if stage.leg else None))
-            _add_field(grid, 5, 1, "EGB", _egb_label(stage.leg))
+            frame.setMinimumHeight(88)
+            _add_metric(grid, 0, 0, "Sea Distance", _fmt_nm(stage.leg.sea_distance_nm if stage.leg else 0))
+            _add_metric(grid, 0, 1, "Sea Time", _fmt_duration(stage.leg.sea_hours if stage.leg else None))
+            _add_metric(grid, 0, 2, "Speed", _fmt_kn(stage.leg.required_speed_knots if stage.leg else None))
+            _add_metric(grid, 0, 3, "RPM", _fmt_rpm(stage.leg.predicted_rpm if stage.leg else None))
+            _add_metric(grid, 0, 4, "ME Power", _fmt_kw(stage.leg.predicted_me_power_kw if stage.leg else None))
+            _add_metric(grid, 0, 5, "ME Load", _fmt_percent(stage.leg.predicted_me_load_percent if stage.leg else None))
+            _add_metric(grid, 1, 0, "ME SFOC", _fmt_sfoc(stage.leg.predicted_me_sfoc_g_per_kwh if stage.leg else None))
+            _add_metric(grid, 1, 1, "ME MT/h", _fmt_mtph(stage.leg.predicted_me_fuel_mt_per_hour if stage.leg else None))
+            _add_metric(grid, 1, 2, "Reefers", _fmt_number(_effective_reefers_for_display(stage.leg)))
+            _add_metric(grid, 1, 3, "Ambient", _fmt_c(_override_value_or_none(stage.leg, "sea_ambient_c")))
+            _add_metric(grid, 1, 4, "DG Load", _fmt_percent(stage.leg.sea_generator_load_percent if stage.leg else None))
+            _add_metric(grid, 1, 5, "EGB", _egb_label(stage.leg))
         else:
-            _add_field(grid, 1, 0, "Pilot Distance", _fmt_nm(_route_value(stage.leg, "arrival_pilot_distance_nm")))
-            _add_field(grid, 1, 1, "Pilot Duration", _fmt_duration(stage.leg.arrival_pilotage_hours if stage.leg else 0))
-            _add_field(grid, 2, 0, "Actual Pilot On", _fmt_actual(stage.leg, "actual_pilot_on"))
-            _add_field(grid, 2, 1, "Actual Berth Arrival", _fmt_actual(stage.leg, "actual_berth_arrival"))
+            frame.setMinimumHeight(46)
+            _add_metric(grid, 0, 0, "Pilot Distance", _fmt_nm(_route_value(stage.leg, "arrival_pilot_distance_nm")))
+            _add_metric(grid, 0, 1, "Pilot Duration", _fmt_duration(stage.leg.arrival_pilotage_hours if stage.leg else 0))
+            _add_metric(grid, 0, 2, "Actual Pilot On", _fmt_actual(stage.leg, "actual_pilot_on"))
+            _add_metric(grid, 0, 3, "Actual Arrival", _fmt_actual(stage.leg, "actual_berth_arrival"))
         return frame
 
-    def _consumption_group(self, stage: OperationalStage) -> QFrame:
-        frame, grid = _group("STAGE CONSUMPTION")
+    def _consumption_group(self, stage: OperationalStage) -> QWidget:
+        frame, grid = _flat_grid()
+        frame.setMinimumHeight(130)
+        _add_consumption_header(grid)
         if stage.stage_type == STAGE_PORT_STAY and stage.port_breakdown is not None:
-            _add_field(grid, 1, 0, "Generators", _fmt_fuel_line(stage.port_breakdown.generator_consumed_mt))
-            _add_field(grid, 2, 0, "Aux Boiler", _fmt_fuel_line(stage.port_breakdown.boiler_consumed_mt))
-            _add_field(grid, 3, 0, "Total", _fmt_fuel_line(stage.consumption_mt))
+            _add_consumption_row(grid, 1, "Generators", stage.port_breakdown.generator_consumed_mt)
+            _add_consumption_row(grid, 2, "Aux Boiler", stage.port_breakdown.boiler_consumed_mt)
+            _add_consumption_row(grid, 3, "TOTAL", stage.consumption_mt)
+            _add_metric(grid, 4, 0, "Calculation", stage.port_breakdown.calculation_mode)
         elif stage.stage_type == STAGE_SEA_PASSAGE and stage.leg is not None:
             generator = stage.leg.sea_generator_consumed_mt or {fuel: 0.0 for fuel in FUEL_TYPES}
             boiler = stage.leg.sea_boiler_consumed_mt or {fuel: 0.0 for fuel in FUEL_TYPES}
-            main_engine = {fuel: stage.consumption_mt[fuel] - generator.get(fuel, 0.0) - boiler.get(fuel, 0.0) for fuel in FUEL_TYPES}
-            _add_field(grid, 1, 0, "Main Engine", _fmt_fuel_line(main_engine))
-            _add_field(grid, 2, 0, "Generators", _fmt_fuel_line(generator))
-            _add_field(grid, 3, 0, "Aux Boiler", _fmt_fuel_line(boiler))
-            _add_field(grid, 4, 0, "Total", _fmt_fuel_line(stage.consumption_mt))
+            main_engine = {
+                fuel: _subtract_optional(stage.consumption_mt[fuel], generator.get(fuel, 0.0), boiler.get(fuel, 0.0))
+                for fuel in FUEL_TYPES
+            }
+            _add_consumption_row(grid, 1, "Main Engine", main_engine)
+            _add_consumption_row(grid, 2, "Generators", generator)
+            _add_consumption_row(grid, 3, "Aux Boiler", boiler)
+            _add_consumption_row(grid, 4, "TOTAL", stage.consumption_mt)
+            _add_metric(grid, 5, 0, "Calculation", stage.leg.sea_calculation_mode)
         else:
-            _add_field(grid, 1, 0, "ULSFO / VLSFO / MDO", _fmt_fuel_line(stage.consumption_mt))
-            _add_field(grid, 2, 0, "Total", f"{stage.total_consumption_mt:.2f} MT")
+            _add_consumption_row(grid, 1, "Stage", stage.consumption_mt)
+            _add_consumption_row(grid, 2, "TOTAL", stage.consumption_mt)
+            _add_metric(grid, 3, 0, "Calculation", "DETAILED SFOC" if stage.total_consumption_mt is not None else "INCOMPLETE")
         return frame
 
-    def _rob_group(self, stage: OperationalStage) -> QFrame:
-        frame, grid = _group("ROB")
+    def _rob_group(self, stage: OperationalStage) -> QWidget:
+        frame, grid = _flat_grid()
+        frame.setMinimumHeight(84)
         grid.addWidget(QLabel("Fuel"), 1, 0)
         grid.addWidget(QLabel("START"), 1, 1)
-        grid.addWidget(QLabel("END"), 1, 2)
+        grid.addWidget(QLabel("CONSUMED"), 1, 2)
+        grid.addWidget(QLabel("END"), 1, 3)
         for row, fuel_type in enumerate(FUEL_TYPES, start=2):
             _add_plain(grid, row, 0, fuel_type)
             _add_plain(grid, row, 1, _fmt_mt(stage.rob.start_mt[fuel_type]))
-            _add_plain(grid, row, 2, _fmt_mt(stage.rob.end_mt[fuel_type]))
+            _add_plain(grid, row, 2, _fmt_mt(stage.consumption_mt.get(fuel_type, 0.0)))
+            _add_plain(grid, row, 3, _fmt_mt(stage.rob.end_mt[fuel_type]))
         return frame
 
-    def _changeover_group(self, stage: OperationalStage) -> QFrame:
-        frame = QFrame()
-        frame.setObjectName("panel")
+    def _changeover_group(self, stage: OperationalStage) -> QWidget | None:
+        frame = QWidget()
+        frame.setMinimumHeight(44)
         layout = QVBoxLayout(frame)
-        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
         summary = QLabel(_changeover_summary(stage.changeovers))
         summary.setObjectName("mutedText")
         summary.setWordWrap(True)
@@ -554,29 +596,55 @@ class ActualROBDialog(QDialog):
         }
 
 
-def _group(title: str) -> tuple[QFrame, QGridLayout]:
-    frame = QFrame()
-    frame.setObjectName("panel")
+def _flat_grid() -> tuple[QWidget, QGridLayout]:
+    frame = QWidget()
     grid = QGridLayout(frame)
-    grid.setContentsMargins(14, 12, 14, 12)
-    grid.setHorizontalSpacing(12)
-    grid.addWidget(_section_label(title), 0, 0, 1, 3)
+    grid.setContentsMargins(0, 0, 0, 0)
+    grid.setHorizontalSpacing(16)
+    grid.setVerticalSpacing(8)
     return frame, grid
 
 
-def _add_field(grid: QGridLayout, row: int, column: int, label_text: str, value_text: str) -> None:
+def _flat_section_label(text: str) -> QLabel:
+    label = QLabel(text)
+    label.setObjectName("fieldLabel")
+    label.setMinimumHeight(18)
+    return label
+
+
+def _add_metric(grid: QGridLayout, row: int, column: int, label_text: str, value_text: str) -> None:
     label = QLabel(label_text)
     label.setObjectName("fieldLabel")
+    label.setMinimumHeight(18)
     value = QLabel(value_text)
     value.setObjectName("mutedText")
-    value.setWordWrap(True)
-    grid.addWidget(label, row * 2 - 1, column)
-    grid.addWidget(value, row * 2, column)
+    value.setMinimumHeight(18)
+    value.setWordWrap(False)
+    grid.addWidget(label, row * 2, column)
+    grid.addWidget(value, row * 2 + 1, column)
+
+
+def _add_consumption_header(grid: QGridLayout) -> None:
+    for column, text in enumerate(("Source", "ULSFO", "VLSFO", "MDO", "Total")):
+        label = QLabel(text)
+        label.setObjectName("fieldLabel")
+        label.setMinimumHeight(18)
+        grid.addWidget(label, 0, column)
+
+
+def _add_consumption_row(grid: QGridLayout, row: int, source: str, values: dict[str, float | None]) -> None:
+    _add_plain(grid, row, 0, source)
+    for column, fuel_type in enumerate(FUEL_TYPES, start=1):
+        _add_plain(grid, row, column, _fmt_mt(values.get(fuel_type, 0.0)))
+    total_values = [values.get(fuel_type, 0.0) for fuel_type in FUEL_TYPES]
+    total = None if any(value is None for value in total_values) else sum(float(value or 0.0) for value in total_values)
+    _add_plain(grid, row, 4, _fmt_mt(total))
 
 
 def _add_plain(grid: QGridLayout, row: int, column: int, text: str) -> None:
     label = QLabel(text)
     label.setObjectName("mutedText")
+    label.setMinimumHeight(18)
     grid.addWidget(label, row, column)
 
 
@@ -632,12 +700,12 @@ def _hours(start: datetime | None, end: datetime | None) -> float | None:
     return max(0.0, (end - start).total_seconds() / 3600)
 
 
-def _fmt_fuel_line(values: dict[str, float]) -> str:
-    return "  |  ".join(f"{fuel} {values.get(fuel, 0.0):.2f} MT" for fuel in FUEL_TYPES)
+def _fmt_fuel_line(values: dict[str, float | None]) -> str:
+    return "  |  ".join(f"{fuel} {_fmt_mt(values.get(fuel, 0.0))}" for fuel in FUEL_TYPES)
 
 
-def _fmt_mt(value: float) -> str:
-    return f"{value:.1f} MT"
+def _fmt_mt(value: float | None) -> str:
+    return "—" if value is None else f"{value:.2f} MT"
 
 
 def _fmt_nm(value: float | None) -> str:
@@ -680,6 +748,10 @@ def _fmt_number(value: float | None) -> str:
     return f"{value:.0f}" if value is not None else "0"
 
 
+def _fmt_optional_number(value: float | None) -> str:
+    return f"{value:.0f}" if value is not None else "-"
+
+
 def _route_value(leg: CalculatedVoyageLeg | None, key: str) -> float:
     if leg is None:
         return 0.0
@@ -706,8 +778,21 @@ def _override_value_or_default(leg: CalculatedVoyageLeg | None, key: str, defaul
     return default if value is None else value
 
 
+def _effective_reefers_for_display(leg: CalculatedVoyageLeg | None) -> float:
+    actual = _override_value_or_none(leg, "actual_departure_reefers")
+    if actual is not None:
+        return actual
+    return _override_value(leg, "departure_reefers")
+
+
 def _effective(value: float | None, default: float) -> float:
     return float(default if value is None else value)
+
+
+def _subtract_optional(value: float | None, *subtract: float | None) -> float | None:
+    if value is None or any(item is None for item in subtract):
+        return None
+    return value - sum(float(item or 0.0) for item in subtract)
 
 
 def _egb_label(leg: CalculatedVoyageLeg | None) -> str:
@@ -741,6 +826,14 @@ def _active_fuel_label(state: MachineryFuelState | None, changeovers: tuple[Fuel
         if event.machinery == machinery and event_at is not None and compare_at is not None and event_at <= compare_at:
             fuel = event.to_fuel_type
     return fuel
+
+
+def _current_stage_text(timeline: VoyageStageTimeline) -> str:
+    if timeline.current_stage is not None:
+        return timeline.current_stage.title
+    if timeline.stages and all(stage.status == "PLANNED" for stage in timeline.stages):
+        return "PRE-VOYAGE"
+    return "Not determined"
 
 
 def _as_naive_utc(value: datetime | None) -> datetime | None:

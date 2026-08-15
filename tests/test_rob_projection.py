@@ -20,7 +20,7 @@ def starting_rob(ulsfo: float = 0.0, vlsfo: float = 0.0, mdo: float = 0.0) -> St
     )
 
 
-def consumption_row(sequence: int, *, ulsfo: float = 0.0, vlsfo: float = 0.0, mdo: float = 0.0) -> EventFuelConsumption:
+def consumption_row(sequence: int, *, ulsfo: float | None = 0.0, vlsfo: float | None = 0.0, mdo: float | None = 0.0) -> EventFuelConsumption:
     return EventFuelConsumption(
         event_id=sequence,
         sequence_number=sequence,
@@ -35,9 +35,9 @@ def consumption_result(rows: list[EventFuelConsumption]) -> ScheduleFuelConsumpt
     return ScheduleFuelConsumption(
         rows=rows,
         totals_mt={
-            "ULSFO": sum(row.consumed_mt["ULSFO"] for row in rows),
-            "VLSFO": sum(row.consumed_mt["VLSFO"] for row in rows),
-            "MDO": sum(row.consumed_mt["MDO"] for row in rows),
+            "ULSFO": None if any(row.consumed_mt["ULSFO"] is None for row in rows) else sum(row.consumed_mt["ULSFO"] for row in rows),
+            "VLSFO": None if any(row.consumed_mt["VLSFO"] is None for row in rows) else sum(row.consumed_mt["VLSFO"] for row in rows),
+            "MDO": None if any(row.consumed_mt["MDO"] is None for row in rows) else sum(row.consumed_mt["MDO"] for row in rows),
         },
     )
 
@@ -66,6 +66,16 @@ def test_rob_projection_keeps_fuels_independent_and_allows_negative_values():
     )
 
     assert projection.final_rob_mt == {"ULSFO": -5.0, "VLSFO": 80.0, "MDO": 45.0}
+
+
+def test_unknown_consumption_makes_current_and_future_rob_unavailable():
+    projection = project_schedule_rob(
+        starting_rob(ulsfo=100),
+        consumption_result([consumption_row(1, ulsfo=None), consumption_row(2, ulsfo=10)]),
+    )
+
+    assert projection.rows[0].projected_rob_mt["ULSFO"] is None
+    assert projection.rows[1].projected_rob_mt["ULSFO"] is None
 
 
 def test_starting_rob_persistence_saves_and_loads_complete_profile(tmp_path):

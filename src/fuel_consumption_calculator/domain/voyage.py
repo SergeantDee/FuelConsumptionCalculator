@@ -194,7 +194,7 @@ class CalculatedVoyageLeg:
     sea_total_electrical_load_kw: float | None = None
     sea_generator_load_percent: float | None = None
     sea_generator_sfoc_g_per_kwh: float | None = None
-    sea_calculation_mode: str = "FALLBACK"
+    sea_calculation_mode: str = "INCOMPLETE"
     warnings: tuple[str, ...] = ()
 
     @property

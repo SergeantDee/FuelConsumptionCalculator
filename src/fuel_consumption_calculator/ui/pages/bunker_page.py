@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QTableView,
     QVBoxLayout,
     QWidget,
@@ -151,7 +152,15 @@ class BunkerPage(QWidget):
         self._lift_limits: dict[str, BunkerLiftLimit] = {}
         self._loading_plan = False
 
-        layout = QVBoxLayout(self)
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.content = QWidget()
+        self.content.setMinimumWidth(1050)
+        layout = QVBoxLayout(self.content)
         layout.setContentsMargins(32, 28, 32, 28)
         layout.setSpacing(12)
         layout.addWidget(PageHeader("Bunker Planner", "Plan bunker lifts after arrival and before port consumption."))
@@ -277,6 +286,8 @@ class BunkerPage(QWidget):
         self.status_label = QLabel("Ready")
         self.status_label.setObjectName("mutedText")
         layout.addWidget(self.status_label)
+        self.scroll.setWidget(self.content)
+        root_layout.addWidget(self.scroll)
         self.refresh()
 
     def refresh(self) -> None:
@@ -471,7 +482,7 @@ class BunkerPage(QWidget):
             self._target_rob_labels[fuel_type].setText(_format_mt(limit.target_rob_mt))
             self._arrival_rob_labels[fuel_type].setText(_format_mt(limit.arrival_rob_mt))
             self._max_lift_labels[fuel_type].setText(_format_mt(limit.max_lift_mt))
-            self._planned_inputs[fuel_type].setMaximum(limit.max_lift_mt)
+            self._planned_inputs[fuel_type].setMaximum(limit.max_lift_mt if limit.max_lift_mt is not None else 0.0)
 
     def _selected_event(self) -> ScheduleEvent | None:
         index = self.event_combo.currentIndex()
@@ -513,5 +524,5 @@ def _spinbox(suffix: str, minimum: float, maximum: float, step: float) -> QDoubl
     return spinbox
 
 
-def _format_mt(value: float) -> str:
-    return f"{value:.2f} MT"
+def _format_mt(value: float | None) -> str:
+    return "—" if value is None else f"{value:.2f} MT"

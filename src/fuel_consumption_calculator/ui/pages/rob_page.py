@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QTableView,
     QVBoxLayout,
     QWidget,
@@ -103,7 +104,15 @@ class RobPage(QWidget):
         self._consumption_service = consumption_service
         self._rob_inputs: dict[str, QDoubleSpinBox] = {}
 
-        layout = QVBoxLayout(self)
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.content = QWidget()
+        self.content.setMinimumWidth(900)
+        layout = QVBoxLayout(self.content)
         layout.setContentsMargins(32, 28, 32, 28)
         layout.setSpacing(16)
         layout.addWidget(PageHeader("ROB Planner", "Project remaining fuel after scheduled consumption."))
@@ -191,6 +200,8 @@ class RobPage(QWidget):
         self.status_label = QLabel("Ready")
         self.status_label.setObjectName("mutedText")
         layout.addWidget(self.status_label)
+        self.scroll.setWidget(self.content)
+        root_layout.addWidget(self.scroll)
 
         self.refresh()
 
@@ -284,8 +295,8 @@ class RobPage(QWidget):
             label.setText(_format_mt(row.consumed_mt[fuel_type]) if row else "0.00 MT")
 
 
-def _format_mt(value: float) -> str:
-    return f"{value:.2f} MT"
+def _format_mt(value: float | None) -> str:
+    return "—" if value is None else f"{value:.2f} MT"
 
 
 def _format_duration(hours: float) -> str:

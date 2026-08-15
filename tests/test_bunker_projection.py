@@ -25,7 +25,7 @@ def starting_rob(ulsfo: float = 0.0, vlsfo: float = 0.0, mdo: float = 0.0) -> St
     )
 
 
-def consumption_row(sequence: int, *, ulsfo: float = 0.0, vlsfo: float = 0.0, mdo: float = 0.0) -> EventFuelConsumption:
+def consumption_row(sequence: int, *, ulsfo: float | None = 0.0, vlsfo: float | None = 0.0, mdo: float | None = 0.0) -> EventFuelConsumption:
     return EventFuelConsumption(
         event_id=sequence,
         sequence_number=sequence,
@@ -42,9 +42,9 @@ def consumption_result(rows: list[EventFuelConsumption]) -> ScheduleFuelConsumpt
     return ScheduleFuelConsumption(
         rows=rows,
         totals_mt={
-            "ULSFO": sum(row.consumed_mt["ULSFO"] for row in rows),
-            "VLSFO": sum(row.consumed_mt["VLSFO"] for row in rows),
-            "MDO": sum(row.consumed_mt["MDO"] for row in rows),
+            "ULSFO": None if any(row.consumed_mt["ULSFO"] is None for row in rows) else sum(row.consumed_mt["ULSFO"] for row in rows),
+            "VLSFO": None if any(row.consumed_mt["VLSFO"] is None for row in rows) else sum(row.consumed_mt["VLSFO"] for row in rows),
+            "MDO": None if any(row.consumed_mt["MDO"] is None for row in rows) else sum(row.consumed_mt["MDO"] for row in rows),
         },
     )
 
@@ -87,6 +87,16 @@ def test_max_lift_uses_target_percent_and_arrival_rob():
     assert limits["VLSFO"].target_rob_mt == 800
     assert limits["VLSFO"].max_lift_mt == 480
     assert limits["MDO"].max_lift_mt == 0
+
+
+def test_max_lift_is_unavailable_when_arrival_rob_is_unknown():
+    service = BunkerService(BunkerRepository(Database(":memory:")))
+    profile = BunkerCapacityProfile(1, (BunkerCapacity("ULSFO", 1000, 90), BunkerCapacity("VLSFO", 1000, 90), BunkerCapacity("MDO", 1000, 90)))
+
+    limits = service.calculate_lift_limits(profile, {"ULSFO": None, "VLSFO": 200, "MDO": 100})
+
+    assert limits["ULSFO"].arrival_rob_mt is None
+    assert limits["ULSFO"].max_lift_mt is None
 
 
 def test_bunker_projection_sequence_uses_arrival_bunker_departure_order():

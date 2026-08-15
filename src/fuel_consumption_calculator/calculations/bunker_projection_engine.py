@@ -15,17 +15,17 @@ class EventBunkerROBProjection:
     port: str
     sea_hours: float
     port_hours: float
-    consumed_mt: dict[str, float]
-    arrival_rob_mt: dict[str, float]
+    consumed_mt: dict[str, float | None]
+    arrival_rob_mt: dict[str, float | None]
     bunker_mt: dict[str, float]
-    post_bunker_rob_mt: dict[str, float]
-    departure_rob_mt: dict[str, float]
+    post_bunker_rob_mt: dict[str, float | None]
+    departure_rob_mt: dict[str, float | None]
 
 
 @dataclass(frozen=True, slots=True)
 class ScheduleBunkerROBProjection:
     rows: list[EventBunkerROBProjection]
-    final_rob_mt: dict[str, float]
+    final_rob_mt: dict[str, float | None]
 
 
 def project_schedule_rob_with_bunkers(
@@ -45,7 +45,8 @@ def project_schedule_rob_with_bunkers(
 
     for consumption_row in consumption.rows:
         for fuel_type in FUEL_TYPES:
-            projected_rob[fuel_type] -= consumption_row.sea_consumed_mt.get(fuel_type, 0.0)
+            sea_consumed = consumption_row.sea_consumed_mt.get(fuel_type, 0.0)
+            projected_rob[fuel_type] = None if projected_rob[fuel_type] is None or sea_consumed is None else projected_rob[fuel_type] - sea_consumed
         arrival_rob = dict(projected_rob)
         plan = plans_by_sequence.get(consumption_row.sequence_number)
         bunker = {
@@ -53,10 +54,11 @@ def project_schedule_rob_with_bunkers(
             for fuel_type in FUEL_TYPES
         }
         for fuel_type in FUEL_TYPES:
-            projected_rob[fuel_type] += bunker[fuel_type]
+            projected_rob[fuel_type] = None if projected_rob[fuel_type] is None else projected_rob[fuel_type] + bunker[fuel_type]
         post_bunker_rob = dict(projected_rob)
         for fuel_type in FUEL_TYPES:
-            projected_rob[fuel_type] -= consumption_row.port_consumed_mt.get(fuel_type, 0.0)
+            port_consumed = consumption_row.port_consumed_mt.get(fuel_type, 0.0)
+            projected_rob[fuel_type] = None if projected_rob[fuel_type] is None or port_consumed is None else projected_rob[fuel_type] - port_consumed
         rows.append(
             EventBunkerROBProjection(
                 event_id=consumption_row.event_id,

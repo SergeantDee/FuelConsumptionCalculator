@@ -33,14 +33,16 @@ def test_speed_consumption_interpolates_between_fixture_points():
     assert rates["ULSFO"] == 36
 
 
-def test_full_leg_consumption_includes_departure_sea_and_arrival_maneuvering():
+def test_missing_detailed_me_configuration_marks_sea_calculation_incomplete():
     plan = calculate_voyage_plan([_leg()], _profile(), [_speed_point(10, 24), _speed_point(14, 48)])
     row = plan.legs[0]
 
     assert row.departure_maneuvering_consumed_mt["ULSFO"] == 1
-    assert row.sea_consumed_mt["ULSFO"] == 32
+    assert row.sea_consumed_mt["ULSFO"] is None
     assert row.arrival_maneuvering_consumed_mt["ULSFO"] == 1
-    assert row.total_pre_arrival_consumed_mt["ULSFO"] == 34
+    assert row.total_pre_arrival_consumed_mt["ULSFO"] is None
+    assert row.sea_calculation_mode == "INCOMPLETE"
+    assert any("ME performance/SFOC unavailable" in warning for warning in row.warnings)
 
 
 def test_actual_pilot_off_changes_available_sea_time_and_required_speed():
@@ -60,7 +62,8 @@ def test_actual_pilot_off_changes_available_sea_time_and_required_speed():
 
     assert row.sea_hours == 30
     assert round(row.required_speed_knots, 2) == 10.67
-    assert round(row.total_pre_arrival_consumed_mt["ULSFO"], 2) == 37
+    assert row.total_pre_arrival_consumed_mt["ULSFO"] is None
+    assert row.sea_calculation_mode == "INCOMPLETE"
 
 
 def test_updated_voyage_consumption_changes_projected_rob():
@@ -89,8 +92,8 @@ def test_updated_voyage_consumption_changes_projected_rob():
     baseline_rob = project_schedule_rob(starting_rob, calculate_consumption_with_voyage(timeline, events, baseline_plan, _profile()))
     actual_rob = project_schedule_rob(starting_rob, calculate_consumption_with_voyage(timeline, events, actual_plan, _profile()))
 
-    assert baseline_rob.rows[1].projected_rob_mt["ULSFO"] == 66
-    assert round(actual_rob.rows[1].projected_rob_mt["ULSFO"], 2) == 63
+    assert baseline_rob.rows[1].projected_rob_mt["ULSFO"] is None
+    assert actual_rob.rows[1].projected_rob_mt["ULSFO"] is None
 
 
 def test_updated_projected_arrival_rob_changes_max_lift(tmp_path):

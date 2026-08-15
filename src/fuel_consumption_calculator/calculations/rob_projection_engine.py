@@ -14,15 +14,15 @@ class EventROBProjection:
     port: str
     sea_hours: float
     port_hours: float
-    consumed_mt: dict[str, float]
-    cumulative_consumed_mt: dict[str, float]
-    projected_rob_mt: dict[str, float]
+    consumed_mt: dict[str, float | None]
+    cumulative_consumed_mt: dict[str, float | None]
+    projected_rob_mt: dict[str, float | None]
 
 
 @dataclass(frozen=True, slots=True)
 class ScheduleROBProjection:
     rows: list[EventROBProjection]
-    final_rob_mt: dict[str, float]
+    final_rob_mt: dict[str, float | None]
 
 
 def project_schedule_rob(
@@ -39,8 +39,12 @@ def project_schedule_rob(
     for consumption_row in consumption.rows:
         for fuel_type in FUEL_TYPES:
             consumed = consumption_row.consumed_mt.get(fuel_type, 0.0)
-            cumulative_consumed[fuel_type] += consumed
-            projected_rob[fuel_type] -= consumed
+            if consumed is None or cumulative_consumed[fuel_type] is None:
+                cumulative_consumed[fuel_type] = None
+                projected_rob[fuel_type] = None
+            else:
+                cumulative_consumed[fuel_type] += consumed
+                projected_rob[fuel_type] = None if projected_rob[fuel_type] is None else projected_rob[fuel_type] - consumed
         rows.append(
             EventROBProjection(
                 event_id=consumption_row.event_id,

@@ -84,8 +84,7 @@ def calculate_voyage_plan(
             mcr_power_kw=config.mcr_power_kw,
             sfoc_points=me_sfoc_points,
         ) if required_speed is not None and detailed_me_enabled else None
-        speed_perf = interpolate_speed_performance(required_speed, ordered_points) if required_speed is not None else None
-        predicted_me_load = me_perf.load_percent if me_perf else (speed_perf["main_engine_load_percent"] if speed_perf else None)
+        predicted_me_load = me_perf.load_percent if me_perf else None
         leg_config = _config_for_sea(config, leg)
         sea_breakdown = _sea_consumption(
             sea_hours,
@@ -106,7 +105,7 @@ def calculate_voyage_plan(
         )
         sea_consumed = sea_breakdown["total"]
         total = {
-            fuel_type: departure_maneuvering[fuel_type] + sea_consumed[fuel_type] + arrival_maneuvering[fuel_type]
+            fuel_type: _add_optional(departure_maneuvering[fuel_type], sea_consumed[fuel_type], arrival_maneuvering[fuel_type])
             for fuel_type in FUEL_TYPES
         }
         warnings.extend(leg_warnings)
@@ -214,9 +213,9 @@ def calculate_consumption_with_voyage(
         if plan.port_breakdowns is not None:
             plan.port_breakdowns[event.id] = breakdown
         port_consumed = breakdown.total_consumed_mt
-        consumed = {fuel_type: sea_consumed[fuel_type] + port_consumed[fuel_type] for fuel_type in FUEL_TYPES}
+        consumed = {fuel_type: _add_optional(sea_consumed[fuel_type], port_consumed[fuel_type]) for fuel_type in FUEL_TYPES}
         for fuel_type in FUEL_TYPES:
-            totals[fuel_type] += consumed[fuel_type]
+            totals[fuel_type] = _add_optional(totals[fuel_type], consumed[fuel_type])
         rows.append(
             EventFuelConsumption(
                 event_id=event.id,
@@ -326,14 +325,12 @@ def _sea_consumption(
             main_engine = empty_fuel_totals()
             main_engine["VLSFO"] = max(0.0, sea_hours) * detailed_me_fuel_mt_per_hour
     else:
-        interpolated = interpolate_speed_rates(speed_knots, speed_points) if speed_knots is not None else None
-        if speed_knots is not None and speed_points and interpolated is None:
-            warnings.append(f"Required speed {speed_knots:.2f} kn is outside configured speed-consumption points; fixed SEA fallback rates were used.")
-        rates = interpolated or {fuel_type: profile.rate_for("SEA", fuel_type) for fuel_type in FUEL_TYPES}
-        if initial_fuel_state and start_utc and end_utc:
-            main_engine = _split_rate_consumption("MAIN_ENGINE", start_utc, end_utc, initial_fuel_state, fuel_changeovers or [], rates)
-        else:
-            main_engine = {fuel_type: _consume(sea_hours, rates[fuel_type]) for fuel_type in FUEL_TYPES}
+        main_engine = {fuel_type: None for fuel_type in FUEL_TYPES}
+        if sea_hours > 0:
+            if speed_knots is None:
+                warnings.append("Sea distance missing; main engine calculation incomplete.")
+            else:
+                warnings.append("ME performance/SFOC unavailable; main engine calculation incomplete.")
     generator = empty_fuel_totals()
     boiler = empty_fuel_totals()
     egb_available = predicted_me_load is not None and predicted_me_load >= 25.0
@@ -346,7 +343,16 @@ def _sea_consumption(
     generator_load_percent = _generator_load_percent(total_load_kw, config.generator_rated_kw, config.sea_running_generators, warnings)
     generator_sfoc = interpolate_generator_sfoc(generator_load_percent, sfoc_points)
     detailed_ready = _energy_config_ready(config) and generator_load_percent is not None and generator_sfoc is not None
-    mode = "DETAILED" if detailed_ready else "FALLBACK"
+    missing = []
+    if config.generator_rated_kw <= 0:
+        missing.append("DG rated power missing")
+    if config.sea_running_generators <= 0:
+        missing.append("Sea DG count missing")
+    if generator_load_percent is not None and generator_sfoc is None:
+        missing.append("DG SFOC points missing/out of range")
+    if detailed_me_fuel_mt_per_hour is None and sea_hours > 0:
+        missing.append("ME performance/SFOC unavailable")
+    mode = "DETAILED SFOC" if detailed_ready and detailed_me_fuel_mt_per_hour is not None else "INCOMPLETE"
     if detailed_ready:
         if initial_fuel_state and start_utc and end_utc:
             generator = _split_quantity_consumption("GENERATORS", start_utc, end_utc, initial_fuel_state, fuel_changeovers or [], lambda hours: _generator_fuel(total_load_kw, generator_sfoc, hours))
@@ -357,9 +363,9 @@ def _sea_consumption(
                 boiler = _split_quantity_consumption("AUX_BOILER", start_utc, end_utc, initial_fuel_state, fuel_changeovers or [], lambda hours: hours * config.aux_boiler_mt_per_hour)
             else:
                 boiler[config.boiler_fuel_type] += sea_hours * config.aux_boiler_mt_per_hour
-    elif total_load_kw > 0 or config.aux_boiler_mt_per_hour > 0:
-        warnings.append("Detailed sea load configuration is incomplete or out of range; fixed SEA fallback was used.")
-    total = {fuel_type: main_engine[fuel_type] + generator[fuel_type] + boiler[fuel_type] for fuel_type in FUEL_TYPES}
+    elif missing:
+        warnings.append("Calculation incomplete: " + "; ".join(dict.fromkeys(missing)) + ".")
+    total = {fuel_type: _add_optional(main_engine[fuel_type], generator[fuel_type], boiler[fuel_type]) for fuel_type in FUEL_TYPES}
     return {
         "total": total,
         "generator": generator,
@@ -393,18 +399,25 @@ def _port_consumption(
     generator_sfoc = interpolate_generator_sfoc(generator_load_percent, sfoc_points)
     generator = empty_fuel_totals()
     boiler = empty_fuel_totals()
-    if _energy_config_ready(config) and generator_load_percent is not None and generator_sfoc is not None:
+    detailed_ready = _energy_config_ready(config) and generator_load_percent is not None and generator_sfoc is not None
+    if detailed_ready:
         if initial_fuel_state and start_utc and end_utc:
             generator = _split_quantity_consumption("GENERATORS", start_utc, end_utc, initial_fuel_state, fuel_changeovers or [], lambda hours: _generator_fuel(total_load_kw, generator_sfoc, hours))
             boiler = _split_quantity_consumption("AUX_BOILER", start_utc, end_utc, initial_fuel_state, fuel_changeovers or [], lambda hours: hours * config.aux_boiler_mt_per_hour)
         else:
             generator[config.generator_fuel_type] += _generator_fuel(total_load_kw, generator_sfoc, port_hours)
             boiler[config.boiler_fuel_type] += port_hours * config.aux_boiler_mt_per_hour
-        mode = "DETAILED"
+        mode = "DETAILED SFOC"
     else:
-        generator = {fuel_type: _consume(port_hours, profile.rate_for("PORT", fuel_type)) for fuel_type in FUEL_TYPES}
-        mode = "FALLBACK"
-    total = {fuel_type: generator[fuel_type] + boiler[fuel_type] for fuel_type in FUEL_TYPES}
+        mode = "INCOMPLETE"
+        generator = {fuel_type: None for fuel_type in FUEL_TYPES}
+        if config.generator_rated_kw <= 0:
+            local_warnings.append("Calculation incomplete: DG rated power missing.")
+        elif config.port_running_generators <= 0:
+            local_warnings.append("Calculation incomplete: Port DG count missing.")
+        elif generator_sfoc is None:
+            local_warnings.append("Calculation incomplete: DG SFOC points missing/out of range.")
+    total = {fuel_type: _add_optional(generator[fuel_type], boiler[fuel_type]) for fuel_type in FUEL_TYPES}
     return PortEnergyBreakdown(
         event_id=event.id,
         port=event.port,
@@ -464,6 +477,12 @@ def _port_hours(event: ScheduleEvent, actual_arrival, actual_departure, fallback
 
 def _consume(hours: float, rate_mt_per_day: float) -> float:
     return max(0.0, hours) / 24 * rate_mt_per_day
+
+
+def _add_optional(*values: float | None) -> float | None:
+    if any(value is None for value in values):
+        return None
+    return sum(float(value) for value in values)
 
 
 def _split_rate_consumption(
