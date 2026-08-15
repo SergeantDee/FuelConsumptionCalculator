@@ -15,8 +15,9 @@ from fuel_consumption_calculator.repositories.consumption_repository import Cons
 
 
 class ConsumptionService:
-    def __init__(self, repository: ConsumptionRepository) -> None:
+    def __init__(self, repository: ConsumptionRepository, voyage_service=None) -> None:
         self._repository = repository
+        self._voyage_service = voyage_service
 
     def load_profile(self, vessel_id: int) -> ConsumptionProfile:
         stored_profile = self._repository.load_profile(vessel_id)
@@ -45,6 +46,9 @@ class ConsumptionService:
         timeline: ScheduleTimeline,
     ) -> ScheduleFuelConsumption:
         profile = self.load_profile(vessel_id)
+        if self._voyage_service is not None:
+            events = [row.event for row in timeline.rows]
+            return self._voyage_service.calculate_schedule_consumption(vessel_id, events, timeline, profile)
         return calculate_schedule_consumption(timeline, profile)
 
     def build_profile(self, vessel_id: int, rates: dict[tuple[str, str], float]) -> ConsumptionProfile:
@@ -76,4 +80,4 @@ class ConsumptionService:
                 raise ValueError("Consumption rates cannot be negative.")
             seen_keys.add(key)
         if seen_keys != expected_keys:
-            raise ValueError("Consumption profile must include SEA and PORT rates for ULSFO, VLSFO, and MDO.")
+            raise ValueError("Consumption profile must include SEA, MANEUVERING, and PORT rates for ULSFO, VLSFO, and MDO.")

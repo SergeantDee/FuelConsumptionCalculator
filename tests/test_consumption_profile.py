@@ -53,7 +53,7 @@ def test_consumption_profile_update_does_not_create_duplicates(tmp_path):
         ).fetchone()[0]
 
     assert loaded.rate_for("SEA", "ULSFO") == 11.0
-    assert row_count == 6
+    assert row_count == len(OPERATING_MODES) * len(FUEL_TYPES)
 
 
 def test_consumption_profile_rejects_negative_rate(tmp_path):

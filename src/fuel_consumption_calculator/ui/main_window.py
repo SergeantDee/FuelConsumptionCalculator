@@ -10,16 +10,18 @@ from fuel_consumption_calculator.services.rob_service import ROBService
 from fuel_consumption_calculator.services.schedule_service import ScheduleService
 from fuel_consumption_calculator.services.scraper_service import ScraperService
 from fuel_consumption_calculator.services.vessel_service import VesselService
+from fuel_consumption_calculator.services.voyage_service import VoyageService
 from fuel_consumption_calculator.ui.pages.bunker_page import BunkerPage
 from fuel_consumption_calculator.ui.pages.consumption_page import ConsumptionPage
 from fuel_consumption_calculator.ui.pages.dashboard_page import DashboardPage
 from fuel_consumption_calculator.ui.pages.rob_page import RobPage
 from fuel_consumption_calculator.ui.pages.schedule_page import SchedulePage
 from fuel_consumption_calculator.ui.pages.settings_page import SettingsPage
+from fuel_consumption_calculator.ui.pages.voyage_page import VoyagePage
 
 
 class MainWindow(QMainWindow):
-    PAGE_NAMES = ("Dashboard", "Schedule", "Consumption", "ROB Planner", "Bunker Planner", "Settings")
+    PAGE_NAMES = ("Dashboard", "Schedule", "Voyage Planner", "Consumption", "ROB Planner", "Bunker Planner", "Settings")
 
     def __init__(
         self,
@@ -29,6 +31,7 @@ class MainWindow(QMainWindow):
         consumption_service: ConsumptionService,
         rob_service: ROBService,
         bunker_service: BunkerService,
+        voyage_service: VoyageService,
     ) -> None:
         super().__init__()
         self.setWindowTitle(f"{APPLICATION_NAME} {APPLICATION_VERSION}")
@@ -57,6 +60,7 @@ class MainWindow(QMainWindow):
         self.page_stack = QStackedWidget()
         self.dashboard_page = DashboardPage(vessel_service)
         self.schedule_page = SchedulePage(vessel_service, schedule_service, scraper_service)
+        self.voyage_page = VoyagePage(vessel_service, schedule_service, consumption_service, voyage_service)
         self.consumption_page = ConsumptionPage(vessel_service, consumption_service, schedule_service)
         self.rob_page = RobPage(vessel_service, rob_service, schedule_service, consumption_service)
         self.bunker_page = BunkerPage(vessel_service, bunker_service, schedule_service, consumption_service, rob_service)
@@ -64,6 +68,7 @@ class MainWindow(QMainWindow):
         pages = (
             self.dashboard_page,
             self.schedule_page,
+            self.voyage_page,
             self.consumption_page,
             self.rob_page,
             self.bunker_page,
@@ -102,17 +107,20 @@ class MainWindow(QMainWindow):
         elif index == 1:
             self.schedule_page.refresh()
         elif index == 2:
-            self.consumption_page.refresh()
+            self.voyage_page.refresh()
         elif index == 3:
-            self.rob_page.refresh()
+            self.consumption_page.refresh()
         elif index == 4:
-            self.bunker_page.refresh()
+            self.rob_page.refresh()
         elif index == 5:
+            self.bunker_page.refresh()
+        elif index == 6:
             self.settings_page.refresh()
 
     def _vessel_configuration_changed(self) -> None:
         self.dashboard_page.refresh()
         self.schedule_page.refresh()
+        self.voyage_page.refresh()
         self.consumption_page.refresh()
         self.rob_page.refresh()
         self.bunker_page.refresh()

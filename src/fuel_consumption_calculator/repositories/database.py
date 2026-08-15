@@ -64,6 +64,8 @@ class Database:
                 self._migrate_to_v5(connection)
             if current_version < 6:
                 self._migrate_to_v6(connection)
+            if current_version < 7:
+                self._migrate_to_v7(connection)
             connection.execute(
                 "INSERT OR REPLACE INTO application_metadata (key, value) VALUES ('schema_version', ?)",
                 (str(SCHEMA_VERSION),),
@@ -201,3 +203,86 @@ class Database:
             """
         )
         LOGGER.info("Database migrated to schema version 6.")
+
+    def _migrate_to_v7(self, connection: sqlite3.Connection) -> None:
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS route_definitions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                origin_port TEXT NOT NULL,
+                destination_port TEXT NOT NULL,
+                departure_pilot_distance_nm REAL NOT NULL DEFAULT 0,
+                departure_pilotage_hours REAL NOT NULL DEFAULT 1,
+                sea_distance_nm REAL NOT NULL DEFAULT 0,
+                arrival_pilot_distance_nm REAL NOT NULL DEFAULT 0,
+                arrival_pilotage_hours REAL NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (origin_port, destination_port),
+                CHECK (departure_pilot_distance_nm >= 0),
+                CHECK (departure_pilotage_hours >= 0),
+                CHECK (sea_distance_nm >= 0),
+                CHECK (arrival_pilot_distance_nm >= 0),
+                CHECK (arrival_pilotage_hours >= 0)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_route_definitions_pair
+                ON route_definitions (origin_port, destination_port);
+
+            CREATE TABLE IF NOT EXISTS voyage_leg_overrides (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vessel_id INTEGER NOT NULL,
+                sequence_number INTEGER NOT NULL,
+                origin_port_snapshot TEXT NOT NULL,
+                destination_port_snapshot TEXT NOT NULL,
+                origin_departure_snapshot TEXT,
+                destination_arrival_snapshot TEXT NOT NULL,
+                departure_pilot_distance_nm REAL,
+                departure_pilotage_hours REAL,
+                sea_distance_nm REAL,
+                arrival_pilot_distance_nm REAL,
+                arrival_pilotage_hours REAL,
+                actual_berth_departure TEXT,
+                actual_pilot_off TEXT,
+                actual_pilot_on TEXT,
+                actual_berth_arrival TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (vessel_id) REFERENCES vessels(id) ON DELETE CASCADE,
+                UNIQUE (
+                    vessel_id, sequence_number, origin_port_snapshot,
+                    destination_port_snapshot, origin_departure_snapshot,
+                    destination_arrival_snapshot
+                ),
+                CHECK (departure_pilot_distance_nm IS NULL OR departure_pilot_distance_nm >= 0),
+                CHECK (departure_pilotage_hours IS NULL OR departure_pilotage_hours >= 0),
+                CHECK (sea_distance_nm IS NULL OR sea_distance_nm >= 0),
+                CHECK (arrival_pilot_distance_nm IS NULL OR arrival_pilot_distance_nm >= 0),
+                CHECK (arrival_pilotage_hours IS NULL OR arrival_pilotage_hours >= 0)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_voyage_leg_overrides_vessel_sequence
+                ON voyage_leg_overrides (vessel_id, sequence_number);
+
+            CREATE TABLE IF NOT EXISTS vessel_speed_consumption_points (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vessel_id INTEGER NOT NULL,
+                speed_knots REAL NOT NULL,
+                ulsfo_mt_per_day REAL NOT NULL DEFAULT 0,
+                vlsfo_mt_per_day REAL NOT NULL DEFAULT 0,
+                mdo_mt_per_day REAL NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (vessel_id) REFERENCES vessels(id) ON DELETE CASCADE,
+                UNIQUE (vessel_id, speed_knots),
+                CHECK (speed_knots > 0),
+                CHECK (ulsfo_mt_per_day >= 0),
+                CHECK (vlsfo_mt_per_day >= 0),
+                CHECK (mdo_mt_per_day >= 0)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_speed_consumption_points_vessel_speed
+                ON vessel_speed_consumption_points (vessel_id, speed_knots);
+            """
+        )
+        LOGGER.info("Database migrated to schema version 7.")

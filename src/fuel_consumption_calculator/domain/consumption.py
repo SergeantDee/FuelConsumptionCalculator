@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-OPERATING_MODES = ("SEA", "PORT")
+OPERATING_MODES = ("SEA", "MANEUVERING", "PORT")
 FUEL_TYPES = ("ULSFO", "VLSFO", "MDO")
 
 

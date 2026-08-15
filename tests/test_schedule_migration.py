@@ -44,5 +44,8 @@ def test_schema_migration_v1_to_current_preserves_vessel(tmp_path):
         "vessel_starting_rob",
         "planned_bunker_quantities",
         "vessel_bunker_capacities",
+        "route_definitions",
+        "voyage_leg_overrides",
+        "vessel_speed_consumption_points",
     }.issubset(tables)
-    assert user_version == 6
+    assert user_version == 7
