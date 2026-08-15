@@ -148,6 +148,16 @@ class VoyageService:
         plan = self.calculate_plan(vessel_id, events, profile)
         return calculate_consumption_with_voyage(timeline, events, plan, profile)
 
+    def calculate_consumption_for_plan(
+        self,
+        *,
+        events: list[ScheduleEvent],
+        timeline: ScheduleTimeline,
+        plan: VoyagePlan,
+        profile: ConsumptionProfile,
+    ) -> ScheduleFuelConsumption:
+        return calculate_consumption_with_voyage(timeline, events, plan, profile)
+
     def save_leg_values(
         self,
         leg: VoyageLeg,

@@ -62,7 +62,7 @@ class MainWindow(QMainWindow):
         self.page_stack = QStackedWidget()
         self.dashboard_page = DashboardPage(vessel_service)
         self.schedule_page = SchedulePage(vessel_service, schedule_service, scraper_service, settings_service)
-        self.voyage_page = VoyagePage(vessel_service, schedule_service, consumption_service, voyage_service)
+        self.voyage_page = VoyagePage(vessel_service, schedule_service, consumption_service, voyage_service, rob_service)
         self.consumption_page = ConsumptionPage(vessel_service, consumption_service, schedule_service, voyage_service)
         self.rob_page = RobPage(vessel_service, rob_service, schedule_service, consumption_service)
         self.bunker_page = BunkerPage(vessel_service, bunker_service, schedule_service, consumption_service, rob_service)

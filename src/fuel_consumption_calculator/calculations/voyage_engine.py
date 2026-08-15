@@ -168,6 +168,8 @@ def calculate_consumption_with_voyage(
     outgoing_leg_by_origin = {calculated_leg.leg.origin_event_id: calculated_leg for calculated_leg in plan.legs}
     rows: list[EventFuelConsumption] = []
     totals = empty_fuel_totals()
+    if plan.port_breakdowns is not None:
+        plan.port_breakdowns.clear()
 
     for event in events:
         timeline_row = timeline_by_event.get(event.id)
@@ -189,6 +191,8 @@ def calculate_consumption_with_voyage(
             event.effective_arrival_at,
             (actual_departures.get(event.id) or event.effective_departure_at),
         )
+        if plan.port_breakdowns is not None:
+            plan.port_breakdowns[event.id] = breakdown
         port_consumed = breakdown.total_consumed_mt
         consumed = {fuel_type: sea_consumed[fuel_type] + port_consumed[fuel_type] for fuel_type in FUEL_TYPES}
         for fuel_type in FUEL_TYPES:

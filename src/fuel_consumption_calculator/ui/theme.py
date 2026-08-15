@@ -135,6 +135,42 @@ QFrame#panel {
     border: 1px solid #23475d;
     border-radius: 8px;
 }
+QFrame#voyageStagePlanned {
+    background-color: #102535;
+    border: 1px solid #23475d;
+    border-radius: 10px;
+}
+QFrame#voyageStageCurrent {
+    background-color: #0f3140;
+    border: 2px solid #1aa0b8;
+    border-radius: 10px;
+}
+QFrame#voyageStageCompleted {
+    background-color: #0e2230;
+    border: 1px solid #274354;
+    border-radius: 10px;
+}
+QLabel#stageBadgeCurrent {
+    background-color: #0d718d;
+    border-radius: 5px;
+    color: #ffffff;
+    font-weight: 700;
+    padding: 5px 9px;
+}
+QLabel#stageBadgePlanned {
+    background-color: #17384d;
+    border-radius: 5px;
+    color: #c9dce8;
+    font-weight: 700;
+    padding: 5px 9px;
+}
+QLabel#stageBadgeCompleted {
+    background-color: #233845;
+    border-radius: 5px;
+    color: #8caabd;
+    font-weight: 700;
+    padding: 5px 9px;
+}
 QTableView, QTableWidget, QAbstractItemView {
     background-color: #0b1824;
     alternate-background-color: #102535;

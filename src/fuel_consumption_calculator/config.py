@@ -2,7 +2,7 @@ from __future__ import annotations
 
 
 APPLICATION_NAME = "Fuel Consumption Calculator"
-APPLICATION_VERSION = "1.1.1"
+APPLICATION_VERSION = "1.2.0"
 DATABASE_FILENAME = "fuel_consumption_calculator.db"
 SETTINGS_FILENAME = "settings.json"
 LOG_FILENAME = "fuel_consumption_calculator.log"
