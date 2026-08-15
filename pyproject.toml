@@ -4,13 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fuel-consumption-calculator"
-version = "1.0.0"
+version = "1.1.0"
 description = "Standalone Windows vessel fuel consumption planning application"
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
 dependencies = [
     "PySide6-Essentials>=6.8,<7.0",
     "playwright>=1.47,<2.0",
+    "tzdata>=2026.3",
 ]
 
 [project.optional-dependencies]

@@ -6,6 +6,9 @@ from datetime import datetime
 from fuel_consumption_calculator.domain.consumption import FUEL_TYPES
 
 
+MACHINERY_TYPES = ("MAIN_ENGINE", "GENERATORS", "AUX_BOILER")
+
+
 @dataclass(frozen=True, slots=True)
 class RouteDefinition:
     origin_port: str
@@ -62,6 +65,50 @@ class VesselEnergyConfig:
     aux_boiler_mt_per_hour: float = 0.0
     generator_fuel_type: str = "MDO"
     boiler_fuel_type: str = "MDO"
+
+
+@dataclass(frozen=True, slots=True)
+class MachineryFuelState:
+    vessel_id: int
+    main_engine_fuel_type: str = "VLSFO"
+    generators_fuel_type: str = "VLSFO"
+    aux_boiler_fuel_type: str = "VLSFO"
+
+    def fuel_for(self, machinery: str) -> str:
+        if machinery == "MAIN_ENGINE":
+            return self.main_engine_fuel_type
+        if machinery == "GENERATORS":
+            return self.generators_fuel_type
+        if machinery == "AUX_BOILER":
+            return self.aux_boiler_fuel_type
+        raise ValueError(f"Unsupported machinery: {machinery}")
+
+
+@dataclass(frozen=True, slots=True)
+class FuelChangeoverEvent:
+    id: int | None
+    vessel_id: int
+    machinery: str
+    from_fuel_type: str
+    to_fuel_type: str
+    planned_at_utc: datetime
+    actual_at_utc: datetime | None = None
+    time_basis: str = "UTC"
+    status: str = "PLANNED"
+
+    @property
+    def effective_at_utc(self) -> datetime:
+        return self.actual_at_utc or self.planned_at_utc
+
+
+@dataclass(frozen=True, slots=True)
+class VesselClockAdjustment:
+    id: int | None
+    vessel_id: int
+    effective_at_utc: datetime
+    adjustment_minutes: int
+    previous_offset_minutes: int
+    resulting_offset_minutes: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,6 +188,8 @@ class VoyagePlan:
     port_breakdowns: dict[int, PortEnergyBreakdown] | None = None
     energy_config: VesselEnergyConfig | None = None
     generator_sfoc_points: tuple[GeneratorSfocPoint, ...] = ()
+    initial_fuel_state: MachineryFuelState | None = None
+    fuel_changeovers: tuple[FuelChangeoverEvent, ...] = ()
 
 
 def empty_fuel_totals() -> dict[str, float]:

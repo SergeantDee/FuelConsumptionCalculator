@@ -27,3 +27,15 @@ class SettingsService:
         temporary_file = self._settings_file.with_suffix(".tmp")
         temporary_file.write_text(json.dumps(settings, indent=2, sort_keys=True), encoding="utf-8")
         temporary_file.replace(self._settings_file)
+
+    def scraper_browser_mode(self) -> str:
+        value = str(self.load().get("scraper_browser_mode", "visible")).lower()
+        return value if value in {"visible", "headless"} else "visible"
+
+    def save_scraper_browser_mode(self, mode: str) -> None:
+        normalized = mode.lower()
+        if normalized not in {"visible", "headless"}:
+            raise ValueError("Scraper browser mode must be visible or headless.")
+        settings = self.load()
+        settings["scraper_browser_mode"] = normalized
+        self.save(settings)

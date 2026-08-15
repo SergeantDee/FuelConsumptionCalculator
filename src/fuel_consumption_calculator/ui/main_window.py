@@ -9,6 +9,7 @@ from fuel_consumption_calculator.services.consumption_service import Consumption
 from fuel_consumption_calculator.services.rob_service import ROBService
 from fuel_consumption_calculator.services.schedule_service import ScheduleService
 from fuel_consumption_calculator.services.scraper_service import ScraperService
+from fuel_consumption_calculator.services.settings_service import SettingsService
 from fuel_consumption_calculator.services.vessel_service import VesselService
 from fuel_consumption_calculator.services.voyage_service import VoyageService
 from fuel_consumption_calculator.ui.pages.bunker_page import BunkerPage
@@ -32,6 +33,7 @@ class MainWindow(QMainWindow):
         rob_service: ROBService,
         bunker_service: BunkerService,
         voyage_service: VoyageService,
+        settings_service: SettingsService,
     ) -> None:
         super().__init__()
         self.setWindowTitle(f"{APPLICATION_NAME} {APPLICATION_VERSION}")
@@ -59,12 +61,12 @@ class MainWindow(QMainWindow):
 
         self.page_stack = QStackedWidget()
         self.dashboard_page = DashboardPage(vessel_service)
-        self.schedule_page = SchedulePage(vessel_service, schedule_service, scraper_service)
+        self.schedule_page = SchedulePage(vessel_service, schedule_service, scraper_service, settings_service)
         self.voyage_page = VoyagePage(vessel_service, schedule_service, consumption_service, voyage_service)
-        self.consumption_page = ConsumptionPage(vessel_service, consumption_service, schedule_service)
+        self.consumption_page = ConsumptionPage(vessel_service, consumption_service, schedule_service, voyage_service)
         self.rob_page = RobPage(vessel_service, rob_service, schedule_service, consumption_service)
         self.bunker_page = BunkerPage(vessel_service, bunker_service, schedule_service, consumption_service, rob_service)
-        self.settings_page = SettingsPage(vessel_service)
+        self.settings_page = SettingsPage(vessel_service, schedule_service, settings_service)
         pages = (
             self.dashboard_page,
             self.schedule_page,

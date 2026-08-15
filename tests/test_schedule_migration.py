@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
+from fuel_consumption_calculator.config import SCHEMA_VERSION
 from fuel_consumption_calculator.repositories.database import Database
 
 
@@ -50,4 +51,4 @@ def test_schema_migration_v1_to_current_preserves_vessel(tmp_path):
             "vessel_energy_config",
             "generator_sfoc_points",
         }.issubset(tables)
-    assert user_version == 8
+    assert user_version == SCHEMA_VERSION

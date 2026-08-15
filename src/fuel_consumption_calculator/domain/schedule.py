@@ -15,6 +15,10 @@ class ScheduleCandidate:
     source_vessel_name: str
     source_from_date: date
     terminal: str | None = None
+    port_timezone_id: str | None = None
+    arrival_at_utc: datetime | None = None
+    departure_at_utc: datetime | None = None
+    timezone_status: str = "RESOLVED"
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +36,18 @@ class ScheduleEvent:
     created_at: str
     updated_at: str
     terminal: str | None = None
+    port_timezone_id: str | None = None
+    arrival_at_utc: datetime | None = None
+    departure_at_utc: datetime | None = None
+    timezone_status: str = "RESOLVED"
+
+    @property
+    def effective_arrival_at(self) -> datetime:
+        return self.arrival_at_utc or self.arrival_at
+
+    @property
+    def effective_departure_at(self) -> datetime | None:
+        return self.departure_at_utc or self.departure_at
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,3 +61,7 @@ class ScheduleEventDraft:
     source_vessel_name: str
     source_from_date: date
     terminal: str | None = None
+    port_timezone_id: str | None = None
+    arrival_at_utc: datetime | None = None
+    departure_at_utc: datetime | None = None
+    timezone_status: str = "RESOLVED"

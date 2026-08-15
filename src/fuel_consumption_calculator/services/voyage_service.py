@@ -8,6 +8,7 @@ from fuel_consumption_calculator.domain.consumption import FUEL_TYPES, Consumpti
 from fuel_consumption_calculator.domain.schedule import ScheduleEvent
 from fuel_consumption_calculator.domain.schedule_timeline import ScheduleTimeline
 from fuel_consumption_calculator.domain.voyage import GeneratorSfocPoint, RouteDefinition, SpeedConsumptionPoint, VesselEnergyConfig, VoyageLeg, VoyageLegOverride, VoyagePlan
+from fuel_consumption_calculator.domain.voyage import FuelChangeoverEvent, MACHINERY_TYPES, MachineryFuelState, VesselClockAdjustment
 from fuel_consumption_calculator.legacy_voyage_data import legacy_pilot_info, legacy_sea_distance
 from fuel_consumption_calculator.repositories.voyage_repository import VoyageRepository
 
@@ -40,6 +41,34 @@ class VoyageService:
         self._validate_generator_sfoc_points(points)
         return self._repository.save_generator_sfoc_points(vessel_id, points)
 
+    def load_initial_fuel_state(self, vessel_id: int) -> MachineryFuelState:
+        return self._repository.load_initial_fuel_state(vessel_id)
+
+    def save_initial_fuel_state(self, state: MachineryFuelState) -> MachineryFuelState:
+        self._validate_fuel(state.main_engine_fuel_type)
+        self._validate_fuel(state.generators_fuel_type)
+        self._validate_fuel(state.aux_boiler_fuel_type)
+        return self._repository.save_initial_fuel_state(state)
+
+    def list_fuel_changeovers(self, vessel_id: int) -> list[FuelChangeoverEvent]:
+        return self._repository.list_fuel_changeovers(vessel_id)
+
+    def save_fuel_changeover(self, event: FuelChangeoverEvent) -> FuelChangeoverEvent:
+        if event.machinery not in MACHINERY_TYPES:
+            raise ValueError("Unsupported machinery.")
+        self._validate_fuel(event.from_fuel_type)
+        self._validate_fuel(event.to_fuel_type)
+        return self._repository.save_fuel_changeover(event)
+
+    def delete_fuel_changeover(self, vessel_id: int, event_id: int) -> None:
+        self._repository.delete_fuel_changeover(vessel_id, event_id)
+
+    def list_clock_adjustments(self, vessel_id: int) -> list[VesselClockAdjustment]:
+        return self._repository.list_clock_adjustments(vessel_id)
+
+    def save_clock_adjustment(self, adjustment: VesselClockAdjustment) -> VesselClockAdjustment:
+        return self._repository.save_clock_adjustment(adjustment)
+
     def save_speed_points(self, vessel_id: int, points: list[SpeedConsumptionPoint]) -> list[SpeedConsumptionPoint]:
         self._validate_speed_points(points)
         return self._repository.save_speed_points(vessel_id, points)
@@ -55,11 +84,11 @@ class VoyageService:
         return point
 
     def build_legs(self, vessel_id: int, events: list[ScheduleEvent]) -> list[VoyageLeg]:
-        ordered_events = sorted(events, key=lambda event: (event.sequence_number, event.arrival_at, event.id))
+        ordered_events = sorted(events, key=lambda event: (event.sequence_number, event.effective_arrival_at, event.id))
         overrides = self._matching_overrides(vessel_id, ordered_events)
         legs: list[VoyageLeg] = []
         for origin, destination in zip(ordered_events, ordered_events[1:]):
-            if origin.departure_at is None:
+            if origin.effective_departure_at is None:
                 continue
             identity = _identity_for_leg(vessel_id, origin, destination)
             route = self._repository.get_route(origin.port, destination.port)
@@ -81,8 +110,8 @@ class VoyageService:
                     destination_event_id=destination.id,
                     origin_port=origin.port,
                     destination_port=destination.port,
-                    scheduled_berth_departure=origin.departure_at,
-                    scheduled_berth_arrival=destination.arrival_at,
+                    scheduled_berth_departure=origin.effective_departure_at,
+                    scheduled_berth_arrival=destination.effective_arrival_at,
                     route=route,
                     override=overrides.get(identity),
                     status=status,
@@ -103,6 +132,8 @@ class VoyageService:
             self.list_speed_points(vessel_id),
             self.load_energy_config(vessel_id),
             self.list_generator_sfoc_points(vessel_id),
+            self.load_initial_fuel_state(vessel_id),
+            self.list_fuel_changeovers(vessel_id),
         )
 
     def calculate_schedule_consumption(
@@ -182,7 +213,7 @@ class VoyageService:
         current_identities = {
             _identity_for_leg(vessel_id, origin, destination)
             for origin, destination in zip(events, events[1:])
-            if origin.departure_at is not None
+            if origin.effective_departure_at is not None
         }
         return {
             _override_identity(override): override
@@ -267,6 +298,10 @@ class VoyageService:
                 raise ValueError("Duplicate generator load point.")
             seen.add(point.load_percent)
 
+    def _validate_fuel(self, fuel_type: str) -> None:
+        if fuel_type not in FUEL_TYPES:
+            raise ValueError("Fuel type must be ULSFO, VLSFO, or MDO.")
+
 
 def _identity_for_leg(vessel_id: int, origin: ScheduleEvent, destination: ScheduleEvent) -> tuple:
     return (
@@ -274,8 +309,8 @@ def _identity_for_leg(vessel_id: int, origin: ScheduleEvent, destination: Schedu
         destination.sequence_number,
         origin.port,
         destination.port,
-        origin.departure_at.isoformat(timespec="minutes") if origin.departure_at else None,
-        destination.arrival_at.isoformat(timespec="minutes"),
+        origin.effective_departure_at.isoformat(timespec="minutes") if origin.effective_departure_at else None,
+        destination.effective_arrival_at.isoformat(timespec="minutes"),
     )
 
 

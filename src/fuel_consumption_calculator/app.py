@@ -21,6 +21,7 @@ from fuel_consumption_calculator.services.consumption_service import Consumption
 from fuel_consumption_calculator.services.rob_service import ROBService
 from fuel_consumption_calculator.services.schedule_service import ScheduleService
 from fuel_consumption_calculator.services.scraper_service import ScraperService
+from fuel_consumption_calculator.services.settings_service import SettingsService
 from fuel_consumption_calculator.services.vessel_service import VesselService
 from fuel_consumption_calculator.services.voyage_service import VoyageService
 from fuel_consumption_calculator.ui.main_window import MainWindow
@@ -35,12 +36,13 @@ def build_main_window(paths: AppPaths) -> MainWindow:
     database.initialize()
     vessel_service = VesselService(VesselRepository(database))
     schedule_service = ScheduleService(ScheduleRepository(database))
+    settings_service = SettingsService(paths.settings_file)
     voyage_service = VoyageService(VoyageRepository(database))
     consumption_service = ConsumptionService(ConsumptionRepository(database), voyage_service)
     rob_service = ROBService(ROBRepository(database))
     bunker_service = BunkerService(BunkerRepository(database))
     scraper_service = ScraperService()
-    return MainWindow(vessel_service, schedule_service, scraper_service, consumption_service, rob_service, bunker_service, voyage_service)
+    return MainWindow(vessel_service, schedule_service, scraper_service, consumption_service, rob_service, bunker_service, voyage_service, settings_service)
 
 
 def install_global_exception_handler() -> None:

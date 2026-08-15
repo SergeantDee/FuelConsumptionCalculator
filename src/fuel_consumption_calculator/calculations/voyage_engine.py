@@ -8,7 +8,9 @@ from fuel_consumption_calculator.domain.schedule import ScheduleEvent
 from fuel_consumption_calculator.domain.schedule_timeline import ScheduleTimeline
 from fuel_consumption_calculator.domain.voyage import (
     CalculatedVoyageLeg,
+    FuelChangeoverEvent,
     GeneratorSfocPoint,
+    MachineryFuelState,
     PortEnergyBreakdown,
     SpeedConsumptionPoint,
     VesselEnergyConfig,
@@ -24,12 +26,16 @@ def calculate_voyage_plan(
     speed_points: list[SpeedConsumptionPoint],
     energy_config: VesselEnergyConfig | None = None,
     generator_sfoc_points: list[GeneratorSfocPoint] | None = None,
+    initial_fuel_state: MachineryFuelState | None = None,
+    fuel_changeovers: list[FuelChangeoverEvent] | None = None,
 ) -> VoyagePlan:
     calculated_legs: list[CalculatedVoyageLeg] = []
     warnings: list[str] = []
     ordered_points = sorted(speed_points, key=lambda point: point.speed_knots)
     ordered_sfoc_points = sorted(generator_sfoc_points or [], key=lambda point: point.load_percent)
     config = energy_config or VesselEnergyConfig(vessel_id=legs[0].vessel_id if legs else 0)
+    active_fuel_state = initial_fuel_state
+    changeovers = sorted(fuel_changeovers or [], key=lambda event: event.effective_at_utc)
 
     for leg in legs:
         override = leg.override
@@ -79,6 +85,10 @@ def calculate_voyage_plan(
             predicted_me_load,
             leg.override.use_egb if leg.override else False,
             leg_warnings,
+            active_fuel_state,
+            changeovers,
+            pilot_off,
+            pilot_on,
         )
         sea_consumed = sea_breakdown["total"]
         total = {
@@ -120,6 +130,8 @@ def calculate_voyage_plan(
         port_breakdowns={},
         energy_config=config,
         generator_sfoc_points=tuple(ordered_sfoc_points),
+        initial_fuel_state=active_fuel_state,
+        fuel_changeovers=tuple(changeovers),
     )
 
 
@@ -172,6 +184,10 @@ def calculate_consumption_with_voyage(
             profile,
             plan.energy_config or VesselEnergyConfig(vessel_id=event.vessel_id),
             list(plan.generator_sfoc_points),
+            plan.initial_fuel_state,
+            list(plan.fuel_changeovers),
+            event.effective_arrival_at,
+            (actual_departures.get(event.id) or event.effective_departure_at),
         )
         port_consumed = breakdown.total_consumed_mt
         consumed = {fuel_type: sea_consumed[fuel_type] + port_consumed[fuel_type] for fuel_type in FUEL_TYPES}
@@ -266,12 +282,19 @@ def _sea_consumption(
     predicted_me_load: float | None,
     requested_egb: bool,
     warnings: list[str],
+    initial_fuel_state: MachineryFuelState | None = None,
+    fuel_changeovers: list[FuelChangeoverEvent] | None = None,
+    start_utc=None,
+    end_utc=None,
 ) -> dict[str, float]:
     interpolated = interpolate_speed_rates(speed_knots, speed_points) if speed_knots is not None else None
     if speed_knots is not None and speed_points and interpolated is None:
         warnings.append(f"Required speed {speed_knots:.2f} kn is outside configured speed-consumption points; fixed SEA rates were used.")
     rates = interpolated or {fuel_type: profile.rate_for("SEA", fuel_type) for fuel_type in FUEL_TYPES}
-    main_engine = {fuel_type: _consume(sea_hours, rates[fuel_type]) for fuel_type in FUEL_TYPES}
+    if initial_fuel_state and start_utc and end_utc:
+        main_engine = _split_rate_consumption("MAIN_ENGINE", start_utc, end_utc, initial_fuel_state, fuel_changeovers or [], rates)
+    else:
+        main_engine = {fuel_type: _consume(sea_hours, rates[fuel_type]) for fuel_type in FUEL_TYPES}
     generator = empty_fuel_totals()
     boiler = empty_fuel_totals()
     egb_available = predicted_me_load is not None and predicted_me_load >= 25.0
@@ -285,9 +308,15 @@ def _sea_consumption(
     detailed_ready = _energy_config_ready(config) and generator_load_percent is not None and generator_sfoc is not None
     mode = "DETAILED" if detailed_ready else "FALLBACK"
     if detailed_ready:
-        generator[config.generator_fuel_type] += _generator_fuel(total_load_kw, generator_sfoc, sea_hours)
+        if initial_fuel_state and start_utc and end_utc:
+            generator = _split_quantity_consumption("GENERATORS", start_utc, end_utc, initial_fuel_state, fuel_changeovers or [], lambda hours: _generator_fuel(total_load_kw, generator_sfoc, hours))
+        else:
+            generator[config.generator_fuel_type] += _generator_fuel(total_load_kw, generator_sfoc, sea_hours)
         if not egb_used:
-            boiler[config.boiler_fuel_type] += sea_hours * config.aux_boiler_mt_per_hour
+            if initial_fuel_state and start_utc and end_utc:
+                boiler = _split_quantity_consumption("AUX_BOILER", start_utc, end_utc, initial_fuel_state, fuel_changeovers or [], lambda hours: hours * config.aux_boiler_mt_per_hour)
+            else:
+                boiler[config.boiler_fuel_type] += sea_hours * config.aux_boiler_mt_per_hour
     elif total_load_kw > 0 or config.aux_boiler_mt_per_hour > 0:
         warnings.append("Detailed sea load configuration is incomplete or out of range; fixed SEA fallback was used.")
     total = {fuel_type: main_engine[fuel_type] + generator[fuel_type] + boiler[fuel_type] for fuel_type in FUEL_TYPES}
@@ -310,6 +339,10 @@ def _port_consumption(
     profile: ConsumptionProfile,
     config: VesselEnergyConfig,
     sfoc_points: list[GeneratorSfocPoint],
+    initial_fuel_state: MachineryFuelState | None = None,
+    fuel_changeovers: list[FuelChangeoverEvent] | None = None,
+    start_utc=None,
+    end_utc=None,
 ) -> PortEnergyBreakdown:
     reefers = outgoing_leg.leg.override.port_reefers if outgoing_leg and outgoing_leg.leg.override and outgoing_leg.leg.override.port_reefers is not None else 0.0
     total_load_kw = config.port_base_load_kw + reefers * config.reefer_kw_per_unit
@@ -319,8 +352,12 @@ def _port_consumption(
     generator = empty_fuel_totals()
     boiler = empty_fuel_totals()
     if _energy_config_ready(config) and generator_load_percent is not None and generator_sfoc is not None:
-        generator[config.generator_fuel_type] += _generator_fuel(total_load_kw, generator_sfoc, port_hours)
-        boiler[config.boiler_fuel_type] += port_hours * config.aux_boiler_mt_per_hour
+        if initial_fuel_state and start_utc and end_utc:
+            generator = _split_quantity_consumption("GENERATORS", start_utc, end_utc, initial_fuel_state, fuel_changeovers or [], lambda hours: _generator_fuel(total_load_kw, generator_sfoc, hours))
+            boiler = _split_quantity_consumption("AUX_BOILER", start_utc, end_utc, initial_fuel_state, fuel_changeovers or [], lambda hours: hours * config.aux_boiler_mt_per_hour)
+        else:
+            generator[config.generator_fuel_type] += _generator_fuel(total_load_kw, generator_sfoc, port_hours)
+            boiler[config.boiler_fuel_type] += port_hours * config.aux_boiler_mt_per_hour
         mode = "DETAILED"
     else:
         generator = {fuel_type: _consume(port_hours, profile.rate_for("PORT", fuel_type)) for fuel_type in FUEL_TYPES}
@@ -375,8 +412,8 @@ def _generator_fuel(total_load_kw: float, sfoc_g_per_kwh: float, hours: float) -
 
 
 def _port_hours(event: ScheduleEvent, actual_arrival, actual_departure, fallback: float | None) -> float:
-    arrival = actual_arrival or event.arrival_at
-    departure = actual_departure or event.departure_at
+    arrival = actual_arrival or event.effective_arrival_at
+    departure = actual_departure or event.effective_departure_at
     if departure is None:
         return max(0.0, fallback or 0.0)
     return max(0.0, (departure - arrival).total_seconds() / 3600)
@@ -384,6 +421,64 @@ def _port_hours(event: ScheduleEvent, actual_arrival, actual_departure, fallback
 
 def _consume(hours: float, rate_mt_per_day: float) -> float:
     return max(0.0, hours) / 24 * rate_mt_per_day
+
+
+def _split_rate_consumption(
+    machinery: str,
+    start_utc,
+    end_utc,
+    initial_fuel_state: MachineryFuelState,
+    changeovers: list[FuelChangeoverEvent],
+    rates_mt_per_day: dict[str, float],
+) -> dict[str, float]:
+    return _split_quantity_consumption(
+        machinery,
+        start_utc,
+        end_utc,
+        initial_fuel_state,
+        changeovers,
+        lambda hours, fuel=None: _consume(hours, rates_mt_per_day.get(fuel, 0.0)),
+    )
+
+
+def _split_quantity_consumption(
+    machinery: str,
+    start_utc,
+    end_utc,
+    initial_fuel_state: MachineryFuelState,
+    changeovers: list[FuelChangeoverEvent],
+    quantity_for_hours,
+) -> dict[str, float]:
+    totals = empty_fuel_totals()
+    if end_utc <= start_utc:
+        return totals
+    active_fuel = initial_fuel_state.fuel_for(machinery)
+    for event in sorted(changeovers, key=lambda changeover: changeover.effective_at_utc):
+        if event.machinery != machinery:
+            continue
+        if event.effective_at_utc <= start_utc:
+            active_fuel = event.to_fuel_type
+    cursor = start_utc
+    relevant = [
+        event
+        for event in sorted(changeovers, key=lambda changeover: changeover.effective_at_utc)
+        if event.machinery == machinery and start_utc < event.effective_at_utc < end_utc
+    ]
+    for event in relevant:
+        hours = (event.effective_at_utc - cursor).total_seconds() / 3600
+        totals[active_fuel] += _call_quantity(quantity_for_hours, hours, active_fuel)
+        active_fuel = event.to_fuel_type
+        cursor = event.effective_at_utc
+    hours = (end_utc - cursor).total_seconds() / 3600
+    totals[active_fuel] += _call_quantity(quantity_for_hours, hours, active_fuel)
+    return totals
+
+
+def _call_quantity(quantity_for_hours, hours: float, fuel: str) -> float:
+    try:
+        return quantity_for_hours(hours, fuel)
+    except TypeError:
+        return quantity_for_hours(hours)
 
 
 def _effective_float(override: float | None, default: float) -> float:

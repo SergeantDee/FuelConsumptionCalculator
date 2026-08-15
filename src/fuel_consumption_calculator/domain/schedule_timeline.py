@@ -25,15 +25,24 @@ class ScheduleTimeline:
 
 
 def build_schedule_timeline(events: list[ScheduleEvent]) -> ScheduleTimeline:
-    ordered_events = sorted(events, key=lambda event: (event.sequence_number, event.arrival_at, event.id))
+    ordered_events = sorted(events, key=lambda event: (event.sequence_number, event.effective_arrival_at, event.id))
     rows: list[ScheduleTimelineRow] = []
     issues: list[ScheduleTimelineIssue] = []
     previous_anchor = None
 
     for event in ordered_events:
         port_stay_hours = None
-        if event.departure_at is not None:
-            if event.departure_at < event.arrival_at:
+        arrival_at = event.effective_arrival_at
+        departure_at = event.effective_departure_at
+        if event.timezone_status != "RESOLVED":
+            issues.append(
+                ScheduleTimelineIssue(
+                    event_id=event.id,
+                    message=f"{event.port} timezone conversion is unresolved.",
+                )
+            )
+        if departure_at is not None:
+            if departure_at < arrival_at:
                 issues.append(
                     ScheduleTimelineIssue(
                         event_id=event.id,
@@ -41,11 +50,11 @@ def build_schedule_timeline(events: list[ScheduleEvent]) -> ScheduleTimeline:
                     )
                 )
             else:
-                port_stay_hours = _hours_between(event.arrival_at, event.departure_at)
+                port_stay_hours = _hours_between(arrival_at, departure_at)
 
         interval_from_previous_hours = None
         if previous_anchor is not None:
-            if event.arrival_at < previous_anchor:
+            if arrival_at < previous_anchor:
                 issues.append(
                     ScheduleTimelineIssue(
                         event_id=event.id,
@@ -53,7 +62,7 @@ def build_schedule_timeline(events: list[ScheduleEvent]) -> ScheduleTimeline:
                     )
                 )
             else:
-                interval_from_previous_hours = _hours_between(previous_anchor, event.arrival_at)
+                interval_from_previous_hours = _hours_between(previous_anchor, arrival_at)
 
         rows.append(
             ScheduleTimelineRow(
@@ -62,7 +71,7 @@ def build_schedule_timeline(events: list[ScheduleEvent]) -> ScheduleTimeline:
                 interval_from_previous_hours=interval_from_previous_hours,
             )
         )
-        previous_anchor = event.departure_at if event.departure_at is not None and event.departure_at >= event.arrival_at else event.arrival_at
+        previous_anchor = departure_at if departure_at is not None and departure_at >= arrival_at else arrival_at
 
     return ScheduleTimeline(rows=rows, issues=issues)
 

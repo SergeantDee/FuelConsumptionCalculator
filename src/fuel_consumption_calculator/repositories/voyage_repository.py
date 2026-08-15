@@ -3,7 +3,16 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from fuel_consumption_calculator.domain.consumption import FUEL_TYPES
-from fuel_consumption_calculator.domain.voyage import GeneratorSfocPoint, RouteDefinition, SpeedConsumptionPoint, VesselEnergyConfig, VoyageLegOverride
+from fuel_consumption_calculator.domain.voyage import (
+    FuelChangeoverEvent,
+    GeneratorSfocPoint,
+    MachineryFuelState,
+    RouteDefinition,
+    SpeedConsumptionPoint,
+    VesselClockAdjustment,
+    VesselEnergyConfig,
+    VoyageLegOverride,
+)
 from fuel_consumption_calculator.repositories.database import Database
 
 
@@ -341,6 +350,208 @@ class VoyageRepository:
                 )
         return self.list_generator_sfoc_points(vessel_id)
 
+    def load_initial_fuel_state(self, vessel_id: int) -> MachineryFuelState:
+        with self._database.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT vessel_id, main_engine_fuel_type, generators_fuel_type, aux_boiler_fuel_type
+                FROM vessel_initial_machinery_fuel_state
+                WHERE vessel_id = ?
+                """,
+                (vessel_id,),
+            ).fetchone()
+        if row is None:
+            return MachineryFuelState(vessel_id=vessel_id)
+        return MachineryFuelState(
+            vessel_id=row["vessel_id"],
+            main_engine_fuel_type=row["main_engine_fuel_type"],
+            generators_fuel_type=row["generators_fuel_type"],
+            aux_boiler_fuel_type=row["aux_boiler_fuel_type"],
+        )
+
+    def save_initial_fuel_state(self, state: MachineryFuelState) -> MachineryFuelState:
+        timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with self._database.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO vessel_initial_machinery_fuel_state (
+                    vessel_id, main_engine_fuel_type, generators_fuel_type, aux_boiler_fuel_type,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(vessel_id)
+                DO UPDATE SET
+                    main_engine_fuel_type = excluded.main_engine_fuel_type,
+                    generators_fuel_type = excluded.generators_fuel_type,
+                    aux_boiler_fuel_type = excluded.aux_boiler_fuel_type,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    state.vessel_id,
+                    state.main_engine_fuel_type,
+                    state.generators_fuel_type,
+                    state.aux_boiler_fuel_type,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+        return self.load_initial_fuel_state(state.vessel_id)
+
+    def list_fuel_changeovers(self, vessel_id: int) -> list[FuelChangeoverEvent]:
+        with self._database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, vessel_id, machinery, from_fuel_type, to_fuel_type,
+                       planned_at_utc, actual_at_utc, time_basis, status
+                FROM fuel_changeover_events
+                WHERE vessel_id = ?
+                ORDER BY COALESCE(actual_at_utc, planned_at_utc), id
+                """,
+                (vessel_id,),
+            ).fetchall()
+        return [self._row_to_changeover(row) for row in rows]
+
+    def save_fuel_changeover(self, event: FuelChangeoverEvent) -> FuelChangeoverEvent:
+        timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with self._database.connect() as connection:
+            if event.id is None:
+                cursor = connection.execute(
+                    """
+                    INSERT INTO fuel_changeover_events (
+                        vessel_id, machinery, from_fuel_type, to_fuel_type,
+                        planned_at_utc, actual_at_utc, time_basis, status,
+                        created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        event.vessel_id,
+                        event.machinery,
+                        event.from_fuel_type,
+                        event.to_fuel_type,
+                        _dt_to_text(event.planned_at_utc),
+                        _dt_to_text(event.actual_at_utc),
+                        event.time_basis,
+                        event.status,
+                        timestamp,
+                        timestamp,
+                    ),
+                )
+                event_id = cursor.lastrowid
+            else:
+                connection.execute(
+                    """
+                    UPDATE fuel_changeover_events
+                    SET machinery = ?, from_fuel_type = ?, to_fuel_type = ?,
+                        planned_at_utc = ?, actual_at_utc = ?, time_basis = ?,
+                        status = ?, updated_at = ?
+                    WHERE id = ? AND vessel_id = ?
+                    """,
+                    (
+                        event.machinery,
+                        event.from_fuel_type,
+                        event.to_fuel_type,
+                        _dt_to_text(event.planned_at_utc),
+                        _dt_to_text(event.actual_at_utc),
+                        event.time_basis,
+                        event.status,
+                        timestamp,
+                        event.id,
+                        event.vessel_id,
+                    ),
+                )
+                event_id = event.id
+            row = connection.execute(
+                """
+                SELECT id, vessel_id, machinery, from_fuel_type, to_fuel_type,
+                       planned_at_utc, actual_at_utc, time_basis, status
+                FROM fuel_changeover_events
+                WHERE id = ?
+                """,
+                (event_id,),
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("Fuel changeover could not be read after saving.")
+        return self._row_to_changeover(row)
+
+    def delete_fuel_changeover(self, vessel_id: int, event_id: int) -> None:
+        with self._database.connect() as connection:
+            connection.execute(
+                "DELETE FROM fuel_changeover_events WHERE vessel_id = ? AND id = ?",
+                (vessel_id, event_id),
+            )
+
+    def list_clock_adjustments(self, vessel_id: int) -> list[VesselClockAdjustment]:
+        with self._database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, vessel_id, effective_at_utc, adjustment_minutes,
+                       previous_offset_minutes, resulting_offset_minutes
+                FROM vessel_clock_adjustments
+                WHERE vessel_id = ?
+                ORDER BY effective_at_utc, id
+                """,
+                (vessel_id,),
+            ).fetchall()
+        return [self._row_to_clock_adjustment(row) for row in rows]
+
+    def save_clock_adjustment(self, adjustment: VesselClockAdjustment) -> VesselClockAdjustment:
+        timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with self._database.connect() as connection:
+            if adjustment.id is None:
+                cursor = connection.execute(
+                    """
+                    INSERT INTO vessel_clock_adjustments (
+                        vessel_id, effective_at_utc, adjustment_minutes,
+                        previous_offset_minutes, resulting_offset_minutes,
+                        created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        adjustment.vessel_id,
+                        _dt_to_text(adjustment.effective_at_utc),
+                        adjustment.adjustment_minutes,
+                        adjustment.previous_offset_minutes,
+                        adjustment.resulting_offset_minutes,
+                        timestamp,
+                        timestamp,
+                    ),
+                )
+                adjustment_id = cursor.lastrowid
+            else:
+                connection.execute(
+                    """
+                    UPDATE vessel_clock_adjustments
+                    SET effective_at_utc = ?, adjustment_minutes = ?,
+                        previous_offset_minutes = ?, resulting_offset_minutes = ?,
+                        updated_at = ?
+                    WHERE vessel_id = ? AND id = ?
+                    """,
+                    (
+                        _dt_to_text(adjustment.effective_at_utc),
+                        adjustment.adjustment_minutes,
+                        adjustment.previous_offset_minutes,
+                        adjustment.resulting_offset_minutes,
+                        timestamp,
+                        adjustment.vessel_id,
+                        adjustment.id,
+                    ),
+                )
+                adjustment_id = adjustment.id
+            row = connection.execute(
+                """
+                SELECT id, vessel_id, effective_at_utc, adjustment_minutes,
+                       previous_offset_minutes, resulting_offset_minutes
+                FROM vessel_clock_adjustments
+                WHERE id = ?
+                """,
+                (adjustment_id,),
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("Clock adjustment could not be read after saving.")
+        return self._row_to_clock_adjustment(row)
+
     def _row_to_route(self, row) -> RouteDefinition:
         return RouteDefinition(
             origin_port=row["origin_port"],
@@ -372,6 +583,29 @@ class VoyageRepository:
             port_reefers=_optional_float(row["port_reefers"]),
             departure_reefers=_optional_float(row["departure_reefers"]),
             use_egb=bool(row["use_egb"]),
+        )
+
+    def _row_to_changeover(self, row) -> FuelChangeoverEvent:
+        return FuelChangeoverEvent(
+            id=row["id"],
+            vessel_id=row["vessel_id"],
+            machinery=row["machinery"],
+            from_fuel_type=row["from_fuel_type"],
+            to_fuel_type=row["to_fuel_type"],
+            planned_at_utc=_text_to_dt(row["planned_at_utc"]),
+            actual_at_utc=_text_to_dt(row["actual_at_utc"]),
+            time_basis=row["time_basis"],
+            status=row["status"],
+        )
+
+    def _row_to_clock_adjustment(self, row) -> VesselClockAdjustment:
+        return VesselClockAdjustment(
+            id=row["id"],
+            vessel_id=row["vessel_id"],
+            effective_at_utc=_text_to_dt(row["effective_at_utc"]),
+            adjustment_minutes=int(row["adjustment_minutes"]),
+            previous_offset_minutes=int(row["previous_offset_minutes"]),
+            resulting_offset_minutes=int(row["resulting_offset_minutes"]),
         )
 
 

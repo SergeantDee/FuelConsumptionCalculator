@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Iterator
 
 from fuel_consumption_calculator.config import SCHEMA_VERSION
+from fuel_consumption_calculator.domain.time_model import DEFAULT_PORT_TIMEZONES, local_to_utc, normalize_port_name
 
 
 LOGGER = logging.getLogger(__name__)
@@ -68,6 +69,8 @@ class Database:
                 self._migrate_to_v7(connection)
             if current_version < 8:
                 self._migrate_to_v8(connection)
+            if current_version < 9:
+                self._migrate_to_v9(connection)
             connection.execute(
                 "INSERT OR REPLACE INTO application_metadata (key, value) VALUES ('schema_version', ?)",
                 (str(SCHEMA_VERSION),),
@@ -344,3 +347,118 @@ class Database:
             """
         )
         LOGGER.info("Database migrated to schema version 8.")
+
+    def _migrate_to_v9(self, connection: sqlite3.Connection) -> None:
+        def add_column_if_missing(table: str, column: str, ddl: str) -> None:
+            columns = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
+            if column not in columns:
+                connection.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+
+        add_column_if_missing("schedule_events", "port_timezone_id", "port_timezone_id TEXT")
+        add_column_if_missing("schedule_events", "arrival_at_utc", "arrival_at_utc TEXT")
+        add_column_if_missing("schedule_events", "departure_at_utc", "departure_at_utc TEXT")
+        add_column_if_missing("schedule_events", "timezone_status", "timezone_status TEXT NOT NULL DEFAULT 'UNRESOLVED'")
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS port_timezones (
+                port_key TEXT PRIMARY KEY,
+                port TEXT NOT NULL,
+                timezone_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS vessel_initial_machinery_fuel_state (
+                vessel_id INTEGER PRIMARY KEY,
+                main_engine_fuel_type TEXT NOT NULL DEFAULT 'VLSFO',
+                generators_fuel_type TEXT NOT NULL DEFAULT 'VLSFO',
+                aux_boiler_fuel_type TEXT NOT NULL DEFAULT 'VLSFO',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (vessel_id) REFERENCES vessels(id) ON DELETE CASCADE,
+                CHECK (main_engine_fuel_type IN ('ULSFO', 'VLSFO', 'MDO')),
+                CHECK (generators_fuel_type IN ('ULSFO', 'VLSFO', 'MDO')),
+                CHECK (aux_boiler_fuel_type IN ('ULSFO', 'VLSFO', 'MDO'))
+            );
+
+            CREATE TABLE IF NOT EXISTS vessel_clock_adjustments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vessel_id INTEGER NOT NULL,
+                effective_at_utc TEXT NOT NULL,
+                adjustment_minutes INTEGER NOT NULL,
+                previous_offset_minutes INTEGER NOT NULL,
+                resulting_offset_minutes INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (vessel_id) REFERENCES vessels(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_vessel_clock_adjustments_vessel_time
+                ON vessel_clock_adjustments (vessel_id, effective_at_utc);
+
+            CREATE TABLE IF NOT EXISTS fuel_changeover_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vessel_id INTEGER NOT NULL,
+                machinery TEXT NOT NULL,
+                from_fuel_type TEXT NOT NULL,
+                to_fuel_type TEXT NOT NULL,
+                planned_at_utc TEXT NOT NULL,
+                actual_at_utc TEXT,
+                time_basis TEXT NOT NULL DEFAULT 'UTC',
+                status TEXT NOT NULL DEFAULT 'PLANNED',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (vessel_id) REFERENCES vessels(id) ON DELETE CASCADE,
+                CHECK (machinery IN ('MAIN_ENGINE', 'GENERATORS', 'AUX_BOILER')),
+                CHECK (from_fuel_type IN ('ULSFO', 'VLSFO', 'MDO')),
+                CHECK (to_fuel_type IN ('ULSFO', 'VLSFO', 'MDO'))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_fuel_changeover_events_vessel_time
+                ON fuel_changeover_events (vessel_id, planned_at_utc, actual_at_utc);
+            """
+        )
+        timestamp = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(timespec="seconds")
+        for port, timezone_id in DEFAULT_PORT_TIMEZONES.items():
+            key = normalize_port_name(port)
+            connection.execute(
+                """
+                INSERT INTO port_timezones (port_key, port, timezone_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(port_key) DO NOTHING
+                """,
+                (key, port, timezone_id, timestamp, timestamp),
+            )
+        timezone_by_key = {
+            row["port_key"]: row["timezone_id"]
+            for row in connection.execute("SELECT port_key, timezone_id FROM port_timezones").fetchall()
+        }
+        rows = connection.execute(
+            """
+            SELECT id, port, arrival_at, departure_at
+            FROM schedule_events
+            WHERE arrival_at_utc IS NULL OR timezone_status = 'UNRESOLVED'
+            """
+        ).fetchall()
+        for row in rows:
+            timezone_id = timezone_by_key.get(normalize_port_name(row["port"]))
+            arrival_result = local_to_utc(__import__("datetime").datetime.fromisoformat(row["arrival_at"]), timezone_id)
+            departure_result = local_to_utc(__import__("datetime").datetime.fromisoformat(row["departure_at"]), timezone_id) if row["departure_at"] else None
+            status = arrival_result.status
+            if departure_result is not None and departure_result.status != "RESOLVED":
+                status = departure_result.status
+            connection.execute(
+                """
+                UPDATE schedule_events
+                SET port_timezone_id = ?, arrival_at_utc = ?, departure_at_utc = ?, timezone_status = ?
+                WHERE id = ?
+                """,
+                (
+                    timezone_id,
+                    arrival_result.utc_value.isoformat(timespec="minutes") if arrival_result.utc_value else None,
+                    departure_result.utc_value.isoformat(timespec="minutes") if departure_result and departure_result.utc_value else None,
+                    status,
+                    row["id"],
+                ),
+            )
+        LOGGER.info("Database migrated to schema version 9.")

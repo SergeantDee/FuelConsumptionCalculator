@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fuel_consumption_calculator.domain.schedule import ScheduleCandidate, ScheduleEvent, ScheduleEventDraft
 from fuel_consumption_calculator.domain.schedule_timeline import ScheduleTimeline, build_schedule_timeline
+from fuel_consumption_calculator.domain.time_model import PortTimezone, local_to_utc
 from fuel_consumption_calculator.repositories.schedule_repository import ScheduleRepository
 from fuel_consumption_calculator.scraper.validation import validate_schedule_candidates
 
@@ -30,6 +31,15 @@ class ScheduleService:
 
     def delete_event(self, vessel_id: int, event_id: int) -> list[ScheduleEvent]:
         return self._repository.delete_event(vessel_id, event_id)
+
+    def list_port_timezones(self) -> list[PortTimezone]:
+        return self._repository.list_port_timezones()
+
+    def save_port_timezone(self, port: str, timezone_id: str) -> PortTimezone:
+        result = local_to_utc(__import__("datetime").datetime(2026, 1, 15, 12, 0), timezone_id)
+        if result.status == "INVALID_TIMEZONE":
+            raise ValueError(f"Invalid IANA timezone ID: {timezone_id}")
+        return self._repository.save_port_timezone(port, timezone_id)
 
     def _validate_draft(self, draft: ScheduleEventDraft) -> None:
         if not draft.port.strip():

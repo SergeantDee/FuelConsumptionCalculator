@@ -31,13 +31,14 @@ class ScraperService:
         *,
         progress_callback: ProgressCallback | None = None,
         cancel_event: Event | None = None,
+        session_config: ScraperSessionConfig | None = None,
     ) -> list[ScheduleCandidate]:
         LOGGER.info("Starting schedule scrape for %s from %s", vessel_name, from_date.isoformat())
         try:
             candidates = self._scraper(
                 vessel_name,
                 from_date,
-                session_config=self._session_config,
+                session_config=session_config or self._session_config,
                 progress_callback=progress_callback,
                 cancel_event=cancel_event,
             )

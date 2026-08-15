@@ -26,8 +26,10 @@ from PySide6.QtWidgets import (
 
 from fuel_consumption_calculator.domain.schedule import ScheduleCandidate, ScheduleEvent, ScheduleEventDraft
 from fuel_consumption_calculator.domain.schedule_timeline import ScheduleTimelineRow
+from fuel_consumption_calculator.scraper.models import ScraperSessionConfig
 from fuel_consumption_calculator.services.schedule_service import ScheduleService
 from fuel_consumption_calculator.services.scraper_service import ScraperService
+from fuel_consumption_calculator.services.settings_service import SettingsService
 from fuel_consumption_calculator.services.vessel_service import VesselService
 from fuel_consumption_calculator.ui.widgets.page_header import PageHeader
 
@@ -111,6 +113,7 @@ class ScrapeWorker(QRunnable):
         vessel_name: str,
         from_date: dt.date,
         cancel_event: Event,
+        headless: bool,
     ) -> None:
         super().__init__()
         self.signals = ScrapeWorkerSignals()
@@ -118,6 +121,7 @@ class ScrapeWorker(QRunnable):
         self._vessel_name = vessel_name
         self._from_date = from_date
         self._cancel_event = cancel_event
+        self._headless = headless
 
     @Slot()
     def run(self) -> None:
@@ -127,6 +131,7 @@ class ScrapeWorker(QRunnable):
                 self._from_date,
                 progress_callback=self.signals.progress.emit,
                 cancel_event=self._cancel_event,
+                session_config=ScraperSessionConfig(headless=self._headless),
             )
         except Exception as exc:
             self.signals.failure.emit(str(exc))
@@ -254,11 +259,13 @@ class SchedulePage(QWidget):
         vessel_service: VesselService,
         schedule_service: ScheduleService,
         scraper_service: ScraperService,
+        settings_service: SettingsService,
     ) -> None:
         super().__init__()
         self._vessel_service = vessel_service
         self._schedule_service = schedule_service
         self._scraper_service = scraper_service
+        self._settings_service = settings_service
         self._thread_pool = QThreadPool.globalInstance()
         self._scrape_running = False
         self._cancel_event: Event | None = None
@@ -312,6 +319,10 @@ class SchedulePage(QWidget):
         self.status_label = QLabel("Ready")
         self.status_label.setObjectName("mutedText")
         layout.addWidget(self.status_label)
+
+        self.progress_label = QLabel("")
+        self.progress_label.setObjectName("mutedText")
+        layout.addWidget(self.progress_label)
 
         self.empty_state = QLabel("No schedule saved yet. Choose a From Date and update the schedule to preview results.")
         self.empty_state.setObjectName("emptyState")
@@ -371,9 +382,10 @@ class SchedulePage(QWidget):
         self._scrape_running = True
         self._cancel_event = Event()
         self.update_button.setEnabled(False)
-        self.status_label.setText("Starting schedule update...")
+        mode = self._settings_service.scraper_browser_mode()
+        self.status_label.setText(f"Starting schedule update in {mode} browser mode...")
 
-        worker = ScrapeWorker(self._scraper_service, vessel.name, selected_date, self._cancel_event)
+        worker = ScrapeWorker(self._scraper_service, vessel.name, selected_date, self._cancel_event, mode == "headless")
         worker.signals.progress.connect(self._scrape_progress)
         worker.signals.success.connect(self._scrape_success)
         worker.signals.failure.connect(self._scrape_failure)
@@ -381,6 +393,7 @@ class SchedulePage(QWidget):
 
     @Slot(str, str)
     def _scrape_progress(self, stage: str, message: str) -> None:
+        self.progress_label.setText(f"{_stage_percent(stage)}%  |  {stage}: {message}")
         self.status_label.setText(f"{stage}: {message}")
 
     @Slot(object)
@@ -388,6 +401,7 @@ class SchedulePage(QWidget):
         self._scrape_running = False
         self.update_button.setEnabled(True)
         candidate_rows = list(candidates)
+        self.progress_label.setText(f"SUCCESS  |  {len(candidate_rows)} schedule events received. Preview ready.")
         self.status_label.setText(f"Preview ready with {len(candidate_rows)} events.")
         dialog = SchedulePreviewDialog(candidate_rows, self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
@@ -414,6 +428,7 @@ class SchedulePage(QWidget):
     def _scrape_failure(self, message: str) -> None:
         self._scrape_running = False
         self.update_button.setEnabled(True)
+        self.progress_label.setText(f"FAILED  |  {message}")
         self.status_label.setText("Schedule update failed.")
         QMessageBox.critical(self, "Schedule update failed", message)
 
@@ -505,3 +520,19 @@ class SchedulePage(QWidget):
             self.status_label.setText(f"{message} Chronology warning: {timeline.issues[0].message}")
         else:
             self.status_label.setText(message)
+
+
+def _stage_percent(stage: str) -> int:
+    stages = {
+        "launch_browser": 10,
+        "open_provider": 20,
+        "wait_for_page": 30,
+        "enter_vessel": 40,
+        "enter_from_date": 50,
+        "submit_search": 60,
+        "wait_for_results": 70,
+        "collect_page_text": 85,
+        "partial_results": 90,
+        "cleanup": 95,
+    }
+    return stages.get(stage, 0)
