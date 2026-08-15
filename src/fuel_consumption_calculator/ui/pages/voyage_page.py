@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from fuel_consumption_calculator.domain.consumption import FUEL_TYPES
-from fuel_consumption_calculator.domain.voyage import CalculatedVoyageLeg, FuelChangeoverEvent, MACHINERY_TYPES, MachineryFuelState
+from fuel_consumption_calculator.domain.voyage import ActualROBObservation, CalculatedVoyageLeg, FuelChangeoverEvent, MACHINERY_TYPES, MachineryFuelState
 from fuel_consumption_calculator.domain.voyage_stages import (
     STAGE_ARRIVAL_MANEUVERING,
     STAGE_DEPARTURE_MANEUVERING,
@@ -129,7 +129,8 @@ class VoyagePage(QWidget):
         plan = self._voyage_service.calculate_plan(vessel.id, events, profile)
         self._voyage_service.calculate_consumption_for_plan(events=events, timeline=schedule_timeline, plan=plan, profile=profile)
         starting_rob = self._rob_service.load_starting_rob(vessel.id)
-        self._timeline = build_voyage_stage_timeline(events, plan, starting_rob)
+        observations = self._voyage_service.list_actual_rob_observations(vessel.id)
+        self._timeline = build_voyage_stage_timeline(events, plan, starting_rob, rob_observations=observations)
         self._active_fuel_state = plan.initial_fuel_state
 
         self.vessel_label.setText(f"Vessel: {vessel.name}  |  IMO {vessel.imo}")
@@ -171,10 +172,13 @@ class VoyagePage(QWidget):
         edit_button = QPushButton("Edit Stage Values")
         edit_button.clicked.connect(lambda checked=False, selected=stage: self._edit_stage(selected))
         edit_button.setEnabled(stage.leg is not None or stage.incoming_leg is not None)
+        rob_button = QPushButton("Update Actual ROB")
+        rob_button.clicked.connect(lambda checked=False, selected=stage: self._update_actual_rob(selected))
         header.addWidget(badge)
         header.addWidget(title)
         header.addWidget(subtitle, 1)
         header.addWidget(edit_button)
+        header.addWidget(rob_button)
         layout.addLayout(header)
 
         groups = QGridLayout()
@@ -221,9 +225,10 @@ class VoyagePage(QWidget):
         if stage.stage_type == STAGE_PORT_STAY:
             breakdown = stage.port_breakdown
             _add_field(grid, 1, 0, "Arrival Reefers", _fmt_number(breakdown.reefers if breakdown else 0))
-            _add_field(grid, 1, 1, "Expected Departure Reefers", _fmt_number(_override_value(stage.leg, "departure_reefers")))
+            _add_field(grid, 1, 1, "Expected / Actual Departure Reefers", f"{_fmt_number(_override_value(stage.leg, 'departure_reefers'))} / {_fmt_number(_override_value(stage.leg, 'actual_departure_reefers'))}")
             _add_field(grid, 2, 0, "Electrical Load", _fmt_kw(breakdown.total_electrical_load_kw if breakdown else None))
             _add_field(grid, 2, 1, "Generator Load", _fmt_percent(breakdown.generator_load_percent if breakdown else None))
+            _add_field(grid, 3, 0, "Port Ambient / Reefer", f"{_fmt_c(_override_value_or_none(stage.leg, 'port_ambient_c'))} / {_fmt_kw(breakdown.reefer_kw_per_unit if breakdown else None)} each")
         elif stage.stage_type == STAGE_DEPARTURE_MANEUVERING:
             _add_field(grid, 1, 0, "Pilot Distance", _fmt_nm(_route_value(stage.leg, "departure_pilot_distance_nm")))
             _add_field(grid, 1, 1, "Pilot Duration", _fmt_duration(stage.leg.departure_pilotage_hours if stage.leg else 0))
@@ -233,9 +238,13 @@ class VoyagePage(QWidget):
             _add_field(grid, 1, 0, "Sea Distance", _fmt_nm(stage.leg.sea_distance_nm if stage.leg else 0))
             _add_field(grid, 1, 1, "Required Avg Speed", _fmt_kn(stage.leg.required_speed_knots if stage.leg else None))
             _add_field(grid, 2, 0, "Predicted ME Load", _fmt_percent(stage.leg.predicted_me_load_percent if stage.leg else None))
-            _add_field(grid, 2, 1, "Departure Reefers", _fmt_number(_override_value(stage.leg, "departure_reefers")))
-            _add_field(grid, 3, 0, "Generator Load", _fmt_kw(stage.leg.sea_total_electrical_load_kw if stage.leg else None))
-            _add_field(grid, 3, 1, "EGB", _egb_label(stage.leg))
+            _add_field(grid, 2, 1, "RPM / Power", f"{_fmt_rpm(stage.leg.predicted_rpm if stage.leg else None)} / {_fmt_kw(stage.leg.predicted_me_power_kw if stage.leg else None)}")
+            _add_field(grid, 3, 0, "ME SFOC / Fuel Rate", f"{_fmt_sfoc(stage.leg.predicted_me_sfoc_g_per_kwh if stage.leg else None)} / {_fmt_mtph(stage.leg.predicted_me_fuel_mt_per_hour if stage.leg else None)}")
+            _add_field(grid, 3, 1, "Hull Coefficient", _fmt_factor(stage.leg.hull_coefficient if stage.leg else None))
+            _add_field(grid, 4, 0, "Departure Reefers", f"{_fmt_number(_override_value(stage.leg, 'departure_reefers'))} exp / {_fmt_number(_override_value(stage.leg, 'actual_departure_reefers'))} actual")
+            _add_field(grid, 4, 1, "Sea Ambient / Reefer", f"{_fmt_c(_override_value_or_none(stage.leg, 'sea_ambient_c'))} / {_fmt_kw(stage.leg.departure_reefer_kw_per_unit if stage.leg else None)} each")
+            _add_field(grid, 5, 0, "Generator Load", _fmt_kw(stage.leg.sea_total_electrical_load_kw if stage.leg else None))
+            _add_field(grid, 5, 1, "EGB", _egb_label(stage.leg))
         else:
             _add_field(grid, 1, 0, "Pilot Distance", _fmt_nm(_route_value(stage.leg, "arrival_pilot_distance_nm")))
             _add_field(grid, 1, 1, "Pilot Duration", _fmt_duration(stage.leg.arrival_pilotage_hours if stage.leg else 0))
@@ -336,7 +345,7 @@ class VoyagePage(QWidget):
                 if stage.leg is not None:
                     outgoing_values = {
                         key: values[key]
-                        for key in ("actual_berth_departure", "port_reefers", "departure_reefers")
+                        for key in ("actual_berth_departure", "port_reefers", "departure_reefers", "actual_departure_reefers", "port_ambient_c", "sea_ambient_c")
                         if key in values
                     }
                     self._save_leg_values(stage.leg, **outgoing_values)
@@ -347,6 +356,34 @@ class VoyagePage(QWidget):
             return
         self.refresh()
         self.status_label.setText("Voyage stage saved and downstream cards refreshed.")
+
+    def _update_actual_rob(self, stage: OperationalStage) -> None:
+        vessel = self._vessel_service.get_active_vessel()
+        if vessel is None:
+            return
+        dialog = ActualROBDialog(stage, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        values = dialog.values()
+        try:
+            self._voyage_service.save_actual_rob_observation(
+                ActualROBObservation(
+                    id=None,
+                    vessel_id=vessel.id,
+                    effective_at_utc=values["effective_at_utc"],
+                    quantities_mt={
+                        "ULSFO": values["ULSFO"],
+                        "VLSFO": values["VLSFO"],
+                        "MDO": values["MDO"],
+                    },
+                    remarks=values["remarks"],
+                )
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Actual ROB not saved", str(exc))
+            return
+        self.refresh()
+        self.status_label.setText("Actual ROB observation saved; future cards refreshed from the new anchor.")
 
     def _save_leg_values(self, row: CalculatedVoyageLeg, **updates) -> None:
         override = row.leg.override
@@ -363,6 +400,9 @@ class VoyagePage(QWidget):
             actual_berth_arrival=updates.get("actual_berth_arrival", override.actual_berth_arrival if override else None),
             port_reefers=updates.get("port_reefers", override.port_reefers if override else 0.0),
             departure_reefers=updates.get("departure_reefers", override.departure_reefers if override else 0.0),
+            actual_departure_reefers=updates.get("actual_departure_reefers", override.actual_departure_reefers if override else None),
+            port_ambient_c=updates.get("port_ambient_c", override.port_ambient_c if override else None),
+            sea_ambient_c=updates.get("sea_ambient_c", override.sea_ambient_c if override else None),
             use_egb=updates.get("use_egb", override.use_egb if override else False),
             save_library=False,
         )
@@ -412,6 +452,9 @@ class StageEditDialog(QDialog):
                 row = self._add_actual(form, row, "Actual Departure", "actual_berth_departure", stage.leg.leg.override.actual_berth_departure if stage.leg.leg.override else None, stage.end_utc)
                 row = self._add_spin(form, row, "Arrival Reefers", "port_reefers", _override_value(stage.leg, "port_reefers"), "")
                 row = self._add_spin(form, row, "Expected Departure Reefers", "departure_reefers", _override_value(stage.leg, "departure_reefers"), "")
+                row = self._add_spin(form, row, "Actual Departure Reefers", "actual_departure_reefers", _override_value(stage.leg, "actual_departure_reefers"), "")
+                row = self._add_spin(form, row, "Port Ambient Temp", "port_ambient_c", _override_value_or_default(stage.leg, "port_ambient_c", 20.0), " °C")
+                row = self._add_spin(form, row, "Sea Ambient Temp", "sea_ambient_c", _override_value_or_default(stage.leg, "sea_ambient_c", 20.0), " °C")
         elif stage.stage_type == STAGE_DEPARTURE_MANEUVERING and stage.leg is not None:
             row = self._add_actual(form, row, "Actual Berth Departure", "actual_berth_departure", _actual(stage.leg, "actual_berth_departure"), stage.start_utc)
             row = self._add_spin(form, row, "Pilot Distance NM", "departure_pilot_distance_nm", _route_value(stage.leg, "departure_pilot_distance_nm"), " NM")
@@ -421,6 +464,8 @@ class StageEditDialog(QDialog):
             row = self._add_actual(form, row, "Actual Pilot Off", "actual_pilot_off", _actual(stage.leg, "actual_pilot_off"), stage.start_utc)
             row = self._add_spin(form, row, "Sea Distance NM", "sea_distance_nm", stage.leg.sea_distance_nm, " NM")
             row = self._add_spin(form, row, "Departure Reefers", "departure_reefers", _override_value(stage.leg, "departure_reefers"), "")
+            row = self._add_spin(form, row, "Actual Departure Reefers", "actual_departure_reefers", _override_value(stage.leg, "actual_departure_reefers"), "")
+            row = self._add_spin(form, row, "Sea Ambient Temp", "sea_ambient_c", _override_value_or_default(stage.leg, "sea_ambient_c", 20.0), " °C")
             self._egb_control = QCheckBox("Use EGB when available")
             self._egb_control.setChecked(stage.leg.egb_used)
             self._egb_control.setEnabled(stage.leg.egb_available)
@@ -467,6 +512,46 @@ class StageEditDialog(QDialog):
         grid.addWidget(control, row, 1)
         self._spin_controls[key] = control
         return row + 1
+
+
+class ActualROBDialog(QDialog):
+    def __init__(self, stage: OperationalStage, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Update Actual ROB")
+        self._quantity_inputs: dict[str, QDoubleSpinBox] = {}
+        layout = QVBoxLayout(self)
+        grid = QGridLayout()
+        layout.addLayout(grid)
+        self.time_input = QDateTimeEdit()
+        self.time_input.setCalendarPopup(True)
+        self.time_input.setDisplayFormat("dd MMM yyyy HH:mm")
+        self.time_input.setDateTime(QDateTime(stage.start_utc or datetime.now()))
+        grid.addWidget(QLabel("Observation Time UTC"), 0, 0)
+        grid.addWidget(self.time_input, 0, 1)
+        for row, fuel_type in enumerate(FUEL_TYPES, start=1):
+            spinbox = _spinbox(" MT", 0, 999999, 1)
+            spinbox.setValue(stage.rob.start_mt.get(fuel_type, 0.0))
+            self._quantity_inputs[fuel_type] = spinbox
+            grid.addWidget(QLabel(f"{fuel_type} Actual ROB"), row, 0)
+            grid.addWidget(spinbox, row, 1)
+        self.remarks_input = QComboBox()
+        self.remarks_input.setEditable(True)
+        self.remarks_input.addItem("")
+        grid.addWidget(QLabel("Remarks"), 4, 0)
+        grid.addWidget(self.remarks_input, 4, 1)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def values(self) -> dict[str, object]:
+        return {
+            "effective_at_utc": self.time_input.dateTime().toPython(),
+            "ULSFO": self._quantity_inputs["ULSFO"].value(),
+            "VLSFO": self._quantity_inputs["VLSFO"].value(),
+            "MDO": self._quantity_inputs["MDO"].value(),
+            "remarks": self.remarks_input.currentText().strip() or None,
+        }
 
 
 def _group(title: str) -> tuple[QFrame, QGridLayout]:
@@ -571,6 +656,26 @@ def _fmt_kw(value: float | None) -> str:
     return f"{value:.0f} kW" if value is not None else "-"
 
 
+def _fmt_rpm(value: float | None) -> str:
+    return f"{value:.1f} RPM" if value is not None else "-"
+
+
+def _fmt_sfoc(value: float | None) -> str:
+    return f"{value:.1f} g/kWh" if value is not None else "-"
+
+
+def _fmt_mtph(value: float | None) -> str:
+    return f"{value:.3f} MT/h" if value is not None else "-"
+
+
+def _fmt_factor(value: float | None) -> str:
+    return f"{value:.7f}" if value is not None else "-"
+
+
+def _fmt_c(value: float | None) -> str:
+    return f"{value:.1f} °C" if value is not None else "-"
+
+
 def _fmt_number(value: float | None) -> str:
     return f"{value:.0f}" if value is not None else "0"
 
@@ -587,6 +692,18 @@ def _override_value(leg: CalculatedVoyageLeg | None, key: str) -> float:
         return 0.0
     value = getattr(leg.leg.override, key)
     return 0.0 if value is None else float(value)
+
+
+def _override_value_or_none(leg: CalculatedVoyageLeg | None, key: str) -> float | None:
+    if leg is None or leg.leg.override is None:
+        return None
+    value = getattr(leg.leg.override, key)
+    return None if value is None else float(value)
+
+
+def _override_value_or_default(leg: CalculatedVoyageLeg | None, key: str, default: float) -> float:
+    value = _override_value_or_none(leg, key)
+    return default if value is None else value
 
 
 def _effective(value: float | None, default: float) -> float:

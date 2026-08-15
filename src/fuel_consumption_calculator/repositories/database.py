@@ -72,6 +72,8 @@ class Database:
                 self._migrate_to_v8(connection)
             if current_version < 9:
                 self._migrate_to_v9(connection)
+            if current_version < 10:
+                self._migrate_to_v10(connection)
             if current_version >= 9:
                 self._ensure_default_port_timezones(connection)
                 self._resolve_existing_schedule_timezones(connection)
@@ -299,6 +301,8 @@ class Database:
     def _migrate_to_v8(self, connection: sqlite3.Connection) -> None:
         def add_column_if_missing(table: str, column: str, ddl: str) -> None:
             columns = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
+            if not columns:
+                return
             if column not in columns:
                 connection.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
 
@@ -355,6 +359,8 @@ class Database:
     def _migrate_to_v9(self, connection: sqlite3.Connection) -> None:
         def add_column_if_missing(table: str, column: str, ddl: str) -> None:
             columns = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
+            if not columns:
+                return
             if column not in columns:
                 connection.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
 
@@ -425,6 +431,66 @@ class Database:
         self._ensure_default_port_timezones(connection)
         self._resolve_existing_schedule_timezones(connection)
         LOGGER.info("Database migrated to schema version 9.")
+
+    def _migrate_to_v10(self, connection: sqlite3.Connection) -> None:
+        def add_column_if_missing(table: str, column: str, ddl: str) -> None:
+            columns = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
+            if not columns:
+                return
+            if column not in columns:
+                connection.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+
+        add_column_if_missing("voyage_leg_overrides", "actual_departure_reefers", "actual_departure_reefers REAL")
+        add_column_if_missing("voyage_leg_overrides", "port_ambient_c", "port_ambient_c REAL")
+        add_column_if_missing("voyage_leg_overrides", "sea_ambient_c", "sea_ambient_c REAL")
+        for column, ddl in (
+            ("main_engine_slip_percent", "main_engine_slip_percent REAL NOT NULL DEFAULT 10.0"),
+            ("speed_rpm_factor", "speed_rpm_factor REAL NOT NULL DEFAULT 0.3221598"),
+            ("power_coefficient", "power_coefficient REAL NOT NULL DEFAULT 0.0967741935483871"),
+            ("mcr_power_kw", "mcr_power_kw REAL NOT NULL DEFAULT 38880.0"),
+            ("port_ambient_c", "port_ambient_c REAL NOT NULL DEFAULT 20.0"),
+            ("sea_ambient_c", "sea_ambient_c REAL NOT NULL DEFAULT 20.0"),
+        ):
+            add_column_if_missing("vessel_energy_config", column, ddl)
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS main_engine_sfoc_points (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vessel_id INTEGER NOT NULL,
+                load_percent REAL NOT NULL,
+                sfoc_g_per_kwh REAL NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (vessel_id) REFERENCES vessels(id) ON DELETE CASCADE,
+                UNIQUE (vessel_id, load_percent),
+                CHECK (load_percent >= 0),
+                CHECK (sfoc_g_per_kwh >= 0)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_main_engine_sfoc_points_vessel_load
+                ON main_engine_sfoc_points (vessel_id, load_percent);
+
+            CREATE TABLE IF NOT EXISTS actual_rob_observations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vessel_id INTEGER NOT NULL,
+                effective_at_utc TEXT NOT NULL,
+                ulsfo_mt REAL NOT NULL DEFAULT 0,
+                vlsfo_mt REAL NOT NULL DEFAULT 0,
+                mdo_mt REAL NOT NULL DEFAULT 0,
+                remarks TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (vessel_id) REFERENCES vessels(id) ON DELETE CASCADE,
+                CHECK (ulsfo_mt >= 0),
+                CHECK (vlsfo_mt >= 0),
+                CHECK (mdo_mt >= 0)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_actual_rob_observations_vessel_time
+                ON actual_rob_observations (vessel_id, effective_at_utc);
+            """
+        )
+        LOGGER.info("Database migrated to schema version 10.")
 
     def _ensure_default_port_timezones(self, connection: sqlite3.Connection) -> None:
         timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")

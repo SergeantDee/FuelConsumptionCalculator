@@ -8,6 +8,7 @@ from fuel_consumption_calculator.domain.rob import ROBQuantity, StartingROB
 from fuel_consumption_calculator.domain.schedule import ScheduleEvent
 from fuel_consumption_calculator.domain.schedule_timeline import build_schedule_timeline
 from fuel_consumption_calculator.domain.voyage import (
+    ActualROBObservation,
     FuelChangeoverEvent,
     MachineryFuelState,
     RouteDefinition,
@@ -82,6 +83,44 @@ def test_stage_changeovers_include_actual_timestamp_and_do_not_create_default_ev
 
     assert sea_stage.changeovers == (changeover,)
     assert sea_stage.changeovers[0].effective_at_utc == datetime(2026, 1, 1, 18, tzinfo=timezone.utc)
+
+
+def test_actual_rob_observation_resets_downstream_forecast_anchor():
+    events = _events()
+    plan = _plan()
+    calculate_consumption_with_voyage(build_schedule_timeline(events), events, plan, _profile())
+    observation = ActualROBObservation(
+        None,
+        1,
+        datetime(2026, 1, 1, 2, tzinfo=timezone.utc),
+        {"ULSFO": 90.0, "VLSFO": 80.0, "MDO": 70.0},
+    )
+
+    timeline = build_voyage_stage_timeline(events, plan, _starting_rob(), now_utc=datetime(2025, 12, 30, tzinfo=timezone.utc), rob_observations=[observation])
+
+    departure_stage = next(stage for stage in timeline.stages if stage.stage_type == STAGE_DEPARTURE_MANEUVERING)
+    sea_stage = next(stage for stage in timeline.stages if stage.stage_type == STAGE_SEA_PASSAGE)
+    assert departure_stage.rob.end_mt == {"ULSFO": 90.0, "VLSFO": 80.0, "MDO": 70.0}
+    assert sea_stage.rob.start_mt == departure_stage.rob.end_mt
+
+
+def test_actual_rob_observation_inside_sea_stage_splits_remaining_consumption():
+    events = _events()
+    changeover = FuelChangeoverEvent(None, 1, "MAIN_ENGINE", "VLSFO", "ULSFO", datetime(2026, 1, 1, 12, tzinfo=timezone.utc))
+    plan = _plan(changeovers=[changeover])
+    calculate_consumption_with_voyage(build_schedule_timeline(events), events, plan, _profile())
+    observation = ActualROBObservation(
+        None,
+        1,
+        datetime(2026, 1, 1, 18, tzinfo=timezone.utc),
+        {"ULSFO": 50.0, "VLSFO": 60.0, "MDO": 70.0},
+    )
+
+    timeline = build_voyage_stage_timeline(events, plan, _starting_rob(), now_utc=datetime(2025, 12, 30, tzinfo=timezone.utc), rob_observations=[observation])
+
+    sea_stage = next(stage for stage in timeline.stages if stage.stage_type == STAGE_SEA_PASSAGE)
+    assert sea_stage.rob.end_mt["VLSFO"] < 60.0
+    assert sea_stage.rob.end_mt["ULSFO"] <= 50.0
 
 
 def _plan(override: VoyageLegOverride | None = None, changeovers: list[FuelChangeoverEvent] | None = None):

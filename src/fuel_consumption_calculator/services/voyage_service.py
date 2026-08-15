@@ -7,8 +7,9 @@ from fuel_consumption_calculator.calculations.voyage_engine import calculate_con
 from fuel_consumption_calculator.domain.consumption import FUEL_TYPES, ConsumptionProfile
 from fuel_consumption_calculator.domain.schedule import ScheduleEvent
 from fuel_consumption_calculator.domain.schedule_timeline import ScheduleTimeline
-from fuel_consumption_calculator.domain.voyage import GeneratorSfocPoint, RouteDefinition, SpeedConsumptionPoint, VesselEnergyConfig, VoyageLeg, VoyageLegOverride, VoyagePlan
-from fuel_consumption_calculator.domain.voyage import FuelChangeoverEvent, MACHINERY_TYPES, MachineryFuelState, VesselClockAdjustment
+from fuel_consumption_calculator.calculations.performance_engine import DEFAULT_ME_SFOC_POINTS
+from fuel_consumption_calculator.domain.voyage import GeneratorSfocPoint, MainEngineSfocPoint, RouteDefinition, SpeedConsumptionPoint, VesselEnergyConfig, VoyageLeg, VoyageLegOverride, VoyagePlan
+from fuel_consumption_calculator.domain.voyage import ActualROBObservation, FuelChangeoverEvent, MACHINERY_TYPES, MachineryFuelState, VesselClockAdjustment
 from fuel_consumption_calculator.legacy_voyage_data import legacy_pilot_info, legacy_sea_distance
 from fuel_consumption_calculator.repositories.voyage_repository import VoyageRepository
 
@@ -41,6 +42,16 @@ class VoyageService:
         self._validate_generator_sfoc_points(points)
         return self._repository.save_generator_sfoc_points(vessel_id, points)
 
+    def list_main_engine_sfoc_points(self, vessel_id: int) -> list[MainEngineSfocPoint]:
+        points = self._repository.list_main_engine_sfoc_points(vessel_id)
+        if points:
+            return points
+        return [MainEngineSfocPoint(vessel_id, load, sfoc) for load, sfoc in DEFAULT_ME_SFOC_POINTS]
+
+    def save_main_engine_sfoc_points(self, vessel_id: int, points: list[MainEngineSfocPoint]) -> list[MainEngineSfocPoint]:
+        self._validate_main_engine_sfoc_points(points)
+        return self._repository.save_main_engine_sfoc_points(vessel_id, points)
+
     def load_initial_fuel_state(self, vessel_id: int) -> MachineryFuelState:
         return self._repository.load_initial_fuel_state(vessel_id)
 
@@ -62,6 +73,13 @@ class VoyageService:
 
     def delete_fuel_changeover(self, vessel_id: int, event_id: int) -> None:
         self._repository.delete_fuel_changeover(vessel_id, event_id)
+
+    def list_actual_rob_observations(self, vessel_id: int) -> list[ActualROBObservation]:
+        return self._repository.list_actual_rob_observations(vessel_id)
+
+    def save_actual_rob_observation(self, observation: ActualROBObservation) -> ActualROBObservation:
+        self._validate_rob_observation(observation)
+        return self._repository.save_actual_rob_observation(observation)
 
     def list_clock_adjustments(self, vessel_id: int) -> list[VesselClockAdjustment]:
         return self._repository.list_clock_adjustments(vessel_id)
@@ -136,6 +154,7 @@ class VoyageService:
             self.list_generator_sfoc_points(vessel_id),
             self.load_initial_fuel_state(vessel_id),
             self.list_fuel_changeovers(vessel_id),
+            [(point.load_percent, point.sfoc_g_per_kwh) for point in self.list_main_engine_sfoc_points(vessel_id)],
         )
 
     def calculate_schedule_consumption(
@@ -173,6 +192,9 @@ class VoyageService:
         actual_berth_arrival: datetime | None = None,
         port_reefers: float | None = None,
         departure_reefers: float | None = None,
+        actual_departure_reefers: float | None = None,
+        port_ambient_c: float | None = None,
+        sea_ambient_c: float | None = None,
         use_egb: bool = False,
         save_library: bool = False,
     ) -> VoyageLegOverride:
@@ -206,6 +228,9 @@ class VoyageService:
             actual_berth_arrival=actual_berth_arrival,
             port_reefers=port_reefers,
             departure_reefers=departure_reefers,
+            actual_departure_reefers=actual_departure_reefers,
+            port_ambient_c=port_ambient_c,
+            sea_ambient_c=sea_ambient_c,
             use_egb=use_egb,
         )
         self._validate_override(override)
@@ -268,6 +293,9 @@ class VoyageService:
             override.arrival_pilotage_hours,
             override.port_reefers,
             override.departure_reefers,
+            override.actual_departure_reefers,
+            override.port_ambient_c,
+            override.sea_ambient_c,
         ):
             if value is not None and value < 0:
                 raise ValueError("Voyage override distances and durations cannot be negative.")
@@ -295,6 +323,10 @@ class VoyageService:
             config.port_running_generators,
             config.sea_running_generators,
             config.aux_boiler_mt_per_hour,
+            config.main_engine_slip_percent,
+            config.speed_rpm_factor,
+            config.power_coefficient,
+            config.mcr_power_kw,
         ):
             if value < 0:
                 raise ValueError("Energy configuration values cannot be negative.")
@@ -309,6 +341,20 @@ class VoyageService:
             if point.load_percent in seen:
                 raise ValueError("Duplicate generator load point.")
             seen.add(point.load_percent)
+
+    def _validate_main_engine_sfoc_points(self, points: list[MainEngineSfocPoint]) -> None:
+        seen = set()
+        for point in points:
+            if point.load_percent < 0 or point.sfoc_g_per_kwh < 0:
+                raise ValueError("Main Engine SFOC points cannot be negative.")
+            if point.load_percent in seen:
+                raise ValueError("Duplicate Main Engine load point.")
+            seen.add(point.load_percent)
+
+    def _validate_rob_observation(self, observation: ActualROBObservation) -> None:
+        for fuel_type in FUEL_TYPES:
+            if observation.quantity_for(fuel_type) < 0:
+                raise ValueError("Actual ROB quantities cannot be negative.")
 
     def _validate_fuel(self, fuel_type: str) -> None:
         if fuel_type not in FUEL_TYPES:

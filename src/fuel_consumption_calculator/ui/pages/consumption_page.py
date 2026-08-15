@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 
 from fuel_consumption_calculator.calculations.consumption_engine import EventFuelConsumption
 from fuel_consumption_calculator.domain.consumption import FUEL_TYPES, OPERATING_MODES
-from fuel_consumption_calculator.domain.voyage import FuelChangeoverEvent, GeneratorSfocPoint, MachineryFuelState, MACHINERY_TYPES, SpeedConsumptionPoint, VesselEnergyConfig
+from fuel_consumption_calculator.domain.voyage import FuelChangeoverEvent, GeneratorSfocPoint, MachineryFuelState, MACHINERY_TYPES, MainEngineSfocPoint, VesselEnergyConfig
 from fuel_consumption_calculator.services.consumption_service import ConsumptionService
 from fuel_consumption_calculator.services.schedule_service import ScheduleService
 from fuel_consumption_calculator.services.vessel_service import VesselService
@@ -88,7 +88,7 @@ class ConsumptionPage(QWidget):
         self._rate_inputs: dict[tuple[str, str], QDoubleSpinBox] = {}
         self._initial_fuel_inputs: dict[str, QComboBox] = {}
         self._energy_inputs: dict[str, QDoubleSpinBox] = {}
-        self._speed_inputs: list[tuple[QDoubleSpinBox, QDoubleSpinBox, dict[str, QDoubleSpinBox]]] = []
+        self._main_engine_sfoc_inputs: list[tuple[QDoubleSpinBox, QDoubleSpinBox]] = []
         self._sfoc_inputs: list[tuple[QDoubleSpinBox, QDoubleSpinBox]] = []
 
         layout = QVBoxLayout(self)
@@ -117,17 +117,28 @@ class ConsumptionPage(QWidget):
         engine_grid = QGridLayout(engine_panel)
         engine_grid.setContentsMargins(18, 16, 18, 16)
         engine_grid.addWidget(_section_label("Main Engine Performance"), 0, 0, 1, 5)
-        for column, header in enumerate(("Speed kn", "ME Load %", "ULSFO MT/day", "VLSFO MT/day", "MDO MT/day")):
-            engine_grid.addWidget(QLabel(header), 1, column)
-        for row in range(3):
-            speed_input = _spinbox(" kn", 0, 50, 1)
-            me_load_input = _spinbox(" %", 0, 100, 1)
-            rate_inputs = {fuel_type: _spinbox(" MT/day", 0, 9999, 1) for fuel_type in FUEL_TYPES}
-            engine_grid.addWidget(speed_input, row + 2, 0)
-            engine_grid.addWidget(me_load_input, row + 2, 1)
-            for column, fuel_type in enumerate(FUEL_TYPES, start=2):
-                engine_grid.addWidget(rate_inputs[fuel_type], row + 2, column)
-            self._speed_inputs.append((speed_input, me_load_input, rate_inputs))
+        engine_grid.addWidget(_help_label("Workbook-derived model: Speed -> RPM -> Power -> ME load; ME fuel = power × SFOC / 1,000,000."), 1, 0, 1, 5)
+        for column, (label, key) in enumerate((
+            ("Slip %", "main_engine_slip_percent"),
+            ("Speed/RPM Factor", "speed_rpm_factor"),
+            ("Power Coefficient", "power_coefficient"),
+            ("MCR kW", "mcr_power_kw"),
+        )):
+            engine_grid.addWidget(QLabel(label), 2, column)
+            spinbox = _spinbox("" if key != "main_engine_slip_percent" else " %", 0, 999999, 1)
+            if key in ("speed_rpm_factor", "power_coefficient"):
+                spinbox.setDecimals(7)
+                spinbox.setSingleStep(0.0001)
+            engine_grid.addWidget(spinbox, 3, column)
+            self._energy_inputs[key] = spinbox
+        for column, header in enumerate(("ME Load %", "ME SFOC g/kWh")):
+            engine_grid.addWidget(QLabel(header), 4, column)
+        for row in range(17):
+            load_input = _spinbox(" %", 0, 200, 5)
+            sfoc_input = _spinbox(" g/kWh", 0, 9999, 1)
+            engine_grid.addWidget(load_input, row + 5, 0)
+            engine_grid.addWidget(sfoc_input, row + 5, 1)
+            self._main_engine_sfoc_inputs.append((load_input, sfoc_input))
         performance_layout.addWidget(engine_panel)
 
         generator_panel = QFrame()
@@ -155,10 +166,15 @@ class ConsumptionPage(QWidget):
         electrical_grid = QGridLayout(electrical_panel)
         electrical_grid.setContentsMargins(18, 16, 18, 16)
         electrical_grid.addWidget(_section_label("Electrical Load / Auxiliary Boiler"), 0, 0, 1, 4)
-        for label, key, column in (("Port Base kW", "port_base_load_kw", 0), ("Sea Base kW", "sea_base_load_kw", 1), ("Reefer kW/unit", "reefer_kw_per_unit", 2), ("Aux Boiler MT/h", "aux_boiler_mt_per_hour", 3)):
+        for label, key, column in (("Port Base kW", "port_base_load_kw", 0), ("Sea Base kW", "sea_base_load_kw", 1), ("Legacy Reefer kW/unit", "reefer_kw_per_unit", 2), ("Aux Boiler MT/h", "aux_boiler_mt_per_hour", 3)):
             electrical_grid.addWidget(QLabel(label), 1, column)
             spinbox = _spinbox("", 0, 999999, 1)
             electrical_grid.addWidget(spinbox, 2, column)
+            self._energy_inputs[key] = spinbox
+        for label, key, column in (("Port Ambient °C", "port_ambient_c", 0), ("Sea Ambient °C", "sea_ambient_c", 1)):
+            electrical_grid.addWidget(QLabel(label), 5, column)
+            spinbox = _spinbox(" °C", -50, 80, 1)
+            electrical_grid.addWidget(spinbox, 6, column)
             self._energy_inputs[key] = spinbox
         self.generator_fuel_combo = QComboBox()
         self.generator_fuel_combo.addItems(FUEL_TYPES)
@@ -495,13 +511,11 @@ class ConsumptionPage(QWidget):
             spinbox.setValue(getattr(config, key))
         self.generator_fuel_combo.setCurrentText(config.generator_fuel_type)
         self.boiler_fuel_combo.setCurrentText(config.boiler_fuel_type)
-        points = self._voyage_service.list_speed_points(vessel_id)
-        for index, (speed_input, me_load_input, rate_inputs) in enumerate(self._speed_inputs):
-            point = points[index] if index < len(points) else None
-            speed_input.setValue(point.speed_knots if point else 0.0)
-            me_load_input.setValue(point.main_engine_load_percent if point and point.main_engine_load_percent is not None else 0.0)
-            for fuel_type in FUEL_TYPES:
-                rate_inputs[fuel_type].setValue(point.rate_for(fuel_type) if point else 0.0)
+        me_sfoc_points = self._voyage_service.list_main_engine_sfoc_points(vessel_id)
+        for index, (load_input, sfoc_input) in enumerate(self._main_engine_sfoc_inputs):
+            point = me_sfoc_points[index] if index < len(me_sfoc_points) else None
+            load_input.setValue(point.load_percent if point else 0.0)
+            sfoc_input.setValue(point.sfoc_g_per_kwh if point else 0.0)
         sfoc_points = self._voyage_service.list_generator_sfoc_points(vessel_id)
         for index, (load_input, sfoc_input) in enumerate(self._sfoc_inputs):
             point = sfoc_points[index] if index < len(sfoc_points) else None
@@ -525,21 +539,20 @@ class ConsumptionPage(QWidget):
                     aux_boiler_mt_per_hour=self._energy_inputs["aux_boiler_mt_per_hour"].value(),
                     generator_fuel_type=self.generator_fuel_combo.currentText(),
                     boiler_fuel_type=self.boiler_fuel_combo.currentText(),
+                    main_engine_slip_percent=self._energy_inputs["main_engine_slip_percent"].value(),
+                    speed_rpm_factor=self._energy_inputs["speed_rpm_factor"].value(),
+                    power_coefficient=self._energy_inputs["power_coefficient"].value(),
+                    mcr_power_kw=self._energy_inputs["mcr_power_kw"].value(),
+                    port_ambient_c=self._energy_inputs["port_ambient_c"].value(),
+                    sea_ambient_c=self._energy_inputs["sea_ambient_c"].value(),
                 )
             )
-            speed_points: list[SpeedConsumptionPoint] = []
-            for speed_input, me_load_input, rate_inputs in self._speed_inputs:
-                if speed_input.value() <= 0:
-                    continue
-                speed_points.append(
-                    self._voyage_service.build_speed_point(
-                        vessel.id,
-                        speed_input.value(),
-                        {fuel_type: rate_inputs[fuel_type].value() for fuel_type in FUEL_TYPES},
-                        me_load_input.value(),
-                    )
-                )
-            self._voyage_service.save_speed_points(vessel.id, speed_points)
+            me_sfoc_points = [
+                MainEngineSfocPoint(vessel.id, load.value(), sfoc.value())
+                for load, sfoc in self._main_engine_sfoc_inputs
+                if load.value() > 0 or sfoc.value() > 0
+            ]
+            self._voyage_service.save_main_engine_sfoc_points(vessel.id, me_sfoc_points)
             sfoc_points = [
                 GeneratorSfocPoint(vessel.id, load.value(), sfoc.value())
                 for load, sfoc in self._sfoc_inputs

@@ -111,8 +111,7 @@ def test_port_load_generator_and_boiler_consumption_are_detailed():
 
     consumption = calculate_consumption_with_voyage(build_schedule_timeline(events), events, plan, _profile())
 
-    assert plan.energy_config.port_base_load_kw + 10 * plan.energy_config.reefer_kw_per_unit == 2500
-    assert consumption.rows[0].port_consumed_mt["ULSFO"] == 6
+    assert consumption.rows[0].port_consumed_mt["ULSFO"] == 3.6479999999999997
     assert round(consumption.rows[0].port_consumed_mt["MDO"], 2) == 1.2
 
 
@@ -120,11 +119,11 @@ def test_speed_point_interpolates_main_engine_load_percent():
     plan = calculate_voyage_plan([_leg()], _profile(), [_speed_point(8, 20, 20), _speed_point(12, 28, 30)], _energy_config(), _sfoc_points())
 
     assert plan.legs[0].required_speed_knots == 10
-    assert plan.legs[0].predicted_me_load_percent == 25
+    assert round(plan.legs[0].predicted_me_load_percent, 2) == 10.21
 
 
 def test_egb_unavailable_below_25_percent_applies_sea_boiler():
-    leg = _leg(route=RouteDefinition("Origin", "Destination", 5, 2, 318.72, 5, 2), override=VoyageLegOverride(1, 2, "Origin", "Destination", "2026-01-01T00:00", "2026-01-02T12:00", departure_reefers=10, use_egb=True))
+    leg = _leg(route=RouteDefinition("Origin", "Destination", 5, 2, 430.71, 5, 2), override=VoyageLegOverride(1, 2, "Origin", "Destination", "2026-01-01T00:00", "2026-01-02T12:00", departure_reefers=10, use_egb=True))
 
     row = calculate_voyage_plan([leg], _profile(), [_speed_point(9.96, 23.9, 24.9), _speed_point(12, 28, 30)], _energy_config(), _sfoc_points()).legs[0]
 
@@ -137,9 +136,9 @@ def test_egb_unavailable_below_25_percent_applies_sea_boiler():
 def test_egb_available_at_25_percent_but_boiler_applies_until_selected():
     leg = _leg(VoyageLegOverride(1, 2, "Origin", "Destination", "2026-01-01T00:00", "2026-01-02T12:00", departure_reefers=10, use_egb=False))
 
-    row = calculate_voyage_plan([leg], _profile(), [_speed_point(10, 24, 25), _speed_point(12, 28, 30)], _energy_config(), _sfoc_points()).legs[0]
+    row = calculate_voyage_plan([_leg(route=RouteDefinition("Origin", "Destination", 5, 2, 431.29, 5, 2), override=leg.leg.override if hasattr(leg, "leg") else leg.override)], _profile(), [_speed_point(10, 24, 25), _speed_point(12, 28, 30)], _energy_config(), _sfoc_points()).legs[0]
 
-    assert row.predicted_me_load_percent == 25
+    assert round(row.predicted_me_load_percent, 1) == 25.0
     assert row.egb_available is True
     assert row.egb_used is False
     assert row.sea_boiler_consumed_mt["MDO"] == 3.2
@@ -148,7 +147,7 @@ def test_egb_available_at_25_percent_but_boiler_applies_until_selected():
 def test_egb_selected_at_or_above_25_percent_removes_sea_boiler():
     leg = _leg(VoyageLegOverride(1, 2, "Origin", "Destination", "2026-01-01T00:00", "2026-01-02T12:00", departure_reefers=10, use_egb=True))
 
-    row = calculate_voyage_plan([leg], _profile(), [_speed_point(10, 24, 25), _speed_point(12, 28, 30)], _energy_config(), _sfoc_points()).legs[0]
+    row = calculate_voyage_plan([_leg(route=RouteDefinition("Origin", "Destination", 5, 2, 431.29, 5, 2), override=leg.leg.override if hasattr(leg, "leg") else leg.override)], _profile(), [_speed_point(10, 24, 25), _speed_point(12, 28, 30)], _energy_config(), _sfoc_points()).legs[0]
 
     assert row.egb_available is True
     assert row.egb_used is True
@@ -160,8 +159,8 @@ def test_rolling_drop_below_25_percent_disables_egb_and_changes_max_lift(tmp_pat
     service = BunkerService(BunkerRepository(Database(tmp_path / "unused.db")))
     capacity = BunkerCapacityProfile(1, (BunkerCapacity("ULSFO", 1000, 90), BunkerCapacity("VLSFO", 0, 90), BunkerCapacity("MDO", 1000, 90)))
     starting_rob = StartingROB(1, (ROBQuantity("ULSFO", 100), ROBQuantity("VLSFO", 0), ROBQuantity("MDO", 100)))
-    confirmed = _leg(VoyageLegOverride(1, 2, "Origin", "Destination", "2026-01-01T00:00", "2026-01-02T12:00", departure_reefers=10, use_egb=True))
-    slowed = _leg(route=RouteDefinition("Origin", "Destination", 5, 2, 318.72, 5, 2), override=VoyageLegOverride(1, 2, "Origin", "Destination", "2026-01-01T00:00", "2026-01-02T12:00", departure_reefers=10, use_egb=True))
+    confirmed = _leg(route=RouteDefinition("Origin", "Destination", 5, 2, 431.29, 5, 2), override=VoyageLegOverride(1, 2, "Origin", "Destination", "2026-01-01T00:00", "2026-01-02T12:00", departure_reefers=10, use_egb=True))
+    slowed = _leg(route=RouteDefinition("Origin", "Destination", 5, 2, 430.71, 5, 2), override=VoyageLegOverride(1, 2, "Origin", "Destination", "2026-01-01T00:00", "2026-01-02T12:00", departure_reefers=10, use_egb=True))
 
     confirmed_consumption = calculate_consumption_with_voyage(build_schedule_timeline(events), events, calculate_voyage_plan([confirmed], _profile(), [_speed_point(10, 24, 25), _speed_point(12, 28, 30)], _energy_config(), _sfoc_points()), _profile())
     slowed_plan = calculate_voyage_plan([slowed], _profile(), [_speed_point(9.96, 23.9, 24.9), _speed_point(12, 28, 30)], _energy_config(), _sfoc_points())

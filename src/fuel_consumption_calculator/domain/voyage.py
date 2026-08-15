@@ -39,6 +39,9 @@ class VoyageLegOverride:
     actual_berth_arrival: datetime | None = None
     port_reefers: float | None = None
     departure_reefers: float | None = None
+    actual_departure_reefers: float | None = None
+    port_ambient_c: float | None = None
+    sea_ambient_c: float | None = None
     use_egb: bool = False
 
 
@@ -48,6 +51,9 @@ class SpeedConsumptionPoint:
     speed_knots: float
     rates_mt_per_day: dict[str, float]
     main_engine_load_percent: float | None = None
+    rpm: float | None = None
+    power_kw: float | None = None
+    main_engine_sfoc_g_per_kwh: float | None = None
 
     def rate_for(self, fuel_type: str) -> float:
         return self.rates_mt_per_day.get(fuel_type, 0.0)
@@ -65,6 +71,12 @@ class VesselEnergyConfig:
     aux_boiler_mt_per_hour: float = 0.0
     generator_fuel_type: str = "MDO"
     boiler_fuel_type: str = "MDO"
+    main_engine_slip_percent: float = 10.0
+    speed_rpm_factor: float = 0.3221598
+    power_coefficient: float = 0.0967741935483871
+    mcr_power_kw: float = 38880.0
+    port_ambient_c: float = 20.0
+    sea_ambient_c: float = 20.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +131,25 @@ class GeneratorSfocPoint:
 
 
 @dataclass(frozen=True, slots=True)
+class MainEngineSfocPoint:
+    vessel_id: int
+    load_percent: float
+    sfoc_g_per_kwh: float
+
+
+@dataclass(frozen=True, slots=True)
+class ActualROBObservation:
+    id: int | None
+    vessel_id: int
+    effective_at_utc: datetime
+    quantities_mt: dict[str, float]
+    remarks: str | None = None
+
+    def quantity_for(self, fuel_type: str) -> float:
+        return self.quantities_mt.get(fuel_type, 0.0)
+
+
+@dataclass(frozen=True, slots=True)
 class VoyageLeg:
     vessel_id: int
     sequence_number: int
@@ -150,6 +181,12 @@ class CalculatedVoyageLeg:
     arrival_maneuvering_consumed_mt: dict[str, float]
     total_pre_arrival_consumed_mt: dict[str, float]
     predicted_me_load_percent: float | None = None
+    predicted_rpm: float | None = None
+    predicted_me_power_kw: float | None = None
+    predicted_me_sfoc_g_per_kwh: float | None = None
+    predicted_me_fuel_mt_per_hour: float | None = None
+    hull_coefficient: float | None = None
+    departure_reefer_kw_per_unit: float | None = None
     egb_available: bool = False
     egb_used: bool = False
     sea_generator_consumed_mt: dict[str, float] | None = None
@@ -171,6 +208,7 @@ class PortEnergyBreakdown:
     port: str
     port_hours: float
     reefers: float
+    reefer_kw_per_unit: float | None
     total_electrical_load_kw: float
     generator_load_percent: float | None
     generator_sfoc_g_per_kwh: float | None

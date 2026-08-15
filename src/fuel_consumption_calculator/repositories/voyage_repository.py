@@ -4,8 +4,10 @@ from datetime import datetime, timezone
 
 from fuel_consumption_calculator.domain.consumption import FUEL_TYPES
 from fuel_consumption_calculator.domain.voyage import (
+    ActualROBObservation,
     FuelChangeoverEvent,
     GeneratorSfocPoint,
+    MainEngineSfocPoint,
     MachineryFuelState,
     RouteDefinition,
     SpeedConsumptionPoint,
@@ -96,7 +98,8 @@ class VoyageRepository:
                        arrival_pilot_distance_nm, arrival_pilotage_hours,
                        actual_berth_departure, actual_pilot_off,
                        actual_pilot_on, actual_berth_arrival,
-                       port_reefers, departure_reefers, use_egb
+                       port_reefers, departure_reefers, actual_departure_reefers,
+                       port_ambient_c, sea_ambient_c, use_egb
                 FROM voyage_leg_overrides
                 WHERE vessel_id = ?
                 ORDER BY sequence_number
@@ -118,10 +121,11 @@ class VoyageRepository:
                     arrival_pilot_distance_nm, arrival_pilotage_hours,
                     actual_berth_departure, actual_pilot_off,
                     actual_pilot_on, actual_berth_arrival,
-                    port_reefers, departure_reefers, use_egb,
+                    port_reefers, departure_reefers, actual_departure_reefers,
+                    port_ambient_c, sea_ambient_c, use_egb,
                     created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (
                     vessel_id, sequence_number, origin_port_snapshot,
                     destination_port_snapshot, origin_departure_snapshot,
@@ -139,6 +143,9 @@ class VoyageRepository:
                     actual_berth_arrival = excluded.actual_berth_arrival,
                     port_reefers = excluded.port_reefers,
                     departure_reefers = excluded.departure_reefers,
+                    actual_departure_reefers = excluded.actual_departure_reefers,
+                    port_ambient_c = excluded.port_ambient_c,
+                    sea_ambient_c = excluded.sea_ambient_c,
                     use_egb = excluded.use_egb,
                     updated_at = excluded.updated_at
                 """,
@@ -160,6 +167,9 @@ class VoyageRepository:
                     _dt_to_text(override.actual_berth_arrival),
                     override.port_reefers,
                     override.departure_reefers,
+                    override.actual_departure_reefers,
+                    override.port_ambient_c,
+                    override.sea_ambient_c,
                     1 if override.use_egb else 0,
                     timestamp,
                     timestamp,
@@ -218,6 +228,42 @@ class VoyageRepository:
             for row in rows
         ]
 
+    def list_main_engine_sfoc_points(self, vessel_id: int) -> list[MainEngineSfocPoint]:
+        with self._database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT vessel_id, load_percent, sfoc_g_per_kwh
+                FROM main_engine_sfoc_points
+                WHERE vessel_id = ?
+                ORDER BY load_percent
+                """,
+                (vessel_id,),
+            ).fetchall()
+        return [
+            MainEngineSfocPoint(
+                vessel_id=row["vessel_id"],
+                load_percent=float(row["load_percent"]),
+                sfoc_g_per_kwh=float(row["sfoc_g_per_kwh"]),
+            )
+            for row in rows
+        ]
+
+    def save_main_engine_sfoc_points(self, vessel_id: int, points: list[MainEngineSfocPoint]) -> list[MainEngineSfocPoint]:
+        timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with self._database.connect() as connection:
+            connection.execute("DELETE FROM main_engine_sfoc_points WHERE vessel_id = ?", (vessel_id,))
+            for point in points:
+                connection.execute(
+                    """
+                    INSERT INTO main_engine_sfoc_points (
+                        vessel_id, load_percent, sfoc_g_per_kwh, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (vessel_id, point.load_percent, point.sfoc_g_per_kwh, timestamp, timestamp),
+                )
+        return self.list_main_engine_sfoc_points(vessel_id)
+
     def save_speed_points(self, vessel_id: int, points: list[SpeedConsumptionPoint]) -> list[SpeedConsumptionPoint]:
         timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
         with self._database.connect() as connection:
@@ -251,7 +297,9 @@ class VoyageRepository:
                 """
                 SELECT vessel_id, port_base_load_kw, sea_base_load_kw, reefer_kw_per_unit,
                        generator_rated_kw, port_running_generators, sea_running_generators,
-                       aux_boiler_mt_per_hour, generator_fuel_type, boiler_fuel_type
+                       aux_boiler_mt_per_hour, generator_fuel_type, boiler_fuel_type,
+                       main_engine_slip_percent, speed_rpm_factor, power_coefficient,
+                       mcr_power_kw, port_ambient_c, sea_ambient_c
                 FROM vessel_energy_config
                 WHERE vessel_id = ?
                 """,
@@ -270,6 +318,12 @@ class VoyageRepository:
             aux_boiler_mt_per_hour=float(row["aux_boiler_mt_per_hour"]),
             generator_fuel_type=row["generator_fuel_type"],
             boiler_fuel_type=row["boiler_fuel_type"],
+            main_engine_slip_percent=float(row["main_engine_slip_percent"]),
+            speed_rpm_factor=float(row["speed_rpm_factor"]),
+            power_coefficient=float(row["power_coefficient"]),
+            mcr_power_kw=float(row["mcr_power_kw"]),
+            port_ambient_c=float(row["port_ambient_c"]),
+            sea_ambient_c=float(row["sea_ambient_c"]),
         )
 
     def save_energy_config(self, config: VesselEnergyConfig) -> VesselEnergyConfig:
@@ -281,9 +335,11 @@ class VoyageRepository:
                     vessel_id, port_base_load_kw, sea_base_load_kw, reefer_kw_per_unit,
                     generator_rated_kw, port_running_generators, sea_running_generators,
                     aux_boiler_mt_per_hour, generator_fuel_type, boiler_fuel_type,
+                    main_engine_slip_percent, speed_rpm_factor, power_coefficient,
+                    mcr_power_kw, port_ambient_c, sea_ambient_c,
                     created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(vessel_id)
                 DO UPDATE SET
                     port_base_load_kw = excluded.port_base_load_kw,
@@ -295,6 +351,12 @@ class VoyageRepository:
                     aux_boiler_mt_per_hour = excluded.aux_boiler_mt_per_hour,
                     generator_fuel_type = excluded.generator_fuel_type,
                     boiler_fuel_type = excluded.boiler_fuel_type,
+                    main_engine_slip_percent = excluded.main_engine_slip_percent,
+                    speed_rpm_factor = excluded.speed_rpm_factor,
+                    power_coefficient = excluded.power_coefficient,
+                    mcr_power_kw = excluded.mcr_power_kw,
+                    port_ambient_c = excluded.port_ambient_c,
+                    sea_ambient_c = excluded.sea_ambient_c,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -308,6 +370,12 @@ class VoyageRepository:
                     config.aux_boiler_mt_per_hour,
                     config.generator_fuel_type,
                     config.boiler_fuel_type,
+                    config.main_engine_slip_percent,
+                    config.speed_rpm_factor,
+                    config.power_coefficient,
+                    config.mcr_power_kw,
+                    config.port_ambient_c,
+                    config.sea_ambient_c,
                     timestamp,
                     timestamp,
                 ),
@@ -481,6 +549,75 @@ class VoyageRepository:
                 (vessel_id, event_id),
             )
 
+    def list_actual_rob_observations(self, vessel_id: int) -> list[ActualROBObservation]:
+        with self._database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, vessel_id, effective_at_utc, ulsfo_mt, vlsfo_mt, mdo_mt, remarks
+                FROM actual_rob_observations
+                WHERE vessel_id = ?
+                ORDER BY effective_at_utc, id
+                """,
+                (vessel_id,),
+            ).fetchall()
+        return [self._row_to_rob_observation(row) for row in rows]
+
+    def save_actual_rob_observation(self, observation: ActualROBObservation) -> ActualROBObservation:
+        timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with self._database.connect() as connection:
+            if observation.id is None:
+                cursor = connection.execute(
+                    """
+                    INSERT INTO actual_rob_observations (
+                        vessel_id, effective_at_utc, ulsfo_mt, vlsfo_mt, mdo_mt,
+                        remarks, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        observation.vessel_id,
+                        _dt_to_text(observation.effective_at_utc),
+                        observation.quantity_for("ULSFO"),
+                        observation.quantity_for("VLSFO"),
+                        observation.quantity_for("MDO"),
+                        observation.remarks,
+                        timestamp,
+                        timestamp,
+                    ),
+                )
+                observation_id = cursor.lastrowid
+            else:
+                connection.execute(
+                    """
+                    UPDATE actual_rob_observations
+                    SET effective_at_utc = ?, ulsfo_mt = ?, vlsfo_mt = ?, mdo_mt = ?,
+                        remarks = ?, updated_at = ?
+                    WHERE id = ? AND vessel_id = ?
+                    """,
+                    (
+                        _dt_to_text(observation.effective_at_utc),
+                        observation.quantity_for("ULSFO"),
+                        observation.quantity_for("VLSFO"),
+                        observation.quantity_for("MDO"),
+                        observation.remarks,
+                        timestamp,
+                        observation.id,
+                        observation.vessel_id,
+                    ),
+                )
+                observation_id = observation.id
+            row = connection.execute(
+                """
+                SELECT id, vessel_id, effective_at_utc, ulsfo_mt, vlsfo_mt, mdo_mt, remarks
+                FROM actual_rob_observations
+                WHERE id = ?
+                """,
+                (observation_id,),
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("Actual ROB observation could not be read after saving.")
+        return self._row_to_rob_observation(row)
+
     def list_clock_adjustments(self, vessel_id: int) -> list[VesselClockAdjustment]:
         with self._database.connect() as connection:
             rows = connection.execute(
@@ -582,6 +719,9 @@ class VoyageRepository:
             actual_berth_arrival=_text_to_dt(row["actual_berth_arrival"]),
             port_reefers=_optional_float(row["port_reefers"]),
             departure_reefers=_optional_float(row["departure_reefers"]),
+            actual_departure_reefers=_optional_float(row["actual_departure_reefers"]),
+            port_ambient_c=_optional_float(row["port_ambient_c"]),
+            sea_ambient_c=_optional_float(row["sea_ambient_c"]),
             use_egb=bool(row["use_egb"]),
         )
 
@@ -606,6 +746,19 @@ class VoyageRepository:
             adjustment_minutes=int(row["adjustment_minutes"]),
             previous_offset_minutes=int(row["previous_offset_minutes"]),
             resulting_offset_minutes=int(row["resulting_offset_minutes"]),
+        )
+
+    def _row_to_rob_observation(self, row) -> ActualROBObservation:
+        return ActualROBObservation(
+            id=row["id"],
+            vessel_id=row["vessel_id"],
+            effective_at_utc=_text_to_dt(row["effective_at_utc"]),
+            quantities_mt={
+                "ULSFO": float(row["ulsfo_mt"]),
+                "VLSFO": float(row["vlsfo_mt"]),
+                "MDO": float(row["mdo_mt"]),
+            },
+            remarks=row["remarks"],
         )
 
 
