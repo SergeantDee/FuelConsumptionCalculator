@@ -3,13 +3,14 @@ from __future__ import annotations
 from datetime import date, datetime
 
 from fuel_consumption_calculator.calculations.rob_projection_engine import project_schedule_rob
+from fuel_consumption_calculator.calculations.bunker_projection_engine import project_schedule_rob_with_bunkers
 from fuel_consumption_calculator.calculations.voyage_engine import calculate_consumption_with_voyage, calculate_voyage_plan, interpolate_speed_rates
 from fuel_consumption_calculator.domain.bunker import BunkerCapacity, BunkerCapacityProfile
 from fuel_consumption_calculator.domain.consumption import ConsumptionProfile, ConsumptionRate, FUEL_TYPES
 from fuel_consumption_calculator.domain.rob import ROBQuantity, StartingROB
 from fuel_consumption_calculator.domain.schedule import ScheduleEvent
 from fuel_consumption_calculator.domain.schedule_timeline import build_schedule_timeline
-from fuel_consumption_calculator.domain.voyage import RouteDefinition, SpeedConsumptionPoint, VoyageLeg, VoyageLegOverride
+from fuel_consumption_calculator.domain.voyage import GeneratorSfocPoint, RouteDefinition, SpeedConsumptionPoint, VesselEnergyConfig, VoyageLeg, VoyageLegOverride
 from fuel_consumption_calculator.repositories.bunker_repository import BunkerRepository
 from fuel_consumption_calculator.repositories.database import Database
 from fuel_consumption_calculator.services.bunker_service import BunkerService
@@ -103,6 +104,76 @@ def test_updated_projected_arrival_rob_changes_max_lift(tmp_path):
     assert actual["ULSFO"].max_lift_mt == 837
 
 
+def test_port_load_generator_and_boiler_consumption_are_detailed():
+    events = _events()
+    leg = _leg(VoyageLegOverride(1, 2, "Origin", "Destination", "2026-01-01T00:00", "2026-01-02T12:00", port_reefers=10))
+    plan = calculate_voyage_plan([leg], _profile(), [_speed_point(10, 24, 30)], _energy_config(), _sfoc_points())
+
+    consumption = calculate_consumption_with_voyage(build_schedule_timeline(events), events, plan, _profile())
+
+    assert plan.energy_config.port_base_load_kw + 10 * plan.energy_config.reefer_kw_per_unit == 2500
+    assert consumption.rows[0].port_consumed_mt["ULSFO"] == 6
+    assert round(consumption.rows[0].port_consumed_mt["MDO"], 2) == 1.2
+
+
+def test_speed_point_interpolates_main_engine_load_percent():
+    plan = calculate_voyage_plan([_leg()], _profile(), [_speed_point(8, 20, 20), _speed_point(12, 28, 30)], _energy_config(), _sfoc_points())
+
+    assert plan.legs[0].required_speed_knots == 10
+    assert plan.legs[0].predicted_me_load_percent == 25
+
+
+def test_egb_unavailable_below_25_percent_applies_sea_boiler():
+    leg = _leg(route=RouteDefinition("Origin", "Destination", 5, 2, 318.72, 5, 2), override=VoyageLegOverride(1, 2, "Origin", "Destination", "2026-01-01T00:00", "2026-01-02T12:00", departure_reefers=10, use_egb=True))
+
+    row = calculate_voyage_plan([leg], _profile(), [_speed_point(9.96, 23.9, 24.9), _speed_point(12, 28, 30)], _energy_config(), _sfoc_points()).legs[0]
+
+    assert round(row.predicted_me_load_percent, 1) == 24.9
+    assert row.egb_available is False
+    assert row.egb_used is False
+    assert row.sea_boiler_consumed_mt["MDO"] == 3.2
+
+
+def test_egb_available_at_25_percent_but_boiler_applies_until_selected():
+    leg = _leg(VoyageLegOverride(1, 2, "Origin", "Destination", "2026-01-01T00:00", "2026-01-02T12:00", departure_reefers=10, use_egb=False))
+
+    row = calculate_voyage_plan([leg], _profile(), [_speed_point(10, 24, 25), _speed_point(12, 28, 30)], _energy_config(), _sfoc_points()).legs[0]
+
+    assert row.predicted_me_load_percent == 25
+    assert row.egb_available is True
+    assert row.egb_used is False
+    assert row.sea_boiler_consumed_mt["MDO"] == 3.2
+
+
+def test_egb_selected_at_or_above_25_percent_removes_sea_boiler():
+    leg = _leg(VoyageLegOverride(1, 2, "Origin", "Destination", "2026-01-01T00:00", "2026-01-02T12:00", departure_reefers=10, use_egb=True))
+
+    row = calculate_voyage_plan([leg], _profile(), [_speed_point(10, 24, 25), _speed_point(12, 28, 30)], _energy_config(), _sfoc_points()).legs[0]
+
+    assert row.egb_available is True
+    assert row.egb_used is True
+    assert row.sea_boiler_consumed_mt["MDO"] == 0
+
+
+def test_rolling_drop_below_25_percent_disables_egb_and_changes_max_lift(tmp_path):
+    events = _events()
+    service = BunkerService(BunkerRepository(Database(tmp_path / "unused.db")))
+    capacity = BunkerCapacityProfile(1, (BunkerCapacity("ULSFO", 1000, 90), BunkerCapacity("VLSFO", 0, 90), BunkerCapacity("MDO", 1000, 90)))
+    starting_rob = StartingROB(1, (ROBQuantity("ULSFO", 100), ROBQuantity("VLSFO", 0), ROBQuantity("MDO", 100)))
+    confirmed = _leg(VoyageLegOverride(1, 2, "Origin", "Destination", "2026-01-01T00:00", "2026-01-02T12:00", departure_reefers=10, use_egb=True))
+    slowed = _leg(route=RouteDefinition("Origin", "Destination", 5, 2, 318.72, 5, 2), override=VoyageLegOverride(1, 2, "Origin", "Destination", "2026-01-01T00:00", "2026-01-02T12:00", departure_reefers=10, use_egb=True))
+
+    confirmed_consumption = calculate_consumption_with_voyage(build_schedule_timeline(events), events, calculate_voyage_plan([confirmed], _profile(), [_speed_point(10, 24, 25), _speed_point(12, 28, 30)], _energy_config(), _sfoc_points()), _profile())
+    slowed_plan = calculate_voyage_plan([slowed], _profile(), [_speed_point(9.96, 23.9, 24.9), _speed_point(12, 28, 30)], _energy_config(), _sfoc_points())
+    slowed_consumption = calculate_consumption_with_voyage(build_schedule_timeline(events), events, slowed_plan, _profile())
+    confirmed_rob = project_schedule_rob_with_bunkers(starting_rob, confirmed_consumption, [])
+    slowed_rob = project_schedule_rob_with_bunkers(starting_rob, slowed_consumption, [])
+
+    assert slowed_plan.legs[0].egb_used is False
+    assert slowed_rob.rows[1].arrival_rob_mt["MDO"] < confirmed_rob.rows[1].arrival_rob_mt["MDO"]
+    assert service.calculate_lift_limits(capacity, slowed_rob.rows[1].arrival_rob_mt)["MDO"].max_lift_mt > service.calculate_lift_limits(capacity, confirmed_rob.rows[1].arrival_rob_mt)["MDO"].max_lift_mt
+
+
 def _profile() -> ConsumptionProfile:
     return ConsumptionProfile(
         vessel_id=1,
@@ -120,11 +191,11 @@ def _rate(mode: str, fuel: str) -> float:
     return {"SEA": 24.0, "MANEUVERING": 12.0, "PORT": 0.0}[mode]
 
 
-def _speed_point(speed: float, ulsfo_rate: float) -> SpeedConsumptionPoint:
-    return SpeedConsumptionPoint(1, speed, {"ULSFO": ulsfo_rate, "VLSFO": 0.0, "MDO": 0.0})
+def _speed_point(speed: float, ulsfo_rate: float, me_load: float | None = None) -> SpeedConsumptionPoint:
+    return SpeedConsumptionPoint(1, speed, {"ULSFO": ulsfo_rate, "VLSFO": 0.0, "MDO": 0.0}, me_load)
 
 
-def _leg(override: VoyageLegOverride | None = None) -> VoyageLeg:
+def _leg(override: VoyageLegOverride | None = None, route: RouteDefinition | None = None) -> VoyageLeg:
     return VoyageLeg(
         vessel_id=1,
         sequence_number=2,
@@ -134,7 +205,7 @@ def _leg(override: VoyageLegOverride | None = None) -> VoyageLeg:
         destination_port="Destination",
         scheduled_berth_departure=datetime(2026, 1, 1, 0),
         scheduled_berth_arrival=datetime(2026, 1, 2, 12),
-        route=RouteDefinition("Origin", "Destination", 5, 2, 320, 5, 2),
+        route=route or RouteDefinition("Origin", "Destination", 5, 2, 320, 5, 2),
         override=override,
     )
 
@@ -144,3 +215,22 @@ def _events() -> list[ScheduleEvent]:
         ScheduleEvent(1, 1, 1, "Origin", "Port Call", datetime(2025, 12, 31, 12), datetime(2026, 1, 1, 0), "manual", "Fixture", date(2026, 1, 1), "", ""),
         ScheduleEvent(2, 1, 2, "Destination", "Port Call", datetime(2026, 1, 2, 12), None, "manual", "Fixture", date(2026, 1, 1), "", ""),
     ]
+
+
+def _energy_config() -> VesselEnergyConfig:
+    return VesselEnergyConfig(
+        vessel_id=1,
+        port_base_load_kw=1500,
+        sea_base_load_kw=1000,
+        reefer_kw_per_unit=100,
+        generator_rated_kw=5000,
+        port_running_generators=1,
+        sea_running_generators=1,
+        aux_boiler_mt_per_hour=0.1,
+        generator_fuel_type="ULSFO",
+        boiler_fuel_type="MDO",
+    )
+
+
+def _sfoc_points() -> list[GeneratorSfocPoint]:
+    return [GeneratorSfocPoint(1, 0, 200), GeneratorSfocPoint(1, 100, 200)]

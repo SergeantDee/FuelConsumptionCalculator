@@ -6,17 +6,30 @@ from fuel_consumption_calculator.calculations.consumption_engine import EventFue
 from fuel_consumption_calculator.domain.consumption import FUEL_TYPES, ConsumptionProfile
 from fuel_consumption_calculator.domain.schedule import ScheduleEvent
 from fuel_consumption_calculator.domain.schedule_timeline import ScheduleTimeline
-from fuel_consumption_calculator.domain.voyage import CalculatedVoyageLeg, SpeedConsumptionPoint, VoyageLeg, VoyagePlan, empty_fuel_totals
+from fuel_consumption_calculator.domain.voyage import (
+    CalculatedVoyageLeg,
+    GeneratorSfocPoint,
+    PortEnergyBreakdown,
+    SpeedConsumptionPoint,
+    VesselEnergyConfig,
+    VoyageLeg,
+    VoyagePlan,
+    empty_fuel_totals,
+)
 
 
 def calculate_voyage_plan(
     legs: list[VoyageLeg],
     profile: ConsumptionProfile,
     speed_points: list[SpeedConsumptionPoint],
+    energy_config: VesselEnergyConfig | None = None,
+    generator_sfoc_points: list[GeneratorSfocPoint] | None = None,
 ) -> VoyagePlan:
     calculated_legs: list[CalculatedVoyageLeg] = []
     warnings: list[str] = []
     ordered_points = sorted(speed_points, key=lambda point: point.speed_knots)
+    ordered_sfoc_points = sorted(generator_sfoc_points or [], key=lambda point: point.load_percent)
+    config = energy_config or VesselEnergyConfig(vessel_id=legs[0].vessel_id if legs else 0)
 
     for leg in legs:
         override = leg.override
@@ -53,7 +66,21 @@ def calculate_voyage_plan(
             fuel_type: _consume(arr_pilotage_hours, profile.rate_for("MANEUVERING", fuel_type))
             for fuel_type in FUEL_TYPES
         }
-        sea_consumed = _sea_consumption(sea_hours, required_speed, profile, ordered_points, leg_warnings)
+        speed_perf = interpolate_speed_performance(required_speed, ordered_points) if required_speed is not None else None
+        predicted_me_load = speed_perf["main_engine_load_percent"] if speed_perf else None
+        sea_breakdown = _sea_consumption(
+            sea_hours,
+            required_speed,
+            profile,
+            ordered_points,
+            config,
+            ordered_sfoc_points,
+            leg.override.departure_reefers if leg.override and leg.override.departure_reefers is not None else 0.0,
+            predicted_me_load,
+            leg.override.use_egb if leg.override else False,
+            leg_warnings,
+        )
+        sea_consumed = sea_breakdown["total"]
         total = {
             fuel_type: departure_maneuvering[fuel_type] + sea_consumed[fuel_type] + arrival_maneuvering[fuel_type]
             for fuel_type in FUEL_TYPES
@@ -74,11 +101,26 @@ def calculate_voyage_plan(
                 sea_consumed_mt=sea_consumed,
                 arrival_maneuvering_consumed_mt=arrival_maneuvering,
                 total_pre_arrival_consumed_mt=total,
+                predicted_me_load_percent=predicted_me_load,
+                egb_available=(predicted_me_load is not None and predicted_me_load >= 25.0),
+                egb_used=sea_breakdown["egb_used"],
+                sea_generator_consumed_mt=sea_breakdown["generator"],
+                sea_boiler_consumed_mt=sea_breakdown["boiler"],
+                sea_total_electrical_load_kw=sea_breakdown["total_load_kw"],
+                sea_generator_load_percent=sea_breakdown["generator_load_percent"],
+                sea_generator_sfoc_g_per_kwh=sea_breakdown["generator_sfoc"],
+                sea_calculation_mode=sea_breakdown["mode"],
                 warnings=tuple(leg_warnings),
             )
         )
 
-    return VoyagePlan(legs=calculated_legs, warnings=warnings)
+    return VoyagePlan(
+        legs=calculated_legs,
+        warnings=warnings,
+        port_breakdowns={},
+        energy_config=config,
+        generator_sfoc_points=tuple(ordered_sfoc_points),
+    )
 
 
 def calculate_consumption_with_voyage(
@@ -111,6 +153,7 @@ def calculate_consumption_with_voyage(
         for calculated_leg in plan.legs
     }
     timeline_by_event = {row.event.id: row for row in timeline.rows}
+    outgoing_leg_by_origin = {calculated_leg.leg.origin_event_id: calculated_leg for calculated_leg in plan.legs}
     rows: list[EventFuelConsumption] = []
     totals = empty_fuel_totals()
 
@@ -122,10 +165,15 @@ def calculate_consumption_with_voyage(
         }
         sea_hours = leg_hours_by_destination.get(event.id, timeline_row.interval_from_previous_hours if timeline_row and timeline_row.interval_from_previous_hours else 0.0)
         port_hours = _port_hours(event, actual_arrivals.get(event.id), actual_departures.get(event.id), timeline_row.port_stay_hours if timeline_row else None)
-        port_consumed = {
-            fuel_type: _consume(port_hours, profile.rate_for("PORT", fuel_type))
-            for fuel_type in FUEL_TYPES
-        }
+        breakdown = _port_consumption(
+            event,
+            port_hours,
+            outgoing_leg_by_origin.get(event.id),
+            profile,
+            plan.energy_config or VesselEnergyConfig(vessel_id=event.vessel_id),
+            list(plan.generator_sfoc_points),
+        )
+        port_consumed = breakdown.total_consumed_mt
         consumed = {fuel_type: sea_consumed[fuel_type] + port_consumed[fuel_type] for fuel_type in FUEL_TYPES}
         for fuel_type in FUEL_TYPES:
             totals[fuel_type] += consumed[fuel_type]
@@ -141,7 +189,6 @@ def calculate_consumption_with_voyage(
                 port_consumed_mt=port_consumed,
             )
         )
-
     return ScheduleFuelConsumption(rows=rows, totals_mt=totals)
 
 
@@ -149,6 +196,16 @@ def interpolate_speed_rates(
     speed_knots: float,
     speed_points: list[SpeedConsumptionPoint],
 ) -> dict[str, float] | None:
+    performance = interpolate_speed_performance(speed_knots, speed_points)
+    return None if performance is None else {fuel_type: performance[fuel_type] for fuel_type in FUEL_TYPES}
+
+
+def interpolate_speed_performance(
+    speed_knots: float | None,
+    speed_points: list[SpeedConsumptionPoint],
+) -> dict[str, float] | None:
+    if speed_knots is None:
+        return None
     points = sorted(speed_points, key=lambda point: point.speed_knots)
     if not points:
         return None
@@ -156,15 +213,45 @@ def interpolate_speed_rates(
         return None
     for point in points:
         if abs(point.speed_knots - speed_knots) < 0.0001:
-            return {fuel_type: point.rate_for(fuel_type) for fuel_type in FUEL_TYPES}
+            return {
+                **{fuel_type: point.rate_for(fuel_type) for fuel_type in FUEL_TYPES},
+                "main_engine_load_percent": point.main_engine_load_percent,
+            }
     for left, right in zip(points, points[1:]):
         if left.speed_knots <= speed_knots <= right.speed_knots:
             span = right.speed_knots - left.speed_knots
             ratio = (speed_knots - left.speed_knots) / span if span else 0.0
-            return {
+            interpolated = {
                 fuel_type: left.rate_for(fuel_type) + ratio * (right.rate_for(fuel_type) - left.rate_for(fuel_type))
                 for fuel_type in FUEL_TYPES
             }
+            if left.main_engine_load_percent is not None and right.main_engine_load_percent is not None:
+                interpolated["main_engine_load_percent"] = left.main_engine_load_percent + ratio * (right.main_engine_load_percent - left.main_engine_load_percent)
+            else:
+                interpolated["main_engine_load_percent"] = None
+            return interpolated
+    return None
+
+
+def interpolate_generator_sfoc(
+    load_percent: float | None,
+    sfoc_points: list[GeneratorSfocPoint],
+) -> float | None:
+    if load_percent is None:
+        return None
+    points = sorted(sfoc_points, key=lambda point: point.load_percent)
+    if not points:
+        return None
+    if load_percent < points[0].load_percent or load_percent > points[-1].load_percent:
+        return None
+    for point in points:
+        if abs(point.load_percent - load_percent) < 0.0001:
+            return point.sfoc_g_per_kwh
+    for left, right in zip(points, points[1:]):
+        if left.load_percent <= load_percent <= right.load_percent:
+            span = right.load_percent - left.load_percent
+            ratio = (load_percent - left.load_percent) / span if span else 0.0
+            return left.sfoc_g_per_kwh + ratio * (right.sfoc_g_per_kwh - left.sfoc_g_per_kwh)
     return None
 
 
@@ -173,13 +260,118 @@ def _sea_consumption(
     speed_knots: float | None,
     profile: ConsumptionProfile,
     speed_points: list[SpeedConsumptionPoint],
+    config: VesselEnergyConfig,
+    sfoc_points: list[GeneratorSfocPoint],
+    departure_reefers: float,
+    predicted_me_load: float | None,
+    requested_egb: bool,
     warnings: list[str],
 ) -> dict[str, float]:
     interpolated = interpolate_speed_rates(speed_knots, speed_points) if speed_knots is not None else None
     if speed_knots is not None and speed_points and interpolated is None:
         warnings.append(f"Required speed {speed_knots:.2f} kn is outside configured speed-consumption points; fixed SEA rates were used.")
     rates = interpolated or {fuel_type: profile.rate_for("SEA", fuel_type) for fuel_type in FUEL_TYPES}
-    return {fuel_type: _consume(sea_hours, rates[fuel_type]) for fuel_type in FUEL_TYPES}
+    main_engine = {fuel_type: _consume(sea_hours, rates[fuel_type]) for fuel_type in FUEL_TYPES}
+    generator = empty_fuel_totals()
+    boiler = empty_fuel_totals()
+    egb_available = predicted_me_load is not None and predicted_me_load >= 25.0
+    egb_used = requested_egb and egb_available
+    if requested_egb and not egb_available:
+        warnings.append("EGB was selected but is unavailable below 25% predicted ME load; auxiliary boiler was used.")
+
+    total_load_kw = config.sea_base_load_kw + departure_reefers * config.reefer_kw_per_unit
+    generator_load_percent = _generator_load_percent(total_load_kw, config.generator_rated_kw, config.sea_running_generators, warnings)
+    generator_sfoc = interpolate_generator_sfoc(generator_load_percent, sfoc_points)
+    detailed_ready = _energy_config_ready(config) and generator_load_percent is not None and generator_sfoc is not None
+    mode = "DETAILED" if detailed_ready else "FALLBACK"
+    if detailed_ready:
+        generator[config.generator_fuel_type] += _generator_fuel(total_load_kw, generator_sfoc, sea_hours)
+        if not egb_used:
+            boiler[config.boiler_fuel_type] += sea_hours * config.aux_boiler_mt_per_hour
+    elif total_load_kw > 0 or config.aux_boiler_mt_per_hour > 0:
+        warnings.append("Detailed sea load configuration is incomplete or out of range; fixed SEA fallback was used.")
+    total = {fuel_type: main_engine[fuel_type] + generator[fuel_type] + boiler[fuel_type] for fuel_type in FUEL_TYPES}
+    return {
+        "total": total,
+        "generator": generator,
+        "boiler": boiler,
+        "total_load_kw": total_load_kw,
+        "generator_load_percent": generator_load_percent,
+        "generator_sfoc": generator_sfoc,
+        "mode": mode,
+        "egb_used": egb_used,
+    }
+
+
+def _port_consumption(
+    event: ScheduleEvent,
+    port_hours: float,
+    outgoing_leg: CalculatedVoyageLeg | None,
+    profile: ConsumptionProfile,
+    config: VesselEnergyConfig,
+    sfoc_points: list[GeneratorSfocPoint],
+) -> PortEnergyBreakdown:
+    reefers = outgoing_leg.leg.override.port_reefers if outgoing_leg and outgoing_leg.leg.override and outgoing_leg.leg.override.port_reefers is not None else 0.0
+    total_load_kw = config.port_base_load_kw + reefers * config.reefer_kw_per_unit
+    local_warnings: list[str] = []
+    generator_load_percent = _generator_load_percent(total_load_kw, config.generator_rated_kw, config.port_running_generators, local_warnings)
+    generator_sfoc = interpolate_generator_sfoc(generator_load_percent, sfoc_points)
+    generator = empty_fuel_totals()
+    boiler = empty_fuel_totals()
+    if _energy_config_ready(config) and generator_load_percent is not None and generator_sfoc is not None:
+        generator[config.generator_fuel_type] += _generator_fuel(total_load_kw, generator_sfoc, port_hours)
+        boiler[config.boiler_fuel_type] += port_hours * config.aux_boiler_mt_per_hour
+        mode = "DETAILED"
+    else:
+        generator = {fuel_type: _consume(port_hours, profile.rate_for("PORT", fuel_type)) for fuel_type in FUEL_TYPES}
+        mode = "FALLBACK"
+    total = {fuel_type: generator[fuel_type] + boiler[fuel_type] for fuel_type in FUEL_TYPES}
+    return PortEnergyBreakdown(
+        event_id=event.id,
+        port=event.port,
+        port_hours=port_hours,
+        reefers=reefers,
+        total_electrical_load_kw=total_load_kw,
+        generator_load_percent=generator_load_percent,
+        generator_sfoc_g_per_kwh=generator_sfoc,
+        generator_consumed_mt=generator,
+        boiler_consumed_mt=boiler,
+        total_consumed_mt=total,
+        calculation_mode=mode,
+        warnings=tuple(local_warnings),
+    )
+
+
+def _energy_config_ready(config: VesselEnergyConfig) -> bool:
+    return (
+        config.generator_rated_kw > 0
+        and config.port_running_generators > 0
+        and config.sea_running_generators > 0
+        and config.generator_fuel_type in FUEL_TYPES
+        and config.boiler_fuel_type in FUEL_TYPES
+    )
+
+
+def _generator_load_percent(
+    total_load_kw: float,
+    rated_kw: float,
+    running_generators: float,
+    warnings: list[str],
+) -> float | None:
+    if total_load_kw <= 0:
+        return 0.0
+    capacity = rated_kw * running_generators
+    if capacity <= 0:
+        warnings.append("Generator count/capacity is zero while electrical load is nonzero.")
+        return None
+    load_percent = total_load_kw / capacity * 100
+    if load_percent > 100:
+        warnings.append("Calculated generator load exceeds configured running capacity.")
+    return load_percent
+
+
+def _generator_fuel(total_load_kw: float, sfoc_g_per_kwh: float, hours: float) -> float:
+    return total_load_kw * sfoc_g_per_kwh / 1_000_000 * max(0.0, hours)
 
 
 def _port_hours(event: ScheduleEvent, actual_arrival, actual_departure, fallback: float | None) -> float:

@@ -6,6 +6,7 @@ from PySide6.QtCore import QAbstractTableModel, QDateTime, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
+    QComboBox,
     QDateTimeEdit,
     QDoubleSpinBox,
     QFrame,
@@ -20,7 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from fuel_consumption_calculator.domain.consumption import FUEL_TYPES
-from fuel_consumption_calculator.domain.voyage import CalculatedVoyageLeg, SpeedConsumptionPoint
+from fuel_consumption_calculator.domain.voyage import CalculatedVoyageLeg, GeneratorSfocPoint, SpeedConsumptionPoint, VesselEnergyConfig
 from fuel_consumption_calculator.services.consumption_service import ConsumptionService
 from fuel_consumption_calculator.services.schedule_service import ScheduleService
 from fuel_consumption_calculator.services.vessel_service import VesselService
@@ -100,7 +101,8 @@ class VoyagePage(QWidget):
         self._consumption_service = consumption_service
         self._voyage_service = voyage_service
         self._loading = False
-        self._speed_inputs: list[tuple[QDoubleSpinBox, dict[str, QDoubleSpinBox]]] = []
+        self._speed_inputs: list[tuple[QDoubleSpinBox, QDoubleSpinBox, dict[str, QDoubleSpinBox]]] = []
+        self._sfoc_inputs: list[tuple[QDoubleSpinBox, QDoubleSpinBox]] = []
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(32, 28, 32, 28)
@@ -158,6 +160,15 @@ class VoyagePage(QWidget):
             self._actual_enabled[key] = checkbox
             self._actual_inputs[key] = dt_input
 
+        self.port_reefers = _spinbox("", 0, 999999, 1)
+        self.departure_reefers = _spinbox("", 0, 999999, 1)
+        self.use_egb_check = QCheckBox("Use EGB when available")
+        grid.addWidget(QLabel("Port Stay Reefers"), 4, 0)
+        grid.addWidget(self.port_reefers, 5, 0)
+        grid.addWidget(QLabel("Departure Reefers"), 4, 1)
+        grid.addWidget(self.departure_reefers, 5, 1)
+        grid.addWidget(self.use_egb_check, 5, 2)
+
         self.save_library_check = QCheckBox("Also save route library")
         self.save_leg_button = QPushButton("Save / Apply Leg Values")
         self.save_leg_button.setObjectName("primaryButton")
@@ -169,26 +180,69 @@ class VoyagePage(QWidget):
         actions.addWidget(self.save_leg_button)
         actions.addWidget(self.reset_leg_button)
         actions.addStretch()
-        grid.addLayout(actions, 4, 0, 1, 5)
+        grid.addLayout(actions, 6, 0, 1, 5)
         layout.addWidget(editor)
+
+        config_panel = QFrame()
+        config_panel.setObjectName("panel")
+        config_grid = QGridLayout(config_panel)
+        config_grid.setContentsMargins(18, 16, 18, 16)
+        config_grid.addWidget(QLabel("VESSEL ELECTRICAL / BOILER CONFIG"), 0, 0, 1, 6)
+        config_fields = [
+            ("Port Base kW", "port_base_load_kw"),
+            ("Sea Base kW", "sea_base_load_kw"),
+            ("Reefer kW/unit", "reefer_kw_per_unit"),
+            ("DG Rated kW", "generator_rated_kw"),
+            ("Port DG Count", "port_running_generators"),
+            ("Sea DG Count", "sea_running_generators"),
+            ("Aux Boiler MT/h", "aux_boiler_mt_per_hour"),
+        ]
+        self._energy_inputs: dict[str, QDoubleSpinBox] = {}
+        for index, (label, key) in enumerate(config_fields):
+            row, column = divmod(index, 4)
+            config_grid.addWidget(QLabel(label), row * 2 + 1, column)
+            spinbox = _spinbox("", 0, 999999, 1)
+            config_grid.addWidget(spinbox, row * 2 + 2, column)
+            self._energy_inputs[key] = spinbox
+        self.generator_fuel_combo = QComboBox()
+        self.generator_fuel_combo.addItems(FUEL_TYPES)
+        self.boiler_fuel_combo = QComboBox()
+        self.boiler_fuel_combo.addItems(FUEL_TYPES)
+        config_grid.addWidget(QLabel("DG Fuel"), 5, 0)
+        config_grid.addWidget(self.generator_fuel_combo, 6, 0)
+        config_grid.addWidget(QLabel("Boiler Fuel"), 5, 1)
+        config_grid.addWidget(self.boiler_fuel_combo, 6, 1)
+        self.save_energy_button = QPushButton("Save Energy Config")
+        self.save_energy_button.clicked.connect(self._save_energy_config)
+        config_grid.addWidget(self.save_energy_button, 6, 2, 1, 2)
+        layout.addWidget(config_panel)
 
         speed_panel = QFrame()
         speed_panel.setObjectName("panel")
         speed_grid = QGridLayout(speed_panel)
         speed_grid.setContentsMargins(18, 16, 18, 16)
-        speed_grid.addWidget(QLabel("SPEED-CONSUMPTION POINTS (linear interpolation, no extrapolation)"), 0, 0, 1, 4)
-        for column, header in enumerate(("Speed kn", "ULSFO MT/day", "VLSFO MT/day", "MDO MT/day")):
+        speed_grid.addWidget(QLabel("SPEED / ME LOAD / CONSUMPTION POINTS (linear interpolation, no extrapolation)"), 0, 0, 1, 5)
+        for column, header in enumerate(("Speed kn", "ME Load %", "ULSFO MT/day", "VLSFO MT/day", "MDO MT/day")):
             speed_grid.addWidget(QLabel(header), 1, column)
         for row in range(3):
             speed_input = _spinbox(" kn", 0, 50, 1)
+            me_load_input = _spinbox(" %", 0, 100, 1)
             rate_inputs = {fuel_type: _spinbox(" MT/day", 0, 9999, 1) for fuel_type in FUEL_TYPES}
             speed_grid.addWidget(speed_input, row + 2, 0)
-            for column, fuel_type in enumerate(FUEL_TYPES, start=1):
+            speed_grid.addWidget(me_load_input, row + 2, 1)
+            for column, fuel_type in enumerate(FUEL_TYPES, start=2):
                 speed_grid.addWidget(rate_inputs[fuel_type], row + 2, column)
-            self._speed_inputs.append((speed_input, rate_inputs))
+            self._speed_inputs.append((speed_input, me_load_input, rate_inputs))
+        speed_grid.addWidget(QLabel("GENERATOR SFOC POINTS"), 5, 0, 1, 2)
+        for row in range(3):
+            load_input = _spinbox(" %", 0, 200, 5)
+            sfoc_input = _spinbox(" g/kWh", 0, 9999, 1)
+            speed_grid.addWidget(load_input, row + 6, 0)
+            speed_grid.addWidget(sfoc_input, row + 6, 1)
+            self._sfoc_inputs.append((load_input, sfoc_input))
         self.save_speed_button = QPushButton("Save Speed Table")
         self.save_speed_button.clicked.connect(self._save_speed_points)
-        speed_grid.addWidget(self.save_speed_button, 5, 0, 1, 4)
+        speed_grid.addWidget(self.save_speed_button, 9, 0, 1, 5)
         layout.addWidget(speed_panel)
 
         self.status_label = QLabel("Ready")
@@ -209,6 +263,7 @@ class VoyagePage(QWidget):
         profile = self._consumption_service.load_profile(vessel.id)
         plan = self._voyage_service.calculate_plan(vessel.id, events, profile)
         self.legs_model.set_rows(plan.legs)
+        self._load_energy_config(vessel.id)
         self._load_speed_points(vessel.id)
         self.status_label.setText("; ".join(plan.warnings[:2]) if plan.warnings else f"Loaded {len(plan.legs)} voyage legs.")
         if plan.legs and not self.legs_table.selectionModel().selectedRows():
@@ -227,6 +282,10 @@ class VoyagePage(QWidget):
         self.sea_distance.setValue(_effective(override.sea_distance_nm if override else None, row.leg.route.sea_distance_nm))
         self.arr_pilot_dist.setValue(_effective(override.arrival_pilot_distance_nm if override else None, row.leg.route.arrival_pilot_distance_nm))
         self.arr_pilot_hours.setValue(_effective(override.arrival_pilotage_hours if override else None, row.leg.route.arrival_pilotage_hours))
+        self.port_reefers.setValue(override.port_reefers if override and override.port_reefers is not None else 0.0)
+        self.departure_reefers.setValue(override.departure_reefers if override and override.departure_reefers is not None else 0.0)
+        self.use_egb_check.setChecked(bool(override.use_egb) if override else False)
+        self.use_egb_check.setEnabled(row.egb_available)
         for key, input_widget in self._actual_inputs.items():
             value = getattr(override, key) if override else None
             fallback = {
@@ -255,6 +314,9 @@ class VoyagePage(QWidget):
                 actual_pilot_off=self._actual_value("actual_pilot_off"),
                 actual_pilot_on=self._actual_value("actual_pilot_on"),
                 actual_berth_arrival=self._actual_value("actual_berth_arrival"),
+                port_reefers=self.port_reefers.value() if hasattr(self, "port_reefers") else 0.0,
+                departure_reefers=self.departure_reefers.value() if hasattr(self, "departure_reefers") else 0.0,
+                use_egb=self.use_egb_check.isChecked() if hasattr(self, "use_egb_check") else False,
                 save_library=self.save_library_check.isChecked(),
             )
         except Exception as exc:
@@ -277,7 +339,7 @@ class VoyagePage(QWidget):
             return
         points: list[SpeedConsumptionPoint] = []
         try:
-            for speed_input, rate_inputs in self._speed_inputs:
+            for speed_input, me_load_input, rate_inputs in self._speed_inputs:
                 if speed_input.value() <= 0:
                     continue
                 points.append(
@@ -285,9 +347,16 @@ class VoyagePage(QWidget):
                         vessel.id,
                         speed_input.value(),
                         {fuel_type: rate_inputs[fuel_type].value() for fuel_type in FUEL_TYPES},
+                        me_load_input.value(),
                     )
                 )
             self._voyage_service.save_speed_points(vessel.id, points)
+            sfoc_points = [
+                GeneratorSfocPoint(vessel.id, load.value(), sfoc.value())
+                for load, sfoc in self._sfoc_inputs
+                if load.value() > 0 or sfoc.value() > 0
+            ]
+            self._voyage_service.save_generator_sfoc_points(vessel.id, sfoc_points)
         except Exception as exc:
             QMessageBox.warning(self, "Speed table not saved", str(exc))
             return
@@ -297,12 +366,50 @@ class VoyagePage(QWidget):
     def _load_speed_points(self, vessel_id: int) -> None:
         self._loading = True
         points = self._voyage_service.list_speed_points(vessel_id)
-        for index, (speed_input, rate_inputs) in enumerate(self._speed_inputs):
+        for index, (speed_input, me_load_input, rate_inputs) in enumerate(self._speed_inputs):
             point = points[index] if index < len(points) else None
             speed_input.setValue(point.speed_knots if point else 0.0)
+            me_load_input.setValue(point.main_engine_load_percent if point and point.main_engine_load_percent is not None else 0.0)
             for fuel_type in FUEL_TYPES:
                 rate_inputs[fuel_type].setValue(point.rate_for(fuel_type) if point else 0.0)
+        sfoc_points = self._voyage_service.list_generator_sfoc_points(vessel_id)
+        for index, (load_input, sfoc_input) in enumerate(self._sfoc_inputs):
+            point = sfoc_points[index] if index < len(sfoc_points) else None
+            load_input.setValue(point.load_percent if point else 0.0)
+            sfoc_input.setValue(point.sfoc_g_per_kwh if point else 0.0)
         self._loading = False
+
+    def _load_energy_config(self, vessel_id: int) -> None:
+        config = self._voyage_service.load_energy_config(vessel_id)
+        for key, spinbox in self._energy_inputs.items():
+            spinbox.setValue(getattr(config, key))
+        self.generator_fuel_combo.setCurrentText(config.generator_fuel_type)
+        self.boiler_fuel_combo.setCurrentText(config.boiler_fuel_type)
+
+    def _save_energy_config(self) -> None:
+        vessel = self._vessel_service.get_active_vessel()
+        if vessel is None:
+            return
+        try:
+            self._voyage_service.save_energy_config(
+                VesselEnergyConfig(
+                    vessel_id=vessel.id,
+                    port_base_load_kw=self._energy_inputs["port_base_load_kw"].value(),
+                    sea_base_load_kw=self._energy_inputs["sea_base_load_kw"].value(),
+                    reefer_kw_per_unit=self._energy_inputs["reefer_kw_per_unit"].value(),
+                    generator_rated_kw=self._energy_inputs["generator_rated_kw"].value(),
+                    port_running_generators=self._energy_inputs["port_running_generators"].value(),
+                    sea_running_generators=self._energy_inputs["sea_running_generators"].value(),
+                    aux_boiler_mt_per_hour=self._energy_inputs["aux_boiler_mt_per_hour"].value(),
+                    generator_fuel_type=self.generator_fuel_combo.currentText(),
+                    boiler_fuel_type=self.boiler_fuel_combo.currentText(),
+                )
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Energy config not saved", str(exc))
+            return
+        self.refresh()
+        self.status_label.setText("Energy configuration saved.")
 
     def _selected_row(self) -> CalculatedVoyageLeg | None:
         selected = self.legs_table.selectionModel().selectedRows() if self.legs_table.selectionModel() else []

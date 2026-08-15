@@ -66,6 +66,8 @@ class Database:
                 self._migrate_to_v6(connection)
             if current_version < 7:
                 self._migrate_to_v7(connection)
+            if current_version < 8:
+                self._migrate_to_v8(connection)
             connection.execute(
                 "INSERT OR REPLACE INTO application_metadata (key, value) VALUES ('schema_version', ?)",
                 (str(SCHEMA_VERSION),),
@@ -286,3 +288,59 @@ class Database:
             """
         )
         LOGGER.info("Database migrated to schema version 7.")
+
+    def _migrate_to_v8(self, connection: sqlite3.Connection) -> None:
+        def add_column_if_missing(table: str, column: str, ddl: str) -> None:
+            columns = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
+            if column not in columns:
+                connection.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+
+        add_column_if_missing("vessel_speed_consumption_points", "main_engine_load_percent", "main_engine_load_percent REAL")
+        add_column_if_missing("voyage_leg_overrides", "port_reefers", "port_reefers REAL")
+        add_column_if_missing("voyage_leg_overrides", "departure_reefers", "departure_reefers REAL")
+        add_column_if_missing("voyage_leg_overrides", "use_egb", "use_egb INTEGER NOT NULL DEFAULT 0")
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS vessel_energy_config (
+                vessel_id INTEGER PRIMARY KEY,
+                port_base_load_kw REAL NOT NULL DEFAULT 0,
+                sea_base_load_kw REAL NOT NULL DEFAULT 0,
+                reefer_kw_per_unit REAL NOT NULL DEFAULT 0,
+                generator_rated_kw REAL NOT NULL DEFAULT 0,
+                port_running_generators REAL NOT NULL DEFAULT 0,
+                sea_running_generators REAL NOT NULL DEFAULT 0,
+                aux_boiler_mt_per_hour REAL NOT NULL DEFAULT 0,
+                generator_fuel_type TEXT NOT NULL DEFAULT 'MDO',
+                boiler_fuel_type TEXT NOT NULL DEFAULT 'MDO',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (vessel_id) REFERENCES vessels(id) ON DELETE CASCADE,
+                CHECK (port_base_load_kw >= 0),
+                CHECK (sea_base_load_kw >= 0),
+                CHECK (reefer_kw_per_unit >= 0),
+                CHECK (generator_rated_kw >= 0),
+                CHECK (port_running_generators >= 0),
+                CHECK (sea_running_generators >= 0),
+                CHECK (aux_boiler_mt_per_hour >= 0),
+                CHECK (generator_fuel_type IN ('ULSFO', 'VLSFO', 'MDO')),
+                CHECK (boiler_fuel_type IN ('ULSFO', 'VLSFO', 'MDO'))
+            );
+
+            CREATE TABLE IF NOT EXISTS generator_sfoc_points (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vessel_id INTEGER NOT NULL,
+                load_percent REAL NOT NULL,
+                sfoc_g_per_kwh REAL NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (vessel_id) REFERENCES vessels(id) ON DELETE CASCADE,
+                UNIQUE (vessel_id, load_percent),
+                CHECK (load_percent >= 0),
+                CHECK (sfoc_g_per_kwh >= 0)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_generator_sfoc_points_vessel_load
+                ON generator_sfoc_points (vessel_id, load_percent);
+            """
+        )
+        LOGGER.info("Database migrated to schema version 8.")

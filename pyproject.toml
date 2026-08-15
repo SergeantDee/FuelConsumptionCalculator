@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fuel-consumption-calculator"
-version = "0.8.0"
+version = "0.9.0"
 description = "Standalone Windows vessel fuel consumption planning application"
 readme = "README.md"
 requires-python = ">=3.12,<3.15"

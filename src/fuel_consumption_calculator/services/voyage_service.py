@@ -7,7 +7,7 @@ from fuel_consumption_calculator.calculations.voyage_engine import calculate_con
 from fuel_consumption_calculator.domain.consumption import FUEL_TYPES, ConsumptionProfile
 from fuel_consumption_calculator.domain.schedule import ScheduleEvent
 from fuel_consumption_calculator.domain.schedule_timeline import ScheduleTimeline
-from fuel_consumption_calculator.domain.voyage import RouteDefinition, SpeedConsumptionPoint, VoyageLeg, VoyageLegOverride, VoyagePlan
+from fuel_consumption_calculator.domain.voyage import GeneratorSfocPoint, RouteDefinition, SpeedConsumptionPoint, VesselEnergyConfig, VoyageLeg, VoyageLegOverride, VoyagePlan
 from fuel_consumption_calculator.legacy_voyage_data import legacy_pilot_info, legacy_sea_distance
 from fuel_consumption_calculator.repositories.voyage_repository import VoyageRepository
 
@@ -26,15 +26,30 @@ class VoyageService:
     def list_speed_points(self, vessel_id: int) -> list[SpeedConsumptionPoint]:
         return self._repository.list_speed_points(vessel_id)
 
+    def load_energy_config(self, vessel_id: int) -> VesselEnergyConfig:
+        return self._repository.load_energy_config(vessel_id)
+
+    def save_energy_config(self, config: VesselEnergyConfig) -> VesselEnergyConfig:
+        self._validate_energy_config(config)
+        return self._repository.save_energy_config(config)
+
+    def list_generator_sfoc_points(self, vessel_id: int) -> list[GeneratorSfocPoint]:
+        return self._repository.list_generator_sfoc_points(vessel_id)
+
+    def save_generator_sfoc_points(self, vessel_id: int, points: list[GeneratorSfocPoint]) -> list[GeneratorSfocPoint]:
+        self._validate_generator_sfoc_points(points)
+        return self._repository.save_generator_sfoc_points(vessel_id, points)
+
     def save_speed_points(self, vessel_id: int, points: list[SpeedConsumptionPoint]) -> list[SpeedConsumptionPoint]:
         self._validate_speed_points(points)
         return self._repository.save_speed_points(vessel_id, points)
 
-    def build_speed_point(self, vessel_id: int, speed_knots: float, rates: dict[str, float]) -> SpeedConsumptionPoint:
+    def build_speed_point(self, vessel_id: int, speed_knots: float, rates: dict[str, float], main_engine_load_percent: float | None = None) -> SpeedConsumptionPoint:
         point = SpeedConsumptionPoint(
             vessel_id=vessel_id,
             speed_knots=float(speed_knots),
             rates_mt_per_day={fuel_type: float(rates.get(fuel_type, 0.0)) for fuel_type in FUEL_TYPES},
+            main_engine_load_percent=main_engine_load_percent,
         )
         self._validate_speed_points([point])
         return point
@@ -86,6 +101,8 @@ class VoyageService:
             self.build_legs(vessel_id, events),
             profile,
             self.list_speed_points(vessel_id),
+            self.load_energy_config(vessel_id),
+            self.list_generator_sfoc_points(vessel_id),
         )
 
     def calculate_schedule_consumption(
@@ -111,6 +128,9 @@ class VoyageService:
         actual_pilot_off: datetime | None = None,
         actual_pilot_on: datetime | None = None,
         actual_berth_arrival: datetime | None = None,
+        port_reefers: float | None = None,
+        departure_reefers: float | None = None,
+        use_egb: bool = False,
         save_library: bool = False,
     ) -> VoyageLegOverride:
         if save_library:
@@ -141,6 +161,9 @@ class VoyageService:
             actual_pilot_off=actual_pilot_off,
             actual_pilot_on=actual_pilot_on,
             actual_berth_arrival=actual_berth_arrival,
+            port_reefers=port_reefers,
+            departure_reefers=departure_reefers,
+            use_egb=use_egb,
         )
         self._validate_override(override)
         return self._repository.save_override(override)
@@ -200,6 +223,8 @@ class VoyageService:
             override.sea_distance_nm,
             override.arrival_pilot_distance_nm,
             override.arrival_pilotage_hours,
+            override.port_reefers,
+            override.departure_reefers,
         ):
             if value is not None and value < 0:
                 raise ValueError("Voyage override distances and durations cannot be negative.")
@@ -215,6 +240,32 @@ class VoyageService:
             for fuel_type in FUEL_TYPES:
                 if point.rate_for(fuel_type) < 0:
                     raise ValueError("Speed consumption rates cannot be negative.")
+            if point.main_engine_load_percent is not None and point.main_engine_load_percent < 0:
+                raise ValueError("Main Engine load percent cannot be negative.")
+
+    def _validate_energy_config(self, config: VesselEnergyConfig) -> None:
+        for value in (
+            config.port_base_load_kw,
+            config.sea_base_load_kw,
+            config.reefer_kw_per_unit,
+            config.generator_rated_kw,
+            config.port_running_generators,
+            config.sea_running_generators,
+            config.aux_boiler_mt_per_hour,
+        ):
+            if value < 0:
+                raise ValueError("Energy configuration values cannot be negative.")
+        if config.generator_fuel_type not in FUEL_TYPES or config.boiler_fuel_type not in FUEL_TYPES:
+            raise ValueError("Generator and boiler fuel types must be ULSFO, VLSFO, or MDO.")
+
+    def _validate_generator_sfoc_points(self, points: list[GeneratorSfocPoint]) -> None:
+        seen = set()
+        for point in points:
+            if point.load_percent < 0 or point.sfoc_g_per_kwh < 0:
+                raise ValueError("Generator SFOC points cannot be negative.")
+            if point.load_percent in seen:
+                raise ValueError("Duplicate generator load point.")
+            seen.add(point.load_percent)
 
 
 def _identity_for_leg(vessel_id: int, origin: ScheduleEvent, destination: ScheduleEvent) -> tuple:
