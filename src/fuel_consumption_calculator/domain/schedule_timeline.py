@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timezone
 
 from fuel_consumption_calculator.domain.schedule import ScheduleEvent
 
@@ -25,15 +26,15 @@ class ScheduleTimeline:
 
 
 def build_schedule_timeline(events: list[ScheduleEvent]) -> ScheduleTimeline:
-    ordered_events = sorted(events, key=lambda event: (event.sequence_number, event.effective_arrival_at, event.id))
+    ordered_events = sorted(events, key=lambda event: (event.sequence_number, event.arrival_at, event.id))
     rows: list[ScheduleTimelineRow] = []
     issues: list[ScheduleTimelineIssue] = []
     previous_anchor = None
 
     for event in ordered_events:
         port_stay_hours = None
-        arrival_at = event.effective_arrival_at
-        departure_at = event.effective_departure_at
+        arrival_at = _timeline_value(event.arrival_at_utc or event.arrival_at)
+        departure_at = _timeline_value(event.departure_at_utc or event.departure_at) if (event.departure_at_utc or event.departure_at) else None
         if event.timezone_status != "RESOLVED":
             issues.append(
                 ScheduleTimelineIssue(
@@ -41,6 +42,15 @@ def build_schedule_timeline(events: list[ScheduleEvent]) -> ScheduleTimeline:
                     message=f"{event.port} timezone conversion is unresolved.",
                 )
             )
+            rows.append(
+                ScheduleTimelineRow(
+                    event=event,
+                    port_stay_hours=None,
+                    interval_from_previous_hours=None,
+                )
+            )
+            previous_anchor = None
+            continue
         if departure_at is not None:
             if departure_at < arrival_at:
                 issues.append(
@@ -78,3 +88,9 @@ def build_schedule_timeline(events: list[ScheduleEvent]) -> ScheduleTimeline:
 
 def _hours_between(start, end) -> float:
     return (end - start).total_seconds() / 3600
+
+
+def _timeline_value(value):
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)

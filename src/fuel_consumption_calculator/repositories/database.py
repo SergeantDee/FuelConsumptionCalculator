@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
@@ -71,6 +72,9 @@ class Database:
                 self._migrate_to_v8(connection)
             if current_version < 9:
                 self._migrate_to_v9(connection)
+            if current_version >= 9:
+                self._ensure_default_port_timezones(connection)
+                self._resolve_existing_schedule_timezones(connection)
             connection.execute(
                 "INSERT OR REPLACE INTO application_metadata (key, value) VALUES ('schema_version', ?)",
                 (str(SCHEMA_VERSION),),
@@ -418,7 +422,12 @@ class Database:
                 ON fuel_changeover_events (vessel_id, planned_at_utc, actual_at_utc);
             """
         )
-        timestamp = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(timespec="seconds")
+        self._ensure_default_port_timezones(connection)
+        self._resolve_existing_schedule_timezones(connection)
+        LOGGER.info("Database migrated to schema version 9.")
+
+    def _ensure_default_port_timezones(self, connection: sqlite3.Connection) -> None:
+        timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
         for port, timezone_id in DEFAULT_PORT_TIMEZONES.items():
             key = normalize_port_name(port)
             connection.execute(
@@ -429,6 +438,8 @@ class Database:
                 """,
                 (key, port, timezone_id, timestamp, timestamp),
             )
+
+    def _resolve_existing_schedule_timezones(self, connection: sqlite3.Connection) -> None:
         timezone_by_key = {
             row["port_key"]: row["timezone_id"]
             for row in connection.execute("SELECT port_key, timezone_id FROM port_timezones").fetchall()
@@ -442,11 +453,15 @@ class Database:
         ).fetchall()
         for row in rows:
             timezone_id = timezone_by_key.get(normalize_port_name(row["port"]))
-            arrival_result = local_to_utc(__import__("datetime").datetime.fromisoformat(row["arrival_at"]), timezone_id)
-            departure_result = local_to_utc(__import__("datetime").datetime.fromisoformat(row["departure_at"]), timezone_id) if row["departure_at"] else None
+            arrival_result = local_to_utc(datetime.fromisoformat(row["arrival_at"]), timezone_id)
+            departure_result = local_to_utc(datetime.fromisoformat(row["departure_at"]), timezone_id) if row["departure_at"] else None
             status = arrival_result.status
+            if arrival_result.status == "RESOLVED" and departure_result is None:
+                status = "RESOLVED"
             if departure_result is not None and departure_result.status != "RESOLVED":
                 status = departure_result.status
+            elif departure_result is not None and arrival_result.status == "RESOLVED":
+                status = "RESOLVED"
             connection.execute(
                 """
                 UPDATE schedule_events
@@ -461,4 +476,3 @@ class Database:
                     row["id"],
                 ),
             )
-        LOGGER.info("Database migrated to schema version 9.")

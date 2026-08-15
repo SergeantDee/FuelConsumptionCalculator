@@ -88,6 +88,8 @@ class VoyageService:
         overrides = self._matching_overrides(vessel_id, ordered_events)
         legs: list[VoyageLeg] = []
         for origin, destination in zip(ordered_events, ordered_events[1:]):
+            if origin.timezone_status != "RESOLVED" or destination.timezone_status != "RESOLVED":
+                continue
             if origin.effective_departure_at is None:
                 continue
             identity = _identity_for_leg(vessel_id, origin, destination)

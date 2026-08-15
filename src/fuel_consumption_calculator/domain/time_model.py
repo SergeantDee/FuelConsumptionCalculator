@@ -24,6 +24,8 @@ DEFAULT_PORT_TIMEZONES: dict[str, str] = {
     "Itapoa": "America/Sao_Paulo",
     "Paranagua": "America/Sao_Paulo",
     "Rio de Janeiro": "America/Sao_Paulo",
+    "Montevideo": "America/Montevideo",
+    "Buenos Aires": "America/Argentina/Buenos_Aires",
     "Pecem": "America/Fortaleza",
     "Port Tangier Mediterranee": "Africa/Casablanca",
     "Tanger Med": "Africa/Casablanca",

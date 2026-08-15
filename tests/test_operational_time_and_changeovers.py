@@ -54,6 +54,19 @@ def test_missing_port_timezone_remains_unresolved_not_assumed_utc():
     assert result.utc_value is None
 
 
+def test_mixed_resolved_and_unresolved_schedule_does_not_raise_type_error():
+    events = [
+        _event(1, "Paranagua", datetime(2026, 10, 4, 21), datetime(2026, 10, 5, 17), datetime(2026, 10, 5, tzinfo=timezone.utc), datetime(2026, 10, 5, 20, tzinfo=timezone.utc)),
+        ScheduleEvent(2, 1, 2, "Unknown Port", "Port Call", datetime(2026, 10, 8, 3), datetime(2026, 10, 9, 3), "maersk", "Fixture", date(2026, 8, 16), "", "", timezone_status="UNRESOLVED"),
+        _event(3, "Itapoa", datetime(2026, 10, 14, 12), datetime(2026, 10, 15, 4), datetime(2026, 10, 14, 15, tzinfo=timezone.utc), datetime(2026, 10, 15, 7, tzinfo=timezone.utc)),
+    ]
+
+    timeline = build_schedule_timeline(events)
+
+    assert timeline.issues[0].message == "Unknown Port timezone conversion is unresolved."
+    assert timeline.rows[1].interval_from_previous_hours is None
+
+
 def test_me_fuel_change_splits_main_engine_consumption():
     plan = _plan_with_changeovers(
         [FuelChangeoverEvent(None, 1, "MAIN_ENGINE", "VLSFO", "ULSFO", datetime(2026, 1, 1, 12, tzinfo=timezone.utc))]
