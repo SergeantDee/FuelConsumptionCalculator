@@ -3,10 +3,12 @@ from __future__ import annotations
 from PySide6.QtCore import QAbstractTableModel, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QDoubleSpinBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QMessageBox,
     QPushButton,
@@ -29,9 +31,6 @@ class ROBProjectionTableModel(QAbstractTableModel):
         "Port",
         "Sea Duration",
         "Port Duration",
-        "ULSFO Consumed",
-        "VLSFO Consumed",
-        "MDO Consumed",
         "ULSFO ROB",
         "VLSFO ROB",
         "MDO ROB",
@@ -55,22 +54,19 @@ class ROBProjectionTableModel(QAbstractTableModel):
             row.port,
             _format_duration(row.sea_hours),
             _format_duration(row.port_hours),
-            _format_mt(row.consumed_mt["ULSFO"]),
-            _format_mt(row.consumed_mt["VLSFO"]),
-            _format_mt(row.consumed_mt["MDO"]),
             _format_mt(row.projected_rob_mt["ULSFO"]),
             _format_mt(row.projected_rob_mt["VLSFO"]),
             _format_mt(row.projected_rob_mt["MDO"]),
         )
         if role == Qt.ItemDataRole.DisplayRole:
             return values[index.column()]
-        if role == Qt.ItemDataRole.ForegroundRole and index.column() >= 6:
+        if role == Qt.ItemDataRole.ForegroundRole and index.column() >= 3:
             rob_values = (
                 row.projected_rob_mt["ULSFO"],
                 row.projected_rob_mt["VLSFO"],
                 row.projected_rob_mt["MDO"],
             )
-            if rob_values[index.column() - 6] < 0:
+            if rob_values[index.column() - 3] < 0:
                 return QColor("#ff9b9b")
         return None
 
@@ -85,6 +81,11 @@ class ROBProjectionTableModel(QAbstractTableModel):
         self.beginResetModel()
         self._rows = rows
         self.endResetModel()
+
+    def row_at(self, row: int) -> EventROBProjection | None:
+        if not 0 <= row < len(self._rows):
+            return None
+        return self._rows[row]
 
 
 class RobPage(QWidget):
@@ -161,8 +162,26 @@ class RobPage(QWidget):
         self.projection_table = QTableView()
         self.projection_table.setModel(self.projection_table_model)
         self.projection_table.setAlternatingRowColors(True)
-        self.projection_table.horizontalHeader().setStretchLastSection(True)
+        self.projection_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.projection_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.projection_table.verticalHeader().setDefaultSectionSize(32)
+        self.projection_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.projection_table.selectionModel().selectionChanged.connect(self._projection_selection_changed)
         projection_layout.addWidget(self.projection_table)
+
+        details = QFrame()
+        details.setObjectName("panel")
+        details_grid = QGridLayout(details)
+        details_grid.setContentsMargins(14, 12, 14, 12)
+        details_grid.addWidget(QLabel("SELECTED EVENT CONSUMPTION"), 0, 0, 1, 3)
+        self._consumed_labels: dict[str, QLabel] = {}
+        for column, fuel_type in enumerate(FUEL_TYPES):
+            details_grid.addWidget(QLabel(f"{fuel_type} Consumed"), 1, column)
+            label = QLabel("0.00 MT")
+            label.setObjectName("fieldLabel")
+            details_grid.addWidget(label, 2, column)
+            self._consumed_labels[fuel_type] = label
+        projection_layout.addWidget(details)
 
         self.final_rob_label = QLabel("Final ROB: ULSFO 0.00 MT   |   VLSFO 0.00 MT   |   MDO 0.00 MT")
         self.final_rob_label.setObjectName("fieldLabel")
@@ -228,6 +247,10 @@ class RobPage(QWidget):
             self._clear_projection(str(exc))
             return
         self.projection_table_model.set_rows(projection.rows)
+        if projection.rows:
+            self.projection_table.selectRow(0)
+        else:
+            self._set_consumption_details(None)
         self.final_rob_label.setText(
             "Final ROB: "
             f"ULSFO {_format_mt(projection.final_rob_mt['ULSFO'])}   |   "
@@ -237,6 +260,7 @@ class RobPage(QWidget):
 
     def _clear_projection(self, message: str) -> None:
         self.projection_table_model.set_rows([])
+        self._set_consumption_details(None)
         self.final_rob_label.setText(
             "Final ROB: ULSFO 0.00 MT   |   VLSFO 0.00 MT   |   MDO 0.00 MT"
             f"   |   {message}"
@@ -249,6 +273,15 @@ class RobPage(QWidget):
     def _set_inputs_to_zero(self) -> None:
         for spinbox in self._rob_inputs.values():
             spinbox.setValue(0.0)
+
+    def _projection_selection_changed(self) -> None:
+        selected = self.projection_table.selectionModel().selectedRows() if self.projection_table.selectionModel() else []
+        row = self.projection_table_model.row_at(selected[0].row()) if selected else None
+        self._set_consumption_details(row)
+
+    def _set_consumption_details(self, row: EventROBProjection | None) -> None:
+        for fuel_type, label in self._consumed_labels.items():
+            label.setText(_format_mt(row.consumed_mt[fuel_type]) if row else "0.00 MT")
 
 
 def _format_mt(value: float) -> str:

@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QMessageBox,
     QPushButton,
@@ -195,24 +196,37 @@ class BunkerPage(QWidget):
         self.plan_status_label = QLabel("Status: DRAFT")
         self.plan_status_label.setObjectName("fieldLabel")
         plan_layout.addWidget(self.plan_status_label)
-        plan_grid = QGridLayout()
-        headers = ("Fuel", "Capacity", "Target %", "Target ROB", "Arrival ROB", "Max Lift", "Planned Lift")
-        for column, header in enumerate(headers):
-            plan_grid.addWidget(QLabel(header), 0, column)
-        for row, fuel_type in enumerate(FUEL_TYPES, start=1):
-            plan_grid.addWidget(QLabel(fuel_type), row, 0)
+        fuel_cards = QHBoxLayout()
+        fuel_cards.setSpacing(12)
+        for fuel_type in FUEL_TYPES:
+            card = QFrame()
+            card.setObjectName("panel")
+            card_grid = QGridLayout(card)
+            card_grid.setContentsMargins(14, 12, 14, 12)
+            title = QLabel(fuel_type)
+            title.setObjectName("sectionTitle")
+            card_grid.addWidget(title, 0, 0, 1, 2)
             capacity_label = QLabel("0.00 MT")
             target_label = QLabel("90.00 %")
             target_rob_label = QLabel("0.00 MT")
             arrival_label = QLabel("0.00 MT")
             max_lift_label = QLabel("0.00 MT")
             planned_input = _spinbox(" MT", 0, 999999.99, 10)
-            plan_grid.addWidget(capacity_label, row, 1)
-            plan_grid.addWidget(target_label, row, 2)
-            plan_grid.addWidget(target_rob_label, row, 3)
-            plan_grid.addWidget(arrival_label, row, 4)
-            plan_grid.addWidget(max_lift_label, row, 5)
-            plan_grid.addWidget(planned_input, row, 6)
+            for label_row, (label_text, value_widget) in enumerate(
+                (
+                    ("Capacity", capacity_label),
+                    ("Target %", target_label),
+                    ("Target ROB", target_rob_label),
+                    ("Arrival ROB", arrival_label),
+                    ("Max Lift", max_lift_label),
+                    ("Planned Lift", planned_input),
+                ),
+                start=1,
+            ):
+                field = QLabel(label_text)
+                field.setObjectName("fieldLabel")
+                card_grid.addWidget(field, label_row, 0)
+                card_grid.addWidget(value_widget, label_row, 1)
             self._target_rob_labels[fuel_type] = target_rob_label
             self._arrival_rob_labels[fuel_type] = arrival_label
             self._max_lift_labels[fuel_type] = max_lift_label
@@ -220,7 +234,8 @@ class BunkerPage(QWidget):
             planned_input.valueChanged.connect(self._planned_quantity_changed)
             setattr(self, f"_{fuel_type.lower()}_capacity_label", capacity_label)
             setattr(self, f"_{fuel_type.lower()}_target_label", target_label)
-        plan_layout.addLayout(plan_grid)
+            fuel_cards.addWidget(card)
+        plan_layout.addLayout(fuel_cards)
         actions = QHBoxLayout()
         self.save_plan_button = QPushButton("Save Planned Bunker")
         self.save_plan_button.setObjectName("primaryButton")
@@ -230,6 +245,7 @@ class BunkerPage(QWidget):
         self.use_max_button = QPushButton("Use Max Lift")
         self.use_max_button.clicked.connect(self._use_max_lift)
         self.clear_plan_button = QPushButton("Clear Bunker Plan")
+        self.clear_plan_button.setObjectName("dangerButton")
         self.clear_plan_button.clicked.connect(self._clear_plan)
         actions.addWidget(self.save_plan_button)
         actions.addWidget(self.confirm_plan_button)
@@ -244,13 +260,16 @@ class BunkerPage(QWidget):
         self.plans_table.setModel(self.plans_model)
         self.plans_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.plans_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.plans_table.horizontalHeader().setStretchLastSection(True)
+        self.plans_table.verticalHeader().setDefaultSectionSize(32)
+        self.plans_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         layout.addWidget(QLabel("CURRENT BUNKER PLANS"))
         layout.addWidget(self.plans_table)
 
         self.projection_model = BunkerProjectionTableModel()
         self.projection_table = QTableView()
         self.projection_table.setModel(self.projection_model)
+        self.projection_table.verticalHeader().setDefaultSectionSize(32)
+        self.projection_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.projection_table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(QLabel("PROJECTED ROB WITH PLANNED BUNKERS"))
         layout.addWidget(self.projection_table, 1)

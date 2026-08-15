@@ -1,16 +1,19 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QAbstractTableModel, Qt
+from PySide6.QtCore import QAbstractTableModel, QDateTime, Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDateTimeEdit,
     QDoubleSpinBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -21,7 +24,7 @@ from PySide6.QtWidgets import (
 
 from fuel_consumption_calculator.calculations.consumption_engine import EventFuelConsumption
 from fuel_consumption_calculator.domain.consumption import FUEL_TYPES, OPERATING_MODES
-from fuel_consumption_calculator.domain.voyage import FuelChangeoverEvent, MachineryFuelState, MACHINERY_TYPES
+from fuel_consumption_calculator.domain.voyage import FuelChangeoverEvent, GeneratorSfocPoint, MachineryFuelState, MACHINERY_TYPES, SpeedConsumptionPoint, VesselEnergyConfig
 from fuel_consumption_calculator.services.consumption_service import ConsumptionService
 from fuel_consumption_calculator.services.schedule_service import ScheduleService
 from fuel_consumption_calculator.services.vessel_service import VesselService
@@ -84,6 +87,9 @@ class ConsumptionPage(QWidget):
         self._voyage_service = voyage_service
         self._rate_inputs: dict[tuple[str, str], QDoubleSpinBox] = {}
         self._initial_fuel_inputs: dict[str, QComboBox] = {}
+        self._energy_inputs: dict[str, QDoubleSpinBox] = {}
+        self._speed_inputs: list[tuple[QDoubleSpinBox, QDoubleSpinBox, dict[str, QDoubleSpinBox]]] = []
+        self._sfoc_inputs: list[tuple[QDoubleSpinBox, QDoubleSpinBox]] = []
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(32, 28, 32, 28)
@@ -98,9 +104,78 @@ class ConsumptionPage(QWidget):
         layout.addWidget(self.tabs, 1)
 
         performance_tab = QWidget()
-        performance_layout = QVBoxLayout(performance_tab)
-        performance_layout.addWidget(QLabel("Performance values are configured here for the detailed model. Speed/load, generator SFOC, electrical, and boiler values remain the same stored vessel settings used by Voyage Planner."))
+        performance_root = QVBoxLayout(performance_tab)
+        performance_scroll = QScrollArea()
+        performance_scroll.setWidgetResizable(True)
+        performance_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        performance_content = QWidget()
+        performance_layout = QVBoxLayout(performance_content)
+        performance_layout.setSpacing(12)
+        performance_layout.addWidget(_help_label("Detailed vessel-performance data used by Voyage Planner, Projection, ROB, and Bunker calculations."))
+        engine_panel = QFrame()
+        engine_panel.setObjectName("panel")
+        engine_grid = QGridLayout(engine_panel)
+        engine_grid.setContentsMargins(18, 16, 18, 16)
+        engine_grid.addWidget(_section_label("Main Engine Performance"), 0, 0, 1, 5)
+        for column, header in enumerate(("Speed kn", "ME Load %", "ULSFO MT/day", "VLSFO MT/day", "MDO MT/day")):
+            engine_grid.addWidget(QLabel(header), 1, column)
+        for row in range(3):
+            speed_input = _spinbox(" kn", 0, 50, 1)
+            me_load_input = _spinbox(" %", 0, 100, 1)
+            rate_inputs = {fuel_type: _spinbox(" MT/day", 0, 9999, 1) for fuel_type in FUEL_TYPES}
+            engine_grid.addWidget(speed_input, row + 2, 0)
+            engine_grid.addWidget(me_load_input, row + 2, 1)
+            for column, fuel_type in enumerate(FUEL_TYPES, start=2):
+                engine_grid.addWidget(rate_inputs[fuel_type], row + 2, column)
+            self._speed_inputs.append((speed_input, me_load_input, rate_inputs))
+        performance_layout.addWidget(engine_panel)
+
+        generator_panel = QFrame()
+        generator_panel.setObjectName("panel")
+        generator_grid = QGridLayout(generator_panel)
+        generator_grid.setContentsMargins(18, 16, 18, 16)
+        generator_grid.addWidget(_section_label("Generator Performance"), 0, 0, 1, 4)
+        for label, key, column in (("DG Rated kW", "generator_rated_kw", 0), ("Port DG Count", "port_running_generators", 1), ("Sea DG Count", "sea_running_generators", 2)):
+            generator_grid.addWidget(QLabel(label), 1, column)
+            spinbox = _spinbox("", 0, 999999, 1)
+            generator_grid.addWidget(spinbox, 2, column)
+            self._energy_inputs[key] = spinbox
+        generator_grid.addWidget(QLabel("DG Load %"), 3, 0)
+        generator_grid.addWidget(QLabel("SFOC g/kWh"), 3, 1)
+        for row in range(3):
+            load_input = _spinbox(" %", 0, 200, 5)
+            sfoc_input = _spinbox(" g/kWh", 0, 9999, 1)
+            generator_grid.addWidget(load_input, row + 4, 0)
+            generator_grid.addWidget(sfoc_input, row + 4, 1)
+            self._sfoc_inputs.append((load_input, sfoc_input))
+        performance_layout.addWidget(generator_panel)
+
+        electrical_panel = QFrame()
+        electrical_panel.setObjectName("panel")
+        electrical_grid = QGridLayout(electrical_panel)
+        electrical_grid.setContentsMargins(18, 16, 18, 16)
+        electrical_grid.addWidget(_section_label("Electrical Load / Auxiliary Boiler"), 0, 0, 1, 4)
+        for label, key, column in (("Port Base kW", "port_base_load_kw", 0), ("Sea Base kW", "sea_base_load_kw", 1), ("Reefer kW/unit", "reefer_kw_per_unit", 2), ("Aux Boiler MT/h", "aux_boiler_mt_per_hour", 3)):
+            electrical_grid.addWidget(QLabel(label), 1, column)
+            spinbox = _spinbox("", 0, 999999, 1)
+            electrical_grid.addWidget(spinbox, 2, column)
+            self._energy_inputs[key] = spinbox
+        self.generator_fuel_combo = QComboBox()
+        self.generator_fuel_combo.addItems(FUEL_TYPES)
+        self.boiler_fuel_combo = QComboBox()
+        self.boiler_fuel_combo.addItems(FUEL_TYPES)
+        electrical_grid.addWidget(QLabel("DG Fuel"), 3, 0)
+        electrical_grid.addWidget(self.generator_fuel_combo, 4, 0)
+        electrical_grid.addWidget(QLabel("Boiler Fuel"), 3, 1)
+        electrical_grid.addWidget(self.boiler_fuel_combo, 4, 1)
+        self.save_performance_button = QPushButton("Save Performance Settings")
+        self.save_performance_button.setObjectName("primaryButton")
+        self.save_performance_button.clicked.connect(self._save_performance)
+        electrical_grid.addWidget(self.save_performance_button, 4, 2, 1, 2)
+        performance_layout.addWidget(electrical_panel)
         performance_layout.addStretch()
+        performance_scroll.setWidget(performance_content)
+        performance_root.addWidget(performance_scroll)
         self.tabs.addTab(performance_tab, "Performance")
 
         changeover_tab = QWidget()
@@ -135,6 +210,11 @@ class ConsumptionPage(QWidget):
         self.change_actual_input = QDateTimeEdit()
         self.change_actual_input.setCalendarPopup(True)
         self.change_actual_input.setDisplayFormat("dd MMM yyyy HH:mm")
+        self.change_actual_enabled = QCheckBox("Actual time entered")
+        self.change_actual_enabled.toggled.connect(self.change_actual_input.setEnabled)
+        self.change_actual_input.setEnabled(False)
+        self.change_planned_input.setDateTime(QDateTime.currentDateTime())
+        self.change_actual_input.setDateTime(QDateTime.currentDateTime())
         edit_grid.addWidget(QLabel("Machinery"), 0, 0)
         edit_grid.addWidget(self.change_machinery_input, 0, 1)
         edit_grid.addWidget(QLabel("From"), 0, 2)
@@ -143,18 +223,20 @@ class ConsumptionPage(QWidget):
         edit_grid.addWidget(self.change_to_input, 1, 1)
         edit_grid.addWidget(QLabel("Planned UTC"), 1, 2)
         edit_grid.addWidget(self.change_planned_input, 1, 3)
-        edit_grid.addWidget(QLabel("Actual UTC"), 2, 0)
+        edit_grid.addWidget(self.change_actual_enabled, 2, 0)
         edit_grid.addWidget(self.change_actual_input, 2, 1)
         self.add_changeover_button = QPushButton("Add Changeover")
         self.add_changeover_button.clicked.connect(self._add_changeover)
         self.delete_changeover_button = QPushButton("Delete Selected")
+        self.delete_changeover_button.setObjectName("dangerButton")
         self.delete_changeover_button.clicked.connect(self._delete_changeover)
         edit_grid.addWidget(self.add_changeover_button, 2, 2)
         edit_grid.addWidget(self.delete_changeover_button, 2, 3)
         changeover_layout.addWidget(edit_panel)
-        self.changeover_table = QTableWidget(0, 6)
-        self.changeover_table.setHorizontalHeaderLabels(["ID", "Machinery", "From", "To", "Effective UTC", "Status"])
-        self.changeover_table.horizontalHeader().setStretchLastSection(True)
+        self.changeover_table = QTableWidget(0, 7)
+        self.changeover_table.setHorizontalHeaderLabels(["ID", "Machinery", "From", "To", "Planned UTC", "Actual UTC", "Status"])
+        self.changeover_table.verticalHeader().setDefaultSectionSize(32)
+        self.changeover_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         changeover_layout.addWidget(self.changeover_table)
         self.tabs.addTab(changeover_tab, "Fuel Changeovers")
 
@@ -189,6 +271,8 @@ class ConsumptionPage(QWidget):
 
         fallback_tab = QWidget()
         fallback_layout = QVBoxLayout(fallback_tab)
+        fallback_layout.addWidget(_section_label("Fixed-Rate Fallback"))
+        fallback_layout.addWidget(_help_label("Used only when detailed vessel-performance data is unavailable."))
         fallback_layout.addWidget(matrix)
 
         actions = QHBoxLayout()
@@ -216,7 +300,8 @@ class ConsumptionPage(QWidget):
         self.projection_table = QTableView()
         self.projection_table.setModel(self.projection_table_model)
         self.projection_table.setAlternatingRowColors(True)
-        self.projection_table.horizontalHeader().setStretchLastSection(True)
+        self.projection_table.verticalHeader().setDefaultSectionSize(32)
+        self.projection_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         projection_layout.addWidget(self.projection_table)
 
         self.totals_label = QLabel("ULSFO Total: 0.00 MT   |   VLSFO Total: 0.00 MT   |   MDO Total: 0.00 MT")
@@ -237,6 +322,7 @@ class ConsumptionPage(QWidget):
             self.save_button.setEnabled(False)
             self._set_inputs_enabled(False)
             self._set_changeover_inputs_enabled(False)
+            self.save_performance_button.setEnabled(False)
             self._set_rates_to_zero()
             self._clear_projection("No vessel configured.")
             self.status_label.setText("Configure a vessel before saving consumption rates.")
@@ -246,12 +332,14 @@ class ConsumptionPage(QWidget):
         self.save_button.setEnabled(True)
         self._set_inputs_enabled(True)
         self._set_changeover_inputs_enabled(True)
+        self.save_performance_button.setEnabled(True)
         profile = self._consumption_service.load_profile(vessel.id)
         for key, spinbox in self._rate_inputs.items():
             spinbox.setValue(profile.rate_for(*key))
         self._refresh_projection(vessel.id)
         self._refresh_fuel_state(vessel.id)
         self._refresh_changeovers(vessel.id)
+        self._load_performance(vessel.id)
         self.status_label.setText("Consumption profile loaded.")
 
     def _save_profile(self) -> None:
@@ -312,8 +400,20 @@ class ConsumptionPage(QWidget):
         )
 
     def _set_changeover_inputs_enabled(self, enabled: bool) -> None:
-        for widget in [*self._initial_fuel_inputs.values(), self.save_initial_fuel_button, self.add_changeover_button, self.delete_changeover_button]:
+        for widget in [
+            *self._initial_fuel_inputs.values(),
+            self.save_initial_fuel_button,
+            self.change_machinery_input,
+            self.change_from_input,
+            self.change_to_input,
+            self.change_planned_input,
+            self.change_actual_enabled,
+            self.change_actual_input,
+            self.add_changeover_button,
+            self.delete_changeover_button,
+        ]:
             widget.setEnabled(enabled)
+        self.change_actual_input.setEnabled(enabled and self.change_actual_enabled.isChecked())
 
     def _refresh_fuel_state(self, vessel_id: int) -> None:
         state = self._voyage_service.load_initial_fuel_state(vessel_id)
@@ -344,7 +444,8 @@ class ConsumptionPage(QWidget):
                 event.machinery,
                 event.from_fuel_type,
                 event.to_fuel_type,
-                event.effective_at_utc.isoformat(timespec="minutes"),
+                event.planned_at_utc.isoformat(timespec="minutes"),
+                event.actual_at_utc.isoformat(timespec="minutes") if event.actual_at_utc else "",
                 "ACTUAL" if event.actual_at_utc else event.status,
             ]
             for column, value in enumerate(values):
@@ -361,7 +462,7 @@ class ConsumptionPage(QWidget):
             from_fuel_type=self.change_from_input.currentText(),
             to_fuel_type=self.change_to_input.currentText(),
             planned_at_utc=self.change_planned_input.dateTime().toPython(),
-            actual_at_utc=self.change_actual_input.dateTime().toPython(),
+            actual_at_utc=self.change_actual_input.dateTime().toPython() if self.change_actual_enabled.isChecked() else None,
             time_basis="UTC",
             status="PLANNED",
         )
@@ -388,6 +489,69 @@ class ConsumptionPage(QWidget):
         self._refresh_projection(vessel.id)
         self.status_label.setText("Fuel changeover deleted.")
 
+    def _load_performance(self, vessel_id: int) -> None:
+        config = self._voyage_service.load_energy_config(vessel_id)
+        for key, spinbox in self._energy_inputs.items():
+            spinbox.setValue(getattr(config, key))
+        self.generator_fuel_combo.setCurrentText(config.generator_fuel_type)
+        self.boiler_fuel_combo.setCurrentText(config.boiler_fuel_type)
+        points = self._voyage_service.list_speed_points(vessel_id)
+        for index, (speed_input, me_load_input, rate_inputs) in enumerate(self._speed_inputs):
+            point = points[index] if index < len(points) else None
+            speed_input.setValue(point.speed_knots if point else 0.0)
+            me_load_input.setValue(point.main_engine_load_percent if point and point.main_engine_load_percent is not None else 0.0)
+            for fuel_type in FUEL_TYPES:
+                rate_inputs[fuel_type].setValue(point.rate_for(fuel_type) if point else 0.0)
+        sfoc_points = self._voyage_service.list_generator_sfoc_points(vessel_id)
+        for index, (load_input, sfoc_input) in enumerate(self._sfoc_inputs):
+            point = sfoc_points[index] if index < len(sfoc_points) else None
+            load_input.setValue(point.load_percent if point else 0.0)
+            sfoc_input.setValue(point.sfoc_g_per_kwh if point else 0.0)
+
+    def _save_performance(self) -> None:
+        vessel = self._vessel_service.get_active_vessel()
+        if vessel is None:
+            return
+        try:
+            self._voyage_service.save_energy_config(
+                VesselEnergyConfig(
+                    vessel_id=vessel.id,
+                    port_base_load_kw=self._energy_inputs["port_base_load_kw"].value(),
+                    sea_base_load_kw=self._energy_inputs["sea_base_load_kw"].value(),
+                    reefer_kw_per_unit=self._energy_inputs["reefer_kw_per_unit"].value(),
+                    generator_rated_kw=self._energy_inputs["generator_rated_kw"].value(),
+                    port_running_generators=self._energy_inputs["port_running_generators"].value(),
+                    sea_running_generators=self._energy_inputs["sea_running_generators"].value(),
+                    aux_boiler_mt_per_hour=self._energy_inputs["aux_boiler_mt_per_hour"].value(),
+                    generator_fuel_type=self.generator_fuel_combo.currentText(),
+                    boiler_fuel_type=self.boiler_fuel_combo.currentText(),
+                )
+            )
+            speed_points: list[SpeedConsumptionPoint] = []
+            for speed_input, me_load_input, rate_inputs in self._speed_inputs:
+                if speed_input.value() <= 0:
+                    continue
+                speed_points.append(
+                    self._voyage_service.build_speed_point(
+                        vessel.id,
+                        speed_input.value(),
+                        {fuel_type: rate_inputs[fuel_type].value() for fuel_type in FUEL_TYPES},
+                        me_load_input.value(),
+                    )
+                )
+            self._voyage_service.save_speed_points(vessel.id, speed_points)
+            sfoc_points = [
+                GeneratorSfocPoint(vessel.id, load.value(), sfoc.value())
+                for load, sfoc in self._sfoc_inputs
+                if load.value() > 0 or sfoc.value() > 0
+            ]
+            self._voyage_service.save_generator_sfoc_points(vessel.id, sfoc_points)
+        except Exception as exc:
+            QMessageBox.warning(self, "Performance settings not saved", str(exc))
+            return
+        self._refresh_projection(vessel.id)
+        self.status_label.setText("Performance settings saved.")
+
 
 def _format_mt(value: float) -> str:
     return f"{value:.2f} MT"
@@ -405,3 +569,26 @@ def _format_duration(hours: float) -> str:
     if minutes:
         parts.append(f"{minutes} min")
     return " ".join(parts) if parts else "0 h"
+
+
+def _spinbox(suffix: str, minimum: float, maximum: float, step: float) -> QDoubleSpinBox:
+    spinbox = QDoubleSpinBox()
+    spinbox.setDecimals(2)
+    spinbox.setRange(minimum, maximum)
+    spinbox.setSingleStep(step)
+    spinbox.setSuffix(suffix)
+    return spinbox
+
+
+def _section_label(text: str) -> QLabel:
+    label = QLabel(text)
+    label.setObjectName("sectionTitle")
+    return label
+
+
+def _help_label(text: str) -> QLabel:
+    label = QLabel(text)
+    label.setObjectName("mutedText")
+    label.setWordWrap(True)
+    return label
+    QScrollArea,

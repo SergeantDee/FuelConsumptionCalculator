@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QFrame,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -309,6 +310,7 @@ class SchedulePage(QWidget):
         self.edit_button = QPushButton("Edit Event")
         self.edit_button.clicked.connect(self._edit_event)
         self.delete_button = QPushButton("Delete Event")
+        self.delete_button.setObjectName("dangerButton")
         self.delete_button.clicked.connect(self._delete_event)
         edit_controls_layout.addWidget(self.add_button)
         edit_controls_layout.addWidget(self.edit_button)
@@ -334,6 +336,8 @@ class SchedulePage(QWidget):
         self.table_view.setAlternatingRowColors(True)
         self.table_view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table_view.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table_view.verticalHeader().setDefaultSectionSize(32)
+        self.table_view.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.table_view.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.table_view, 1)
 
@@ -359,6 +363,7 @@ class SchedulePage(QWidget):
         self.delete_button.setEnabled(True)
         timeline = self._schedule_service.get_timeline(vessel.id)
         self.table_model.set_rows(timeline.rows)
+        self._resize_table_columns()
         self._set_empty_state(len(timeline.rows) == 0)
         if not self._scrape_running:
             status = f"{len(timeline.rows)} saved schedule events."
@@ -421,6 +426,7 @@ class SchedulePage(QWidget):
             return
         timeline = self._schedule_service.get_timeline(events[0].vessel_id) if events else None
         self.table_model.set_rows(timeline.rows if timeline else [])
+        self._resize_table_columns()
         self._set_empty_state(len(events) == 0)
         self.status_label.setText(f"Schedule updated with {len(events)} events.")
 
@@ -515,11 +521,16 @@ class SchedulePage(QWidget):
     def _apply_events(self, events: list[ScheduleEvent], message: str) -> None:
         timeline = self._schedule_service.get_timeline(events[0].vessel_id) if events else None
         self.table_model.set_rows(timeline.rows if timeline else [])
+        self._resize_table_columns()
         self._set_empty_state(len(events) == 0)
         if timeline and timeline.issues:
             self.status_label.setText(f"{message} Chronology warning: {timeline.issues[0].message}")
         else:
             self.status_label.setText(message)
+
+    def _resize_table_columns(self) -> None:
+        for index, width in enumerate((48, 170, 105, 145, 145, 95, 110)):
+            self.table_view.setColumnWidth(index, width)
 
 
 def _stage_percent(stage: str) -> int:

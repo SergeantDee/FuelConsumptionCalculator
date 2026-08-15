@@ -12,9 +12,11 @@ from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QTableView,
     QVBoxLayout,
     QWidget,
@@ -118,57 +120,91 @@ class VoyagePage(QWidget):
         self.legs_table.setModel(self.legs_model)
         self.legs_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.legs_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.legs_table.verticalHeader().setDefaultSectionSize(32)
+        self.legs_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.legs_table.horizontalHeader().setStretchLastSection(True)
+        self.legs_table.setMinimumHeight(180)
         self.legs_table.selectionModel().selectionChanged.connect(self._selection_changed)
         layout.addWidget(self.legs_table, 1)
 
-        editor = QFrame()
-        editor.setObjectName("panel")
-        grid = QGridLayout(editor)
-        grid.setContentsMargins(18, 16, 18, 16)
-        labels = [
-            "Dep Pilot Dist NM",
-            "Dep Pilot Hours",
-            "Sea Distance NM",
-            "Arr Pilot Dist NM",
-            "Arr Pilot Hours",
-        ]
+        detail_scroll = QScrollArea()
+        detail_scroll.setWidgetResizable(True)
+        detail_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        detail_container = QWidget()
+        detail_layout = QVBoxLayout(detail_container)
+        detail_layout.setContentsMargins(0, 0, 0, 0)
+        detail_layout.setSpacing(12)
+
+        schedule_panel = _section("Schedule")
+        schedule_grid = QGridLayout(schedule_panel)
+        schedule_grid.setContentsMargins(18, 16, 18, 16)
+        _add_section_title(schedule_grid, "Schedule")
+        self.from_port_label = QLabel("-")
+        self.to_port_label = QLabel("-")
+        self.scheduled_departure_label = QLabel("-")
+        self.scheduled_arrival_label = QLabel("-")
+        _add_value(schedule_grid, 1, 0, "From Port", self.from_port_label)
+        _add_value(schedule_grid, 1, 1, "To Port", self.to_port_label)
+        _add_value(schedule_grid, 2, 0, "Scheduled Berth Departure", self.scheduled_departure_label)
+        _add_value(schedule_grid, 2, 1, "Scheduled Berth Arrival", self.scheduled_arrival_label)
+        detail_layout.addWidget(schedule_panel)
+
+        departure_panel = _section("Departure / Pilotage")
+        departure_grid = QGridLayout(departure_panel)
+        departure_grid.setContentsMargins(18, 16, 18, 16)
+        _add_section_title(departure_grid, "Departure / Pilotage")
         self.dep_pilot_dist = _spinbox(" NM", 0, 99999, 1)
         self.dep_pilot_hours = _spinbox(" h", 0, 999, 0.25)
-        self.sea_distance = _spinbox(" NM", 0, 99999, 10)
-        self.arr_pilot_dist = _spinbox(" NM", 0, 99999, 1)
-        self.arr_pilot_hours = _spinbox(" h", 0, 999, 0.25)
-        for column, (label, widget) in enumerate(zip(labels, [self.dep_pilot_dist, self.dep_pilot_hours, self.sea_distance, self.arr_pilot_dist, self.arr_pilot_hours])):
-            grid.addWidget(QLabel(label), 0, column)
-            grid.addWidget(widget, 1, column)
-
-        actuals = [
-            ("Actual Berth Dep", "actual_berth_departure"),
-            ("Actual Pilot Off", "actual_pilot_off"),
-            ("Actual Pilot On", "actual_pilot_on"),
-            ("Actual Berth Arr", "actual_berth_arrival"),
-        ]
+        self.calculated_pilot_off_label = QLabel("-")
         self._actual_enabled: dict[str, QCheckBox] = {}
         self._actual_inputs: dict[str, QDateTimeEdit] = {}
-        for column, (label, key) in enumerate(actuals):
-            checkbox = QCheckBox(label)
-            dt_input = QDateTimeEdit()
-            dt_input.setDisplayFormat("dd MMM yyyy HH:mm")
-            dt_input.setCalendarPopup(True)
-            grid.addWidget(checkbox, 2, column)
-            grid.addWidget(dt_input, 3, column)
-            self._actual_enabled[key] = checkbox
-            self._actual_inputs[key] = dt_input
+        _add_control(departure_grid, 1, 0, "Departure Pilot Distance NM", self.dep_pilot_dist)
+        _add_control(departure_grid, 1, 1, "Departure Pilot Hours", self.dep_pilot_hours)
+        _add_value(departure_grid, 2, 0, "Calculated Pilot Off", self.calculated_pilot_off_label)
+        self._add_actual_control(departure_grid, 2, 1, "Actual Berth Departure", "actual_berth_departure")
+        self._add_actual_control(departure_grid, 3, 0, "Actual Pilot Off", "actual_pilot_off")
+        detail_layout.addWidget(departure_panel)
 
-        self.port_reefers = _spinbox("", 0, 999999, 1)
+        sea_panel = _section("Sea Passage")
+        sea_grid = QGridLayout(sea_panel)
+        sea_grid.setContentsMargins(18, 16, 18, 16)
+        _add_section_title(sea_grid, "Sea Passage")
+        self.sea_distance = _spinbox(" NM", 0, 99999, 10)
+        self.sea_time_label = QLabel("-")
+        self.required_speed_label = QLabel("-")
+        self.predicted_me_load_label = QLabel("-")
+        self.egb_available_label = QLabel("-")
         self.departure_reefers = _spinbox("", 0, 999999, 1)
-        self.use_egb_check = QCheckBox("Use EGB when available")
-        grid.addWidget(QLabel("Port Stay Reefers"), 4, 0)
-        grid.addWidget(self.port_reefers, 5, 0)
-        grid.addWidget(QLabel("Departure Reefers"), 4, 1)
-        grid.addWidget(self.departure_reefers, 5, 1)
-        grid.addWidget(self.use_egb_check, 5, 2)
+        self.use_egb_check = QCheckBox("Use EGB")
+        _add_control(sea_grid, 1, 0, "Sea Distance NM", self.sea_distance)
+        _add_value(sea_grid, 1, 1, "Sea Time", self.sea_time_label)
+        _add_value(sea_grid, 2, 0, "Required Speed", self.required_speed_label)
+        _add_value(sea_grid, 2, 1, "Predicted ME Load %", self.predicted_me_load_label)
+        _add_control(sea_grid, 3, 0, "Departure Reefers", self.departure_reefers)
+        _add_value(sea_grid, 3, 1, "EGB Available", self.egb_available_label)
+        sea_grid.addWidget(self.use_egb_check, 4, 0, 1, 2)
+        detail_layout.addWidget(sea_panel)
 
+        arrival_panel = _section("Arrival / Pilotage")
+        arrival_grid = QGridLayout(arrival_panel)
+        arrival_grid.setContentsMargins(18, 16, 18, 16)
+        _add_section_title(arrival_grid, "Arrival / Pilotage")
+        self.arr_pilot_dist = _spinbox(" NM", 0, 99999, 1)
+        self.arr_pilot_hours = _spinbox(" h", 0, 999, 0.25)
+        self.calculated_pilot_on_label = QLabel("-")
+        self.port_reefers = _spinbox("", 0, 999999, 1)
+        _add_value(arrival_grid, 1, 0, "Calculated Pilot On", self.calculated_pilot_on_label)
+        self._add_actual_control(arrival_grid, 1, 1, "Actual Pilot On", "actual_pilot_on")
+        _add_control(arrival_grid, 2, 0, "Arrival Pilot Distance NM", self.arr_pilot_dist)
+        _add_control(arrival_grid, 2, 1, "Arrival Pilot Hours", self.arr_pilot_hours)
+        self._add_actual_control(arrival_grid, 3, 0, "Actual Berth Arrival", "actual_berth_arrival")
+        _add_control(arrival_grid, 3, 1, "Port Stay Reefers", self.port_reefers)
+        detail_layout.addWidget(arrival_panel)
+
+        actions_panel = _section("Route Actions")
+        actions_grid = QGridLayout(actions_panel)
+        actions_grid.setContentsMargins(18, 16, 18, 16)
+        _add_section_title(actions_grid, "Route Actions")
         self.save_library_check = QCheckBox("Also save route library")
         self.save_leg_button = QPushButton("Save / Apply Leg Values")
         self.save_leg_button.setObjectName("primaryButton")
@@ -180,70 +216,20 @@ class VoyagePage(QWidget):
         actions.addWidget(self.save_leg_button)
         actions.addWidget(self.reset_leg_button)
         actions.addStretch()
-        grid.addLayout(actions, 6, 0, 1, 5)
-        layout.addWidget(editor)
+        actions_grid.addLayout(actions, 1, 0)
+        detail_layout.addWidget(actions_panel)
 
-        config_panel = QFrame()
-        config_panel.setObjectName("panel")
-        config_grid = QGridLayout(config_panel)
-        config_grid.setContentsMargins(18, 16, 18, 16)
-        config_grid.addWidget(QLabel("VESSEL ELECTRICAL / BOILER CONFIG"), 0, 0, 1, 6)
-        config_fields = [
-            ("Port Base kW", "port_base_load_kw"),
-            ("Sea Base kW", "sea_base_load_kw"),
-            ("Reefer kW/unit", "reefer_kw_per_unit"),
-            ("DG Rated kW", "generator_rated_kw"),
-            ("Port DG Count", "port_running_generators"),
-            ("Sea DG Count", "sea_running_generators"),
-            ("Aux Boiler MT/h", "aux_boiler_mt_per_hour"),
-        ]
-        self._energy_inputs: dict[str, QDoubleSpinBox] = {}
-        for index, (label, key) in enumerate(config_fields):
-            row, column = divmod(index, 4)
-            config_grid.addWidget(QLabel(label), row * 2 + 1, column)
-            spinbox = _spinbox("", 0, 999999, 1)
-            config_grid.addWidget(spinbox, row * 2 + 2, column)
-            self._energy_inputs[key] = spinbox
-        self.generator_fuel_combo = QComboBox()
-        self.generator_fuel_combo.addItems(FUEL_TYPES)
-        self.boiler_fuel_combo = QComboBox()
-        self.boiler_fuel_combo.addItems(FUEL_TYPES)
-        config_grid.addWidget(QLabel("DG Fuel"), 5, 0)
-        config_grid.addWidget(self.generator_fuel_combo, 6, 0)
-        config_grid.addWidget(QLabel("Boiler Fuel"), 5, 1)
-        config_grid.addWidget(self.boiler_fuel_combo, 6, 1)
-        self.save_energy_button = QPushButton("Save Energy Config")
-        self.save_energy_button.clicked.connect(self._save_energy_config)
-        config_grid.addWidget(self.save_energy_button, 6, 2, 1, 2)
-        layout.addWidget(config_panel)
-
-        speed_panel = QFrame()
-        speed_panel.setObjectName("panel")
-        speed_grid = QGridLayout(speed_panel)
-        speed_grid.setContentsMargins(18, 16, 18, 16)
-        speed_grid.addWidget(QLabel("SPEED / ME LOAD / CONSUMPTION POINTS (linear interpolation, no extrapolation)"), 0, 0, 1, 5)
-        for column, header in enumerate(("Speed kn", "ME Load %", "ULSFO MT/day", "VLSFO MT/day", "MDO MT/day")):
-            speed_grid.addWidget(QLabel(header), 1, column)
-        for row in range(3):
-            speed_input = _spinbox(" kn", 0, 50, 1)
-            me_load_input = _spinbox(" %", 0, 100, 1)
-            rate_inputs = {fuel_type: _spinbox(" MT/day", 0, 9999, 1) for fuel_type in FUEL_TYPES}
-            speed_grid.addWidget(speed_input, row + 2, 0)
-            speed_grid.addWidget(me_load_input, row + 2, 1)
-            for column, fuel_type in enumerate(FUEL_TYPES, start=2):
-                speed_grid.addWidget(rate_inputs[fuel_type], row + 2, column)
-            self._speed_inputs.append((speed_input, me_load_input, rate_inputs))
-        speed_grid.addWidget(QLabel("GENERATOR SFOC POINTS"), 5, 0, 1, 2)
-        for row in range(3):
-            load_input = _spinbox(" %", 0, 200, 5)
-            sfoc_input = _spinbox(" g/kWh", 0, 9999, 1)
-            speed_grid.addWidget(load_input, row + 6, 0)
-            speed_grid.addWidget(sfoc_input, row + 6, 1)
-            self._sfoc_inputs.append((load_input, sfoc_input))
-        self.save_speed_button = QPushButton("Save Speed Table")
-        self.save_speed_button.clicked.connect(self._save_speed_points)
-        speed_grid.addWidget(self.save_speed_button, 9, 0, 1, 5)
-        layout.addWidget(speed_panel)
+        clock_panel = _section("Vessel Clock")
+        clock_grid = QGridLayout(clock_panel)
+        clock_grid.setContentsMargins(18, 16, 18, 16)
+        _add_section_title(clock_grid, "Vessel Clock")
+        self.clock_offset_label = QLabel("UTC +00:00")
+        _add_value(clock_grid, 1, 0, "Current Vessel UTC Offset", self.clock_offset_label)
+        clock_grid.addWidget(QLabel("Clock adjustment controls/history are managed by the vessel-clock timeline."), 2, 0)
+        detail_layout.addWidget(clock_panel)
+        detail_layout.addStretch()
+        detail_scroll.setWidget(detail_container)
+        layout.addWidget(detail_scroll, 2)
 
         self.status_label = QLabel("Ready")
         self.status_label.setObjectName("mutedText")
@@ -263,13 +249,16 @@ class VoyagePage(QWidget):
         profile = self._consumption_service.load_profile(vessel.id)
         plan = self._voyage_service.calculate_plan(vessel.id, events, profile)
         self.legs_model.set_rows(plan.legs)
-        self._load_energy_config(vessel.id)
-        self._load_speed_points(vessel.id)
+        self._resize_leg_columns()
         self.status_label.setText("; ".join(plan.warnings[:2]) if plan.warnings else f"Loaded {len(plan.legs)} voyage legs.")
         if plan.legs and not self.legs_table.selectionModel().selectedRows():
             self.legs_table.selectRow(0)
         else:
             self._selection_changed()
+
+    def _resize_leg_columns(self) -> None:
+        for index, width in enumerate((120, 150, 135, 135, 85, 90, 95, 135, 135, 85)):
+            self.legs_table.setColumnWidth(index, width)
 
     def _selection_changed(self) -> None:
         row = self._selected_row()
@@ -277,6 +266,16 @@ class VoyagePage(QWidget):
             return
         self._loading = True
         override = row.leg.override
+        self.from_port_label.setText(row.leg.origin_port)
+        self.to_port_label.setText(row.leg.destination_port)
+        self.scheduled_departure_label.setText(_fmt_dt(row.leg.scheduled_berth_departure))
+        self.scheduled_arrival_label.setText(_fmt_dt(row.leg.scheduled_berth_arrival))
+        self.calculated_pilot_off_label.setText(_fmt_dt(row.pilot_off))
+        self.calculated_pilot_on_label.setText(_fmt_dt(row.pilot_on))
+        self.sea_time_label.setText(f"{row.sea_hours:.2f} h")
+        self.required_speed_label.setText(f"{row.required_speed_knots:.2f} kn" if row.required_speed_knots is not None else "-")
+        self.predicted_me_load_label.setText(f"{row.predicted_me_load_percent:.2f} %" if row.predicted_me_load_percent is not None else "-")
+        self.egb_available_label.setText("Yes" if row.egb_available else "No")
         self.dep_pilot_dist.setValue(_effective(override.departure_pilot_distance_nm if override else None, row.leg.route.departure_pilot_distance_nm))
         self.dep_pilot_hours.setValue(_effective(override.departure_pilotage_hours if override else None, row.leg.route.departure_pilotage_hours))
         self.sea_distance.setValue(_effective(override.sea_distance_nm if override else None, row.leg.route.sea_distance_nm))
@@ -297,6 +296,16 @@ class VoyagePage(QWidget):
             self._actual_enabled[key].setChecked(value is not None)
             input_widget.setDateTime(QDateTime(fallback if value is None else value))
         self._loading = False
+
+    def _add_actual_control(self, grid: QGridLayout, row: int, column: int, label: str, key: str) -> None:
+        checkbox = QCheckBox(label)
+        dt_input = QDateTimeEdit()
+        dt_input.setDisplayFormat("dd MMM yyyy HH:mm")
+        dt_input.setCalendarPopup(True)
+        grid.addWidget(checkbox, row * 2 - 1, column)
+        grid.addWidget(dt_input, row * 2, column)
+        self._actual_enabled[key] = checkbox
+        self._actual_inputs[key] = dt_input
 
     def _save_leg(self) -> None:
         row = self._selected_row()
@@ -432,7 +441,6 @@ class VoyagePage(QWidget):
             self.arr_pilot_hours,
             self.save_leg_button,
             self.reset_leg_button,
-            self.save_speed_button,
         ]:
             widget.setEnabled(enabled)
 
@@ -444,6 +452,34 @@ def _spinbox(suffix: str, minimum: float, maximum: float, step: float) -> QDoubl
     spinbox.setSingleStep(step)
     spinbox.setSuffix(suffix)
     return spinbox
+
+
+def _section(title: str) -> QFrame:
+    frame = QFrame()
+    frame.setObjectName("panel")
+    frame.setToolTip(title)
+    return frame
+
+
+def _add_control(grid: QGridLayout, row: int, column: int, label_text: str, widget: QWidget) -> None:
+    label = QLabel(label_text)
+    label.setObjectName("fieldLabel")
+    grid.addWidget(label, row * 2 - 1, column)
+    grid.addWidget(widget, row * 2, column)
+
+
+def _add_value(grid: QGridLayout, row: int, column: int, label_text: str, value_label: QLabel) -> None:
+    label = QLabel(label_text)
+    label.setObjectName("fieldLabel")
+    value_label.setObjectName("mutedText")
+    grid.addWidget(label, row * 2 - 1, column)
+    grid.addWidget(value_label, row * 2, column)
+
+
+def _add_section_title(grid: QGridLayout, title: str) -> None:
+    label = QLabel(title)
+    label.setObjectName("sectionTitle")
+    grid.addWidget(label, 0, 0, 1, 2)
 
 
 def _fmt_dt(value: datetime) -> str:
