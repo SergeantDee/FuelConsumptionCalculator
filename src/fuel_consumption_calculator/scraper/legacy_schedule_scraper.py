@@ -6,7 +6,7 @@ from typing import Callable
 
 from fuel_consumption_calculator.config import SCRAPER_MONTH_COUNT
 from fuel_consumption_calculator.domain.schedule import ScheduleCandidate
-from fuel_consumption_calculator.scraper.models import ScraperSessionConfig
+from fuel_consumption_calculator.scraper.models import ScraperSessionConfig, ScraperStageError
 from fuel_consumption_calculator.scraper.normalization import normalize_raw_rows
 from fuel_consumption_calculator.scraper.provider import ProgressCallback, fetch_schedule_source
 
@@ -24,13 +24,20 @@ def scrape_schedule(
     all_raw_rows = []
     for month_offset in range(month_count):
         start_date = _add_months(from_date, month_offset)
-        source_result = provider(
-            vessel_name,
-            start_date,
-            session_config=session_config,
-            progress_callback=progress_callback,
-            cancel_event=cancel_event,
-        )
+        try:
+            source_result = provider(
+                vessel_name,
+                start_date,
+                session_config=session_config,
+                progress_callback=progress_callback,
+                cancel_event=cancel_event,
+            )
+        except ScraperStageError:
+            if all_raw_rows:
+                if progress_callback is not None:
+                    progress_callback("partial_results", f"No further schedule rows found from {start_date:%d %b %Y}; using prior results.")
+                break
+            raise
         all_raw_rows.extend(source_result.raw_rows)
     return normalize_raw_rows(all_raw_rows, vessel_name=vessel_name, from_date=from_date)
 

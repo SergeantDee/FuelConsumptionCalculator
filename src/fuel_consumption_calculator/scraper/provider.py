@@ -62,8 +62,9 @@ def fetch_schedule_source(
             _check_cancel(cancel_event)
 
             _report(progress_callback, "enter_from_date", f"Entering From Date {date_string}.")
+            _dismiss_cookie_overlay(page)
             from_date = page.get_by_role("textbox", name="Date from")
-            from_date.click()
+            from_date.click(force=True)
             from_date.fill(date_string)
             from_date.press("Enter")
             _check_cancel(cancel_event)
@@ -71,7 +72,7 @@ def fetch_schedule_source(
             login_required = _accept_secondary_cookie_banner(page)
 
             _report(progress_callback, "submit_search", "Submitting schedule search.")
-            page.get_by_role("button", name="Search").click(force=True)
+            _submit_search(page)
             _report(progress_callback, "wait_for_results", "Waiting for rendered schedule results.")
             result_locator = page.locator(RESULT_CARD_SELECTOR).first
             try:
@@ -133,6 +134,20 @@ def _accept_secondary_cookie_banner(page) -> bool:
         return True
     except Exception:
         return False
+
+
+def _submit_search(page) -> None:
+    search_button = page.get_by_role("button", name="Search")
+    search_button.click(force=True)
+    try:
+        page.locator(RESULT_CARD_SELECTOR).first.wait_for(timeout=5000)
+        return
+    except Exception:
+        pass
+    try:
+        search_button.evaluate("element => element.click()")
+    except Exception:
+        search_button.click(force=True)
 
 
 def _select_vessel_option(page, vessel_name: str, session_config: ScraperSessionConfig, timeout_error_type: type[Exception]) -> None:
