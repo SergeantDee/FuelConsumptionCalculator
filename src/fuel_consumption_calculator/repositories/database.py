@@ -60,6 +60,8 @@ class Database:
                 self._migrate_to_v3(connection)
             if current_version < 4:
                 self._migrate_to_v4(connection)
+            if current_version < 5:
+                self._migrate_to_v5(connection)
             connection.execute(
                 "INSERT OR REPLACE INTO application_metadata (key, value) VALUES ('schema_version', ?)",
                 (str(SCHEMA_VERSION),),
@@ -135,3 +137,44 @@ class Database:
             """
         )
         LOGGER.info("Database migrated to schema version 4.")
+
+    def _migrate_to_v5(self, connection: sqlite3.Connection) -> None:
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS planned_bunker_quantities (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vessel_id INTEGER NOT NULL,
+                sequence_number INTEGER NOT NULL,
+                port_snapshot TEXT NOT NULL,
+                arrival_snapshot TEXT,
+                fuel_type TEXT NOT NULL,
+                quantity_mt REAL NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (vessel_id) REFERENCES vessels(id) ON DELETE CASCADE,
+                UNIQUE (vessel_id, sequence_number, port_snapshot, arrival_snapshot, fuel_type),
+                CHECK (quantity_mt >= 0)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_planned_bunkers_vessel_sequence
+                ON planned_bunker_quantities (vessel_id, sequence_number);
+
+            CREATE TABLE IF NOT EXISTS vessel_bunker_capacities (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vessel_id INTEGER NOT NULL,
+                fuel_type TEXT NOT NULL,
+                maximum_capacity_mt REAL NOT NULL,
+                target_fill_percent REAL NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (vessel_id) REFERENCES vessels(id) ON DELETE CASCADE,
+                UNIQUE (vessel_id, fuel_type),
+                CHECK (maximum_capacity_mt >= 0),
+                CHECK (target_fill_percent >= 0 AND target_fill_percent <= 100)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_bunker_capacities_vessel
+                ON vessel_bunker_capacities (vessel_id);
+            """
+        )
+        LOGGER.info("Database migrated to schema version 5.")

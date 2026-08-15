@@ -30,6 +30,8 @@ def test_database_initialization_creates_deterministic_schema(tmp_path):
         "schedule_events",
         "vessel_consumption_rates",
         "vessel_starting_rob",
+        "planned_bunker_quantities",
+        "vessel_bunker_capacities",
     }.issubset(tables)
     assert schema_version == str(SCHEMA_VERSION)
     assert user_version == SCHEMA_VERSION

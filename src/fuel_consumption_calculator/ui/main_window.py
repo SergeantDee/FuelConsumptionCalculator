@@ -4,6 +4,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton, QStackedWidget, QVBoxLayout, QWidget
 
 from fuel_consumption_calculator.config import APPLICATION_NAME, APPLICATION_VERSION
+from fuel_consumption_calculator.services.bunker_service import BunkerService
 from fuel_consumption_calculator.services.consumption_service import ConsumptionService
 from fuel_consumption_calculator.services.rob_service import ROBService
 from fuel_consumption_calculator.services.schedule_service import ScheduleService
@@ -27,6 +28,7 @@ class MainWindow(QMainWindow):
         scraper_service: ScraperService,
         consumption_service: ConsumptionService,
         rob_service: ROBService,
+        bunker_service: BunkerService,
     ) -> None:
         super().__init__()
         self.setWindowTitle(f"{APPLICATION_NAME} {APPLICATION_VERSION}")
@@ -57,13 +59,14 @@ class MainWindow(QMainWindow):
         self.schedule_page = SchedulePage(vessel_service, schedule_service, scraper_service)
         self.consumption_page = ConsumptionPage(vessel_service, consumption_service, schedule_service)
         self.rob_page = RobPage(vessel_service, rob_service, schedule_service, consumption_service)
+        self.bunker_page = BunkerPage(vessel_service, bunker_service, schedule_service, consumption_service, rob_service)
         self.settings_page = SettingsPage(vessel_service)
         pages = (
             self.dashboard_page,
             self.schedule_page,
             self.consumption_page,
             self.rob_page,
-            BunkerPage(),
+            self.bunker_page,
             self.settings_page,
         )
         for page in pages:
@@ -102,6 +105,8 @@ class MainWindow(QMainWindow):
             self.consumption_page.refresh()
         elif index == 3:
             self.rob_page.refresh()
+        elif index == 4:
+            self.bunker_page.refresh()
         elif index == 5:
             self.settings_page.refresh()
 
@@ -110,4 +115,5 @@ class MainWindow(QMainWindow):
         self.schedule_page.refresh()
         self.consumption_page.refresh()
         self.rob_page.refresh()
+        self.bunker_page.refresh()
         self.statusBar().showMessage("Vessel configuration saved", 4000)

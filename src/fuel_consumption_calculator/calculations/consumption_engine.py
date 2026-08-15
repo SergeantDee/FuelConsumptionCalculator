@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from fuel_consumption_calculator.domain.consumption import FUEL_TYPES, ConsumptionProfile
 from fuel_consumption_calculator.domain.schedule_timeline import ScheduleTimeline
@@ -14,6 +14,8 @@ class EventFuelConsumption:
     sea_hours: float
     port_hours: float
     consumed_mt: dict[str, float]
+    sea_consumed_mt: dict[str, float] = field(default_factory=dict)
+    port_consumed_mt: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,11 +36,15 @@ def calculate_schedule_consumption(
     for timeline_row in timeline.rows:
         sea_hours = max(0.0, timeline_row.interval_from_previous_hours or 0.0)
         port_hours = max(0.0, timeline_row.port_stay_hours or 0.0)
-        consumed = {
+        sea_consumed = {
             fuel_type: _consume(sea_hours, profile.rate_for("SEA", fuel_type))
-            + _consume(port_hours, profile.rate_for("PORT", fuel_type))
             for fuel_type in FUEL_TYPES
         }
+        port_consumed = {
+            fuel_type: _consume(port_hours, profile.rate_for("PORT", fuel_type))
+            for fuel_type in FUEL_TYPES
+        }
+        consumed = {fuel_type: sea_consumed[fuel_type] + port_consumed[fuel_type] for fuel_type in FUEL_TYPES}
         for fuel_type, value in consumed.items():
             totals[fuel_type] += value
         rows.append(
@@ -48,6 +54,8 @@ def calculate_schedule_consumption(
                 port=timeline_row.event.port,
                 sea_hours=sea_hours,
                 port_hours=port_hours,
+                sea_consumed_mt=sea_consumed,
+                port_consumed_mt=port_consumed,
                 consumed_mt=consumed,
             )
         )

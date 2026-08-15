@@ -9,11 +9,13 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from fuel_consumption_calculator.config import APPLICATION_NAME, APPLICATION_VERSION
 from fuel_consumption_calculator.infrastructure.logging_config import configure_logging
 from fuel_consumption_calculator.paths import AppPaths
+from fuel_consumption_calculator.repositories.bunker_repository import BunkerRepository
 from fuel_consumption_calculator.repositories.consumption_repository import ConsumptionRepository
 from fuel_consumption_calculator.repositories.database import Database
 from fuel_consumption_calculator.repositories.rob_repository import ROBRepository
 from fuel_consumption_calculator.repositories.schedule_repository import ScheduleRepository
 from fuel_consumption_calculator.repositories.vessel_repository import VesselRepository
+from fuel_consumption_calculator.services.bunker_service import BunkerService
 from fuel_consumption_calculator.services.consumption_service import ConsumptionService
 from fuel_consumption_calculator.services.rob_service import ROBService
 from fuel_consumption_calculator.services.schedule_service import ScheduleService
@@ -33,8 +35,9 @@ def build_main_window(paths: AppPaths) -> MainWindow:
     schedule_service = ScheduleService(ScheduleRepository(database))
     consumption_service = ConsumptionService(ConsumptionRepository(database))
     rob_service = ROBService(ROBRepository(database))
+    bunker_service = BunkerService(BunkerRepository(database))
     scraper_service = ScraperService()
-    return MainWindow(vessel_service, schedule_service, scraper_service, consumption_service, rob_service)
+    return MainWindow(vessel_service, schedule_service, scraper_service, consumption_service, rob_service, bunker_service)
 
 
 def install_global_exception_handler() -> None:
