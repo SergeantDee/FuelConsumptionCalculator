@@ -67,7 +67,8 @@ class ROBProjectionTableModel(QAbstractTableModel):
                 row.projected_rob_mt["VLSFO"],
                 row.projected_rob_mt["MDO"],
             )
-            if rob_values[index.column() - 3] < 0:
+            rob_value = rob_values[index.column() - 3]
+            if rob_value is not None and rob_value < 0:
                 return QColor("#ff9b9b")
         return None
 

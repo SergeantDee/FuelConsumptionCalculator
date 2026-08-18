@@ -111,7 +111,8 @@ class BunkerProjectionTableModel(QAbstractTableModel):
             return values[index.column()]
         if role == Qt.ItemDataRole.ForegroundRole and index.column() in {1, 3, 4, 6, 7, 9}:
             rob_values = (row.arrival_rob_mt["ULSFO"], row.departure_rob_mt["ULSFO"], row.arrival_rob_mt["VLSFO"], row.departure_rob_mt["VLSFO"], row.arrival_rob_mt["MDO"], row.departure_rob_mt["MDO"])
-            if rob_values[{1: 0, 3: 1, 4: 2, 6: 3, 7: 4, 9: 5}[index.column()]] < 0:
+            rob_value = rob_values[{1: 0, 3: 1, 4: 2, 6: 3, 7: 4, 9: 5}[index.column()]]
+            if rob_value is not None and rob_value < 0:
                 return QColor("#ff9b9b")
         return None
 
