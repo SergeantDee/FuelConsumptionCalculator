@@ -326,9 +326,11 @@ def _sea_consumption(
                 fuel_changeovers or [],
                 lambda hours: hours * detailed_me_fuel_mt_per_hour,
             )
+        elif sea_hours > 0:
+            main_engine = {fuel_type: None for fuel_type in FUEL_TYPES}
+            warnings.append("Main engine fuel state missing; fuel allocation unavailable.")
         else:
             main_engine = empty_fuel_totals()
-            main_engine["VLSFO"] = max(0.0, sea_hours) * detailed_me_fuel_mt_per_hour
     else:
         main_engine = {fuel_type: None for fuel_type in FUEL_TYPES}
         if sea_hours > 0:
@@ -357,7 +359,15 @@ def _sea_consumption(
         missing.append("DG SFOC points missing/out of range")
     if detailed_me_fuel_mt_per_hour is None and sea_hours > 0:
         missing.append("ME performance/SFOC unavailable")
-    mode = "DETAILED SFOC" if detailed_ready and detailed_me_fuel_mt_per_hour is not None else "INCOMPLETE"
+    if detailed_me_fuel_mt_per_hour is not None and sea_hours > 0 and not initial_fuel_state:
+        missing.append("ME fuel state missing")
+    me_allocation_ready = sea_hours <= 0 or (
+        detailed_me_fuel_mt_per_hour is not None
+        and initial_fuel_state is not None
+        and start_utc is not None
+        and end_utc is not None
+    )
+    mode = "DETAILED SFOC" if detailed_ready and detailed_me_fuel_mt_per_hour is not None and me_allocation_ready else "INCOMPLETE"
     if detailed_ready:
         if initial_fuel_state and start_utc and end_utc:
             generator = _split_quantity_consumption("GENERATORS", start_utc, end_utc, initial_fuel_state, fuel_changeovers or [], lambda hours: _generator_fuel(total_load_kw, generator_sfoc, hours))
@@ -605,6 +615,7 @@ def _config_for_sea(config: VesselEnergyConfig, leg: VoyageLeg) -> VesselEnergyC
         port_ambient_c=config.port_ambient_c,
         sea_ambient_c=float(leg.override.sea_ambient_c),
     )
+
 
 
 

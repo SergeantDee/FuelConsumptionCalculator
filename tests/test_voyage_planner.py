@@ -10,7 +10,7 @@ from fuel_consumption_calculator.domain.consumption import ConsumptionProfile, C
 from fuel_consumption_calculator.domain.rob import ROBQuantity, StartingROB
 from fuel_consumption_calculator.domain.schedule import ScheduleEvent
 from fuel_consumption_calculator.domain.schedule_timeline import build_schedule_timeline
-from fuel_consumption_calculator.domain.voyage import GeneratorSfocPoint, RouteDefinition, SpeedConsumptionPoint, VesselEnergyConfig, VoyageLeg, VoyageLegOverride
+from fuel_consumption_calculator.domain.voyage import GeneratorSfocPoint, MachineryFuelState, RouteDefinition, SpeedConsumptionPoint, VesselEnergyConfig, VoyageLeg, VoyageLegOverride
 from fuel_consumption_calculator.repositories.bunker_repository import BunkerRepository
 from fuel_consumption_calculator.repositories.database import Database
 from fuel_consumption_calculator.services.bunker_service import BunkerService
@@ -165,8 +165,14 @@ def test_rolling_drop_below_25_percent_disables_egb_and_changes_max_lift(tmp_pat
     confirmed = _leg(route=RouteDefinition("Origin", "Destination", 5, 2, 431.29, 5, 2), override=VoyageLegOverride(1, 2, "Origin", "Destination", "2026-01-01T00:00", "2026-01-02T12:00", departure_reefers=10, use_egb=True))
     slowed = _leg(route=RouteDefinition("Origin", "Destination", 5, 2, 430.71, 5, 2), override=VoyageLegOverride(1, 2, "Origin", "Destination", "2026-01-01T00:00", "2026-01-02T12:00", departure_reefers=10, use_egb=True))
 
-    confirmed_consumption = calculate_consumption_with_voyage(build_schedule_timeline(events), events, calculate_voyage_plan([confirmed], _profile(), [_speed_point(10, 24, 25), _speed_point(12, 28, 30)], _energy_config(), _sfoc_points()), _profile())
-    slowed_plan = calculate_voyage_plan([slowed], _profile(), [_speed_point(9.96, 23.9, 24.9), _speed_point(12, 28, 30)], _energy_config(), _sfoc_points())
+    fuel_state = MachineryFuelState(
+        vessel_id=1,
+        main_engine_fuel_type="ULSFO",
+        generators_fuel_type="ULSFO",
+        aux_boiler_fuel_type="MDO",
+    )
+    confirmed_consumption = calculate_consumption_with_voyage(build_schedule_timeline(events), events, calculate_voyage_plan([confirmed], _profile(), [_speed_point(10, 24, 25), _speed_point(12, 28, 30)], _energy_config(), _sfoc_points(), fuel_state), _profile())
+    slowed_plan = calculate_voyage_plan([slowed], _profile(), [_speed_point(9.96, 23.9, 24.9), _speed_point(12, 28, 30)], _energy_config(), _sfoc_points(), fuel_state)
     slowed_consumption = calculate_consumption_with_voyage(build_schedule_timeline(events), events, slowed_plan, _profile())
     confirmed_rob = project_schedule_rob_with_bunkers(starting_rob, confirmed_consumption, [])
     slowed_rob = project_schedule_rob_with_bunkers(starting_rob, slowed_consumption, [])
@@ -259,3 +265,21 @@ def test_missing_inbound_voyage_leg_is_unavailable_not_zero():
     assert consumption.rows[0].sea_consumed_mt["ULSFO"] == 0.0
     assert consumption.rows[1].sea_consumed_mt["ULSFO"] is None
     assert consumption.rows[1].consumed_mt["ULSFO"] is None
+
+def test_missing_main_engine_fuel_state_does_not_default_to_vlsfo():
+    plan = calculate_voyage_plan(
+        [_leg()],
+        _profile(),
+        [_speed_point(10, 24, 30), _speed_point(14, 48, 40)],
+        _energy_config(),
+        _sfoc_points(),
+    )
+
+    row = plan.legs[0]
+
+    assert row.predicted_me_fuel_mt_per_hour is not None
+    assert row.sea_calculation_mode == "INCOMPLETE"
+    assert row.sea_consumed_mt["ULSFO"] is None
+    assert row.sea_consumed_mt["VLSFO"] is None
+    assert row.sea_consumed_mt["MDO"] is None
+
