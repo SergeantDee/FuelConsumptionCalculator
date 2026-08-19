@@ -203,3 +203,83 @@ def _sfoc_points() -> list[GeneratorSfocPoint]:
     from fuel_consumption_calculator.domain.voyage import GeneratorSfocPoint
 
     return [GeneratorSfocPoint(1, 0, 200), GeneratorSfocPoint(1, 100, 200)]
+
+def test_port_changeover_uses_actual_berth_arrival_as_interval_start():
+    events = [
+        _event(
+            1,
+            "Origin",
+            datetime(2026, 1, 1),
+            datetime(2026, 1, 1),
+            datetime(2026, 1, 1, tzinfo=timezone.utc),
+            datetime(2026, 1, 1, tzinfo=timezone.utc),
+        ),
+        _event(
+            2,
+            "Santos",
+            datetime(2026, 1, 2),
+            datetime(2026, 1, 3),
+            datetime(2026, 1, 2, tzinfo=timezone.utc),
+            datetime(2026, 1, 3, tzinfo=timezone.utc),
+        ),
+    ]
+    timeline = build_schedule_timeline(events)
+
+    leg = VoyageLeg(
+        vessel_id=1,
+        sequence_number=2,
+        origin_event_id=1,
+        destination_event_id=2,
+        origin_port="Origin",
+        destination_port="Santos",
+        scheduled_berth_departure=events[0].effective_departure_at,
+        scheduled_berth_arrival=events[1].effective_arrival_at,
+        route=RouteDefinition("Origin", "Santos", 0, 0, 0, 0, 0),
+        override=VoyageLegOverride(
+            1,
+            2,
+            "Origin",
+            "Santos",
+            "2026-01-01T00:00+00:00",
+            "2026-01-02T00:00+00:00",
+            actual_berth_arrival=datetime(2026, 1, 2, 6, tzinfo=timezone.utc),
+        ),
+    )
+
+    plan = calculate_voyage_plan(
+        [leg],
+        _profile(),
+        [],
+        VesselEnergyConfig(
+            1,
+            generator_rated_kw=1000,
+            port_running_generators=1,
+            sea_running_generators=1,
+            aux_boiler_mt_per_hour=0.1,
+        ),
+        _sfoc_points(),
+        MachineryFuelState(1, "VLSFO", "VLSFO", "VLSFO"),
+        [
+            FuelChangeoverEvent(
+                None,
+                1,
+                "AUX_BOILER",
+                "VLSFO",
+                "ULSFO",
+                datetime(2026, 1, 2, 3, tzinfo=timezone.utc),
+            )
+        ],
+    )
+
+    result = calculate_consumption_with_voyage(
+        timeline,
+        events,
+        plan,
+        _profile(),
+    )
+
+    santos = result.rows[1]
+
+    assert santos.port_hours == 18
+    assert round(santos.port_consumed_mt["VLSFO"], 2) == 0.0
+    assert round(santos.port_consumed_mt["ULSFO"], 2) == 1.8

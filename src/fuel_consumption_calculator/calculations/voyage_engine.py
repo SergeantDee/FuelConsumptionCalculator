@@ -207,7 +207,7 @@ def calculate_consumption_with_voyage(
             list(plan.generator_sfoc_points),
             plan.initial_fuel_state,
             list(plan.fuel_changeovers),
-            event.effective_arrival_at,
+            (actual_arrivals.get(event.id) or event.effective_arrival_at),
             (actual_departures.get(event.id) or event.effective_departure_at),
         )
         if plan.port_breakdowns is not None:
@@ -601,3 +601,4 @@ def _config_for_sea(config: VesselEnergyConfig, leg: VoyageLeg) -> VesselEnergyC
         port_ambient_c=config.port_ambient_c,
         sea_ambient_c=float(leg.override.sea_ambient_c),
     )
+
