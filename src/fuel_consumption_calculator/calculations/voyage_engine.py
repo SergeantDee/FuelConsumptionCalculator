@@ -342,7 +342,7 @@ def _sea_consumption(
     total_load_kw = config.sea_base_load_kw + departure_reefers * calculated_reefer_kw
     generator_load_percent = _generator_load_percent(total_load_kw, config.generator_rated_kw, config.sea_running_generators, warnings)
     generator_sfoc = interpolate_generator_sfoc(generator_load_percent, sfoc_points)
-    detailed_ready = _energy_config_ready(config) and generator_load_percent is not None and generator_sfoc is not None
+    detailed_ready = _energy_config_ready(config, config.sea_running_generators) and generator_load_percent is not None and generator_sfoc is not None
     missing = []
     if config.generator_rated_kw <= 0:
         missing.append("DG rated power missing")
@@ -399,7 +399,7 @@ def _port_consumption(
     generator_sfoc = interpolate_generator_sfoc(generator_load_percent, sfoc_points)
     generator = empty_fuel_totals()
     boiler = empty_fuel_totals()
-    detailed_ready = _energy_config_ready(config) and generator_load_percent is not None and generator_sfoc is not None
+    detailed_ready = _energy_config_ready(config, config.port_running_generators) and generator_load_percent is not None and generator_sfoc is not None
     if detailed_ready:
         if initial_fuel_state and start_utc and end_utc:
             generator = _split_quantity_consumption("GENERATORS", start_utc, end_utc, initial_fuel_state, fuel_changeovers or [], lambda hours: _generator_fuel(total_load_kw, generator_sfoc, hours))
@@ -435,11 +435,10 @@ def _port_consumption(
     )
 
 
-def _energy_config_ready(config: VesselEnergyConfig) -> bool:
+def _energy_config_ready(config: VesselEnergyConfig, running_generators: float) -> bool:
     return (
         config.generator_rated_kw > 0
-        and config.port_running_generators > 0
-        and config.sea_running_generators > 0
+        and running_generators > 0
         and config.generator_fuel_type in FUEL_TYPES
         and config.boiler_fuel_type in FUEL_TYPES
     )
@@ -601,4 +600,6 @@ def _config_for_sea(config: VesselEnergyConfig, leg: VoyageLeg) -> VesselEnergyC
         port_ambient_c=config.port_ambient_c,
         sea_ambient_c=float(leg.override.sea_ambient_c),
     )
+
+
 

@@ -283,3 +283,89 @@ def test_port_changeover_uses_actual_berth_arrival_as_interval_start():
     assert santos.port_hours == 18
     assert round(santos.port_consumed_mt["VLSFO"], 2) == 0.0
     assert round(santos.port_consumed_mt["ULSFO"], 2) == 1.8
+
+def test_sea_detailed_calculation_does_not_require_port_dg_count():
+    events = _events_for_leg()
+    leg = VoyageLeg(
+        vessel_id=1,
+        sequence_number=2,
+        origin_event_id=1,
+        destination_event_id=2,
+        origin_port="Santos",
+        destination_port="Rotterdam",
+        scheduled_berth_departure=events[0].effective_departure_at,
+        scheduled_berth_arrival=events[1].effective_arrival_at,
+        route=RouteDefinition("Santos", "Rotterdam", 0, 0, _distance_for_me_load(30), 0, 0),
+        override=VoyageLegOverride(
+            1,
+            2,
+            "Santos",
+            "Rotterdam",
+            "2026-01-01T00:00+00:00",
+            "2026-01-02T00:00+00:00",
+        ),
+    )
+
+    plan = calculate_voyage_plan(
+        [leg],
+        _profile(),
+        [SpeedConsumptionPoint(1, 10, {"ULSFO": 24, "VLSFO": 24, "MDO": 24}, 30)],
+        VesselEnergyConfig(
+            1,
+            sea_base_load_kw=100,
+            generator_rated_kw=1000,
+            port_running_generators=0,
+            sea_running_generators=1,
+            aux_boiler_mt_per_hour=0.1,
+        ),
+        _sfoc_points(),
+        MachineryFuelState(1, "VLSFO", "VLSFO", "VLSFO"),
+        [],
+    )
+
+    assert plan.legs[0].sea_calculation_mode == "DETAILED SFOC"
+    assert plan.legs[0].sea_generator_consumed_mt["VLSFO"] > 0
+
+
+def test_port_detailed_calculation_does_not_require_sea_dg_count():
+    events = [
+        _event(
+            1,
+            "Santos",
+            datetime(2026, 1, 1),
+            datetime(2026, 1, 2),
+            datetime(2026, 1, 1, tzinfo=timezone.utc),
+            datetime(2026, 1, 2, tzinfo=timezone.utc),
+        )
+    ]
+    timeline = build_schedule_timeline(events)
+
+    plan = calculate_voyage_plan(
+        [],
+        _profile(),
+        [],
+        VesselEnergyConfig(
+            1,
+            port_base_load_kw=100,
+            generator_rated_kw=1000,
+            port_running_generators=1,
+            sea_running_generators=0,
+            aux_boiler_mt_per_hour=0.1,
+        ),
+        _sfoc_points(),
+        MachineryFuelState(1, "VLSFO", "VLSFO", "VLSFO"),
+        [],
+    )
+
+    result = calculate_consumption_with_voyage(
+        timeline,
+        events,
+        plan,
+        _profile(),
+    )
+
+    assert plan.port_breakdowns is not None
+    assert plan.port_breakdowns[events[0].id].calculation_mode == "DETAILED SFOC"
+    assert result.rows[0].port_consumed_mt["VLSFO"] > 0
+
+
