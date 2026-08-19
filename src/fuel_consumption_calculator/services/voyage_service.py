@@ -247,16 +247,61 @@ class VoyageService:
         return total, matched, total - matched
 
     def _matching_overrides(self, vessel_id: int, events: list[ScheduleEvent]) -> dict[tuple, VoyageLegOverride]:
-        current_identities = {
-            _identity_for_leg(vessel_id, origin, destination)
+        current_legs = [
+            (origin, destination)
             for origin, destination in zip(events, events[1:])
             if origin.effective_departure_at is not None
-        }
-        return {
-            _override_identity(override): override
-            for override in self._repository.list_overrides(vessel_id)
-            if _override_identity(override) in current_identities
-        }
+        ]
+        saved_overrides = self._repository.list_overrides(vessel_id)
+        matched: dict[tuple, VoyageLegOverride] = {}
+        used_overrides: set[int] = set()
+
+        # Preserve the existing exact-match behavior when the scraped schedule
+        # timestamps have not changed.
+        for origin, destination in current_legs:
+            identity = _identity_for_leg(vessel_id, origin, destination)
+            for index, override in enumerate(saved_overrides):
+                if index in used_overrides:
+                    continue
+                if _override_identity(override) == identity:
+                    matched[identity] = override
+                    used_overrides.add(index)
+                    break
+
+        # A schedule refresh recreates rows and may change ETA/ETD. In that
+        # case, preserve an operational override only when the port pair is
+        # unambiguous in both the current schedule and the saved overrides.
+        current_pair_counts: dict[tuple[str, str], int] = {}
+        for origin, destination in current_legs:
+            pair = (origin.port, destination.port)
+            current_pair_counts[pair] = current_pair_counts.get(pair, 0) + 1
+
+        override_pair_counts: dict[tuple[str, str], int] = {}
+        for override in saved_overrides:
+            pair = (override.origin_port_snapshot, override.destination_port_snapshot)
+            override_pair_counts[pair] = override_pair_counts.get(pair, 0) + 1
+
+        for origin, destination in current_legs:
+            identity = _identity_for_leg(vessel_id, origin, destination)
+            if identity in matched:
+                continue
+
+            pair = (origin.port, destination.port)
+            if current_pair_counts.get(pair) != 1 or override_pair_counts.get(pair) != 1:
+                continue
+
+            for index, override in enumerate(saved_overrides):
+                if index in used_overrides:
+                    continue
+                if (
+                    override.origin_port_snapshot == origin.port
+                    and override.destination_port_snapshot == destination.port
+                ):
+                    matched[identity] = override
+                    used_overrides.add(index)
+                    break
+
+        return matched
 
     def _legacy_route(self, origin_port: str, destination_port: str) -> RouteDefinition:
         origin_pilot_dist, _origin_in, origin_out = legacy_pilot_info(origin_port)
@@ -385,3 +430,4 @@ def _override_identity(override: VoyageLegOverride) -> tuple:
 
 def _fallback(value: float | None, default: float) -> float:
     return float(default if value is None else value)
+
