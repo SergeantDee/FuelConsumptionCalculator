@@ -192,10 +192,15 @@ def calculate_consumption_with_voyage(
 
     for event in events:
         timeline_row = timeline_by_event.get(event.id)
-        sea_consumed = {
-            fuel_type: leg_consumption_by_destination.get(event.id, {}).get(fuel_type, 0.0)
-            for fuel_type in FUEL_TYPES
-        }
+        if event.id in leg_consumption_by_destination:
+            sea_consumed = {
+                fuel_type: leg_consumption_by_destination[event.id].get(fuel_type)
+                for fuel_type in FUEL_TYPES
+            }
+        elif event is events[0]:
+            sea_consumed = {fuel_type: 0.0 for fuel_type in FUEL_TYPES}
+        else:
+            sea_consumed = {fuel_type: None for fuel_type in FUEL_TYPES}
         sea_hours = leg_hours_by_destination.get(event.id, timeline_row.interval_from_previous_hours if timeline_row and timeline_row.interval_from_previous_hours else 0.0)
         port_hours = _port_hours(event, actual_arrivals.get(event.id), actual_departures.get(event.id), timeline_row.port_stay_hours if timeline_row else None)
         breakdown = _port_consumption(
@@ -600,6 +605,7 @@ def _config_for_sea(config: VesselEnergyConfig, leg: VoyageLeg) -> VesselEnergyC
         port_ambient_c=config.port_ambient_c,
         sea_ambient_c=float(leg.override.sea_ambient_c),
     )
+
 
 
 

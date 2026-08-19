@@ -236,3 +236,26 @@ def _energy_config() -> VesselEnergyConfig:
 
 def _sfoc_points() -> list[GeneratorSfocPoint]:
     return [GeneratorSfocPoint(1, 0, 200), GeneratorSfocPoint(1, 100, 200)]
+
+def test_missing_inbound_voyage_leg_is_unavailable_not_zero():
+    events = _events()
+    timeline = build_schedule_timeline(events)
+
+    plan = calculate_voyage_plan(
+        [],
+        _profile(),
+        [],
+        _energy_config(),
+        _sfoc_points(),
+    )
+
+    consumption = calculate_consumption_with_voyage(
+        timeline,
+        events,
+        plan,
+        _profile(),
+    )
+
+    assert consumption.rows[0].sea_consumed_mt["ULSFO"] == 0.0
+    assert consumption.rows[1].sea_consumed_mt["ULSFO"] is None
+    assert consumption.rows[1].consumed_mt["ULSFO"] is None
