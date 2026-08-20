@@ -153,7 +153,6 @@ def calculate_voyage_plan(
     return VoyagePlan(
         legs=calculated_legs,
         warnings=warnings,
-        port_breakdowns={},
         energy_config=config,
         generator_sfoc_points=tuple(ordered_sfoc_points),
         initial_fuel_state=active_fuel_state,

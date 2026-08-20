@@ -223,7 +223,6 @@ class PortEnergyBreakdown:
 class VoyagePlan:
     legs: list[CalculatedVoyageLeg]
     warnings: list[str]
-    port_breakdowns: dict[int, PortEnergyBreakdown] | None = None
     energy_config: VesselEnergyConfig | None = None
     generator_sfoc_points: tuple[GeneratorSfocPoint, ...] = ()
     initial_fuel_state: MachineryFuelState | None = None

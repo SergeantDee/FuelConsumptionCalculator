@@ -272,4 +272,4 @@ def test_stage_timeline_does_not_require_prior_consumption_mutation():
 
     assert first_port.consumption_mt == expected_port_consumption
     assert events[0].id in voyage_result.port_breakdowns
-    assert plan.port_breakdowns == {}
+    assert not hasattr(plan, "port_breakdowns")

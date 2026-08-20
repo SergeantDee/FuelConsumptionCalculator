@@ -366,4 +366,4 @@ def test_port_detailed_calculation_does_not_require_sea_dg_count():
 
     assert voyage_result.port_breakdowns[events[0].id].calculation_mode == "DETAILED SFOC"
     assert voyage_result.consumption.rows[0].port_consumed_mt["VLSFO"] > 0
-    assert plan.port_breakdowns == {}
+    assert not hasattr(plan, "port_breakdowns")
