@@ -45,6 +45,22 @@ def test_missing_detailed_me_configuration_marks_sea_calculation_incomplete():
     assert any("ME performance/SFOC unavailable" in warning for warning in row.warnings)
 
 
+def test_detailed_voyage_does_not_use_legacy_maneuvering_rates():
+    row = calculate_voyage_plan(
+        [_leg()],
+        _profile(),
+        [_speed_point(10, 24, 30)],
+        _energy_config(),
+        _sfoc_points(),
+        _fuel_state(),
+    ).legs[0]
+
+    assert row.departure_maneuvering_consumed_mt == {fuel: None for fuel in FUEL_TYPES}
+    assert row.arrival_maneuvering_consumed_mt == {fuel: None for fuel in FUEL_TYPES}
+    assert row.total_pre_arrival_consumed_mt == {fuel: None for fuel in FUEL_TYPES}
+    assert any("Detailed maneuvering model unavailable" in warning for warning in row.warnings)
+
+
 def test_actual_pilot_off_changes_available_sea_time_and_required_speed():
     leg = _leg(
         VoyageLegOverride(
@@ -157,10 +173,17 @@ def test_egb_selected_at_or_above_25_percent_removes_sea_boiler():
     assert row.sea_boiler_consumed_mt["MDO"] == 0
 
 
-def test_rolling_drop_below_25_percent_disables_egb_and_changes_max_lift(tmp_path):
+def test_rolling_drop_below_25_percent_disables_egb_with_unavailable_predicted_rob(tmp_path):
     events = _events()
     service = BunkerService(BunkerRepository(Database(tmp_path / "unused.db")))
-    capacity = BunkerCapacityProfile(1, (BunkerCapacity("ULSFO", 1000, 90), BunkerCapacity("VLSFO", 0, 90), BunkerCapacity("MDO", 1000, 90)))
+    capacity = BunkerCapacityProfile(
+        1,
+        (
+            BunkerCapacity("ULSFO", 1000, 90),
+            BunkerCapacity("VLSFO", 0, 90),
+            BunkerCapacity("MDO", 1000, 90),
+        ),
+    )
     starting_rob = StartingROB(1, (ROBQuantity("ULSFO", 100), ROBQuantity("VLSFO", 0), ROBQuantity("MDO", 100)))
     confirmed = _leg(route=RouteDefinition("Origin", "Destination", 5, 2, 431.29, 5, 2), override=VoyageLegOverride(1, 2, "Origin", "Destination", "2026-01-01T00:00", "2026-01-02T12:00", departure_reefers=10, use_egb=True))
     slowed = _leg(route=RouteDefinition("Origin", "Destination", 5, 2, 430.71, 5, 2), override=VoyageLegOverride(1, 2, "Origin", "Destination", "2026-01-01T00:00", "2026-01-02T12:00", departure_reefers=10, use_egb=True))
@@ -178,8 +201,10 @@ def test_rolling_drop_below_25_percent_disables_egb_and_changes_max_lift(tmp_pat
     slowed_rob = project_schedule_rob_with_bunkers(starting_rob, slowed_consumption, [])
 
     assert slowed_plan.legs[0].egb_used is False
-    assert slowed_rob.rows[1].arrival_rob_mt["MDO"] < confirmed_rob.rows[1].arrival_rob_mt["MDO"]
-    assert service.calculate_lift_limits(capacity, slowed_rob.rows[1].arrival_rob_mt)["MDO"].max_lift_mt > service.calculate_lift_limits(capacity, confirmed_rob.rows[1].arrival_rob_mt)["MDO"].max_lift_mt
+    assert confirmed_rob.rows[1].arrival_rob_mt["MDO"] is None
+    assert slowed_rob.rows[1].arrival_rob_mt["MDO"] is None
+    assert service.calculate_lift_limits(capacity, confirmed_rob.rows[1].arrival_rob_mt)["MDO"].max_lift_mt is None
+    assert service.calculate_lift_limits(capacity, slowed_rob.rows[1].arrival_rob_mt)["MDO"].max_lift_mt is None
 
 
 def _profile() -> ConsumptionProfile:

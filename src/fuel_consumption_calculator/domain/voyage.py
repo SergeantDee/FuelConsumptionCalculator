@@ -176,10 +176,10 @@ class CalculatedVoyageLeg:
     sea_hours: float
     arrival_pilotage_hours: float
     required_speed_knots: float | None
-    departure_maneuvering_consumed_mt: dict[str, float]
-    sea_consumed_mt: dict[str, float]
-    arrival_maneuvering_consumed_mt: dict[str, float]
-    total_pre_arrival_consumed_mt: dict[str, float]
+    departure_maneuvering_consumed_mt: dict[str, float | None]
+    sea_consumed_mt: dict[str, float | None]
+    arrival_maneuvering_consumed_mt: dict[str, float | None]
+    total_pre_arrival_consumed_mt: dict[str, float | None]
     predicted_me_load_percent: float | None = None
     predicted_rpm: float | None = None
     predicted_me_power_kw: float | None = None

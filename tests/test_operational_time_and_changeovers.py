@@ -144,9 +144,10 @@ def test_actual_changeover_timestamp_overrides_planned_and_changes_rob_allocatio
         [],
     )
 
-    main_vlsfo = consumption.rows[1].sea_consumed_mt["VLSFO"] - plan.legs[0].sea_generator_consumed_mt["VLSFO"] - plan.legs[0].sea_boiler_consumed_mt["VLSFO"]
+    main_vlsfo = plan.legs[0].sea_consumed_mt["VLSFO"] - plan.legs[0].sea_generator_consumed_mt["VLSFO"] - plan.legs[0].sea_boiler_consumed_mt["VLSFO"]
     assert round(main_vlsfo, 2) == round(plan.legs[0].predicted_me_fuel_mt_per_hour * 18, 2)
-    assert rob.rows[1].arrival_rob_mt["VLSFO"] < rob.rows[1].arrival_rob_mt["ULSFO"]
+    assert rob.rows[1].arrival_rob_mt["VLSFO"] is None
+    assert rob.rows[1].arrival_rob_mt["ULSFO"] is None
 
 
 def _plan_with_changeovers(changeovers: list[FuelChangeoverEvent], *, me_load: float = 30, use_egb: bool = False):

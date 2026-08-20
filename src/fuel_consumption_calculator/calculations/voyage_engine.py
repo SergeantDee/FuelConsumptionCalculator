@@ -75,14 +75,19 @@ def calculate_voyage_plan(
         elif sea_distance_nm > 0:
             required_speed = sea_distance_nm / sea_hours
 
-        departure_maneuvering = {
-            fuel_type: _consume(dep_pilotage_hours, profile.rate_for("MANEUVERING", fuel_type))
-            for fuel_type in FUEL_TYPES
-        }
-        arrival_maneuvering = {
-            fuel_type: _consume(arr_pilotage_hours, profile.rate_for("MANEUVERING", fuel_type))
-            for fuel_type in FUEL_TYPES
-        }
+        if detailed_me_enabled:
+            departure_maneuvering = {fuel_type: None for fuel_type in FUEL_TYPES}
+            arrival_maneuvering = {fuel_type: None for fuel_type in FUEL_TYPES}
+            leg_warnings.append("Detailed maneuvering model unavailable; maneuvering fuel consumption unavailable.")
+        else:
+            departure_maneuvering = {
+                fuel_type: _consume(dep_pilotage_hours, profile.rate_for("MANEUVERING", fuel_type))
+                for fuel_type in FUEL_TYPES
+            }
+            arrival_maneuvering = {
+                fuel_type: _consume(arr_pilotage_hours, profile.rate_for("MANEUVERING", fuel_type))
+                for fuel_type in FUEL_TYPES
+            }
         me_perf = calculate_main_engine_performance(
             required_speed,
             slip_percent=config.main_engine_slip_percent,

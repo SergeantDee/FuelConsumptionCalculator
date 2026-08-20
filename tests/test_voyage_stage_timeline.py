@@ -157,6 +157,30 @@ def test_actual_rob_observation_restores_forecast_after_unknown_stage():
     assert arrival_stage.rob.end_mt["ULSFO"] == 70.0
 
 
+def test_actual_rob_observation_reanchors_after_unknown_detailed_departure_maneuvering():
+    events = _events()
+    plan = _plan(detailed=True)
+    observation = ActualROBObservation(
+        None,
+        1,
+        datetime(2026, 1, 1, 2, tzinfo=timezone.utc),
+        {"ULSFO": 70.0, "VLSFO": 80.0, "MDO": 90.0},
+    )
+
+    timeline = build_voyage_stage_timeline(
+        events,
+        plan,
+        _starting_rob(),
+        now_utc=datetime(2025, 12, 30, tzinfo=timezone.utc),
+        rob_observations=[observation],
+    )
+
+    departure_stage = next(stage for stage in timeline.stages if stage.stage_type == STAGE_DEPARTURE_MANEUVERING)
+    sea_stage = next(stage for stage in timeline.stages if stage.stage_type == STAGE_SEA_PASSAGE)
+    assert departure_stage.rob.end_mt == {"ULSFO": 70.0, "VLSFO": 80.0, "MDO": 90.0}
+    assert sea_stage.rob.start_mt == departure_stage.rob.end_mt
+
+
 def _plan(override: VoyageLegOverride | None = None, changeovers: list[FuelChangeoverEvent] | None = None, detailed: bool = False):
     leg = VoyageLeg(
         vessel_id=1,
