@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
+import pytest
+
 from fuel_consumption_calculator.domain.schedule import ScheduleCandidate
-from fuel_consumption_calculator.domain.voyage import MachineryFuelState
+from fuel_consumption_calculator.domain.voyage import ActualROBObservation, MachineryFuelState
 from fuel_consumption_calculator.repositories.database import Database
 from fuel_consumption_calculator.repositories.schedule_repository import ScheduleRepository
 from fuel_consumption_calculator.repositories.vessel_repository import VesselRepository
@@ -29,6 +31,22 @@ def test_explicitly_saved_vlsfo_machinery_fuel_state_remains_authoritative(tmp_p
 
     assert saved == MachineryFuelState(vessel.id, "VLSFO", "VLSFO", "VLSFO")
 
+
+def test_actual_rob_observation_requires_complete_fuel_snapshot(tmp_path):
+    database = Database(tmp_path / "test.db")
+    database.initialize()
+    vessel = VesselRepository(database).save_active("Maersk Labrea", "1234567")
+    service = VoyageService(VoyageRepository(database))
+
+    observation = ActualROBObservation(
+        id=None,
+        vessel_id=vessel.id,
+        effective_at_utc=datetime(2026, 9, 1, 12, tzinfo=timezone.utc),
+        quantities_mt={"ULSFO": 100.0, "VLSFO": 50.0},
+    )
+
+    with pytest.raises(ValueError, match="complete"):
+        service.save_actual_rob_observation(observation)
 
 def _candidate(
     sequence: int,

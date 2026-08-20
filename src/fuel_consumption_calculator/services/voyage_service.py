@@ -397,6 +397,8 @@ class VoyageService:
             seen.add(point.load_percent)
 
     def _validate_rob_observation(self, observation: ActualROBObservation) -> None:
+        if set(observation.quantities_mt) != set(FUEL_TYPES):
+            raise ValueError("Actual ROB observation must contain a complete ULSFO, VLSFO, and MDO snapshot.")
         for fuel_type in FUEL_TYPES:
             if observation.quantity_for(fuel_type) < 0:
                 raise ValueError("Actual ROB quantities cannot be negative.")
