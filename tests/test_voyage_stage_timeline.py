@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
-from fuel_consumption_calculator.calculations.voyage_engine import calculate_consumption_with_voyage, calculate_voyage_plan
+from fuel_consumption_calculator.calculations.voyage_engine import calculate_consumption_with_voyage, calculate_voyage_consumption, calculate_voyage_plan
 from fuel_consumption_calculator.domain.consumption import FUEL_TYPES, ConsumptionProfile, ConsumptionRate
 from fuel_consumption_calculator.domain.rob import ROBQuantity, StartingROB
 from fuel_consumption_calculator.domain.schedule import ScheduleEvent
@@ -248,3 +248,28 @@ def _energy_config() -> VesselEnergyConfig:
 
 def _sfoc_points() -> list[GeneratorSfocPoint]:
     return [GeneratorSfocPoint(1, 0, 220), GeneratorSfocPoint(1, 100, 200)]
+
+def test_stage_timeline_does_not_require_prior_consumption_mutation():
+    events = _events()
+    plan = _plan()
+    voyage_result = calculate_voyage_consumption(
+        build_schedule_timeline(events),
+        events,
+        plan,
+        _profile(),
+    )
+
+    timeline = build_voyage_stage_timeline(
+        events,
+        plan,
+        _starting_rob(),
+        port_breakdowns=voyage_result.port_breakdowns,
+        now_utc=datetime(2025, 12, 30, tzinfo=timezone.utc),
+    )
+
+    first_port = next(stage for stage in timeline.stages if stage.stage_type == STAGE_PORT_STAY)
+    expected_port_consumption = voyage_result.port_breakdowns[events[0].id].total_consumed_mt
+
+    assert first_port.consumption_mt == expected_port_consumption
+    assert events[0].id in voyage_result.port_breakdowns
+    assert plan.port_breakdowns == {}

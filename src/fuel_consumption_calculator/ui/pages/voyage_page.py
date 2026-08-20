@@ -131,10 +131,21 @@ class VoyagePage(QWidget):
 
         profile = self._consumption_service.load_profile(vessel.id)
         plan = self._voyage_service.calculate_plan(vessel.id, events, profile)
-        self._voyage_service.calculate_consumption_for_plan(events=events, timeline=schedule_timeline, plan=plan, profile=profile)
+        voyage_result = self._voyage_service.calculate_consumption_for_plan(
+            events=events,
+            timeline=schedule_timeline,
+            plan=plan,
+            profile=profile,
+        )
         starting_rob = self._rob_service.load_starting_rob(vessel.id)
         observations = self._voyage_service.list_actual_rob_observations(vessel.id)
-        self._timeline = build_voyage_stage_timeline(events, plan, starting_rob, rob_observations=observations)
+        self._timeline = build_voyage_stage_timeline(
+            events,
+            plan,
+            starting_rob,
+            port_breakdowns=voyage_result.port_breakdowns,
+            rob_observations=observations,
+        )
         self._active_fuel_state = plan.initial_fuel_state
 
         self.vessel_label.setText(f"Vessel: {vessel.name}  |  IMO {vessel.imo}")

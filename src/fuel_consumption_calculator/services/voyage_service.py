@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from fuel_consumption_calculator.calculations.consumption_engine import ScheduleFuelConsumption
-from fuel_consumption_calculator.calculations.voyage_engine import calculate_consumption_with_voyage, calculate_voyage_plan
+from fuel_consumption_calculator.calculations.voyage_engine import VoyageConsumptionResult, calculate_consumption_with_voyage, calculate_voyage_consumption, calculate_voyage_plan
 from fuel_consumption_calculator.domain.consumption import FUEL_TYPES, ConsumptionProfile
 from fuel_consumption_calculator.domain.schedule import ScheduleEvent
 from fuel_consumption_calculator.domain.schedule_timeline import ScheduleTimeline
@@ -174,8 +174,8 @@ class VoyageService:
         timeline: ScheduleTimeline,
         plan: VoyagePlan,
         profile: ConsumptionProfile,
-    ) -> ScheduleFuelConsumption:
-        return calculate_consumption_with_voyage(timeline, events, plan, profile)
+    ) -> VoyageConsumptionResult:
+        return calculate_voyage_consumption(timeline, events, plan, profile)
 
     def save_leg_values(
         self,
@@ -430,4 +430,3 @@ def _override_identity(override: VoyageLegOverride) -> tuple:
 
 def _fallback(value: float | None, default: float) -> float:
     return float(default if value is None else value)
-

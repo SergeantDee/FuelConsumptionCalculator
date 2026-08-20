@@ -63,13 +63,14 @@ def build_voyage_stage_timeline(
     plan: VoyagePlan,
     starting_rob: StartingROB,
     *,
+    port_breakdowns: dict[int, PortEnergyBreakdown] | None = None,
     now_utc: datetime | None = None,
     rob_observations: list[ActualROBObservation] | tuple[ActualROBObservation, ...] = (),
 ) -> VoyageStageTimeline:
     ordered_events = sorted(events, key=lambda event: (event.sequence_number, event.effective_arrival_at, event.id))
     incoming_by_event = {leg.leg.destination_event_id: leg for leg in plan.legs}
     outgoing_by_event = {leg.leg.origin_event_id: leg for leg in plan.legs}
-    port_breakdowns = plan.port_breakdowns or {}
+    port_breakdowns = port_breakdowns or {}
     changeovers = tuple(sorted(plan.fuel_changeovers, key=lambda event: _instant(event.effective_at_utc) or datetime.min))
     observations = tuple(sorted(rob_observations, key=lambda observation: _instant(observation.effective_at_utc) or datetime.min))
     applied_observation_indexes: set[int] = set()

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 
 from fuel_consumption_calculator.calculations.bunker_projection_engine import project_schedule_rob_with_bunkers
-from fuel_consumption_calculator.calculations.voyage_engine import calculate_consumption_with_voyage, calculate_voyage_plan
+from fuel_consumption_calculator.calculations.voyage_engine import calculate_consumption_with_voyage, calculate_voyage_consumption, calculate_voyage_plan
 from fuel_consumption_calculator.domain.consumption import FUEL_TYPES, ConsumptionProfile, ConsumptionRate
 from fuel_consumption_calculator.domain.rob import ROBQuantity, StartingROB
 from fuel_consumption_calculator.domain.schedule import ScheduleEvent
@@ -357,15 +357,13 @@ def test_port_detailed_calculation_does_not_require_sea_dg_count():
         [],
     )
 
-    result = calculate_consumption_with_voyage(
+    voyage_result = calculate_voyage_consumption(
         timeline,
         events,
         plan,
         _profile(),
     )
 
-    assert plan.port_breakdowns is not None
-    assert plan.port_breakdowns[events[0].id].calculation_mode == "DETAILED SFOC"
-    assert result.rows[0].port_consumed_mt["VLSFO"] > 0
-
-
+    assert voyage_result.port_breakdowns[events[0].id].calculation_mode == "DETAILED SFOC"
+    assert voyage_result.consumption.rows[0].port_consumed_mt["VLSFO"] > 0
+    assert plan.port_breakdowns == {}

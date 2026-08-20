@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import timedelta
 
 from fuel_consumption_calculator.calculations.consumption_engine import EventFuelConsumption, ScheduleFuelConsumption
@@ -19,6 +20,12 @@ from fuel_consumption_calculator.domain.voyage import (
     VoyagePlan,
     empty_fuel_totals,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class VoyageConsumptionResult:
+    consumption: ScheduleFuelConsumption
+    port_breakdowns: dict[int, PortEnergyBreakdown]
 
 
 def calculate_voyage_plan(
@@ -154,12 +161,12 @@ def calculate_voyage_plan(
     )
 
 
-def calculate_consumption_with_voyage(
+def calculate_voyage_consumption(
     timeline: ScheduleTimeline,
     events: list[ScheduleEvent],
     plan: VoyagePlan,
     profile: ConsumptionProfile,
-) -> ScheduleFuelConsumption:
+) -> VoyageConsumptionResult:
     if timeline.issues:
         raise ValueError(f"Cannot calculate consumption while schedule chronology is invalid: {timeline.issues[0].message}")
 
@@ -187,8 +194,7 @@ def calculate_consumption_with_voyage(
     outgoing_leg_by_origin = {calculated_leg.leg.origin_event_id: calculated_leg for calculated_leg in plan.legs}
     rows: list[EventFuelConsumption] = []
     totals = empty_fuel_totals()
-    if plan.port_breakdowns is not None:
-        plan.port_breakdowns.clear()
+    port_breakdowns: dict[int, PortEnergyBreakdown] = {}
 
     for event in events:
         timeline_row = timeline_by_event.get(event.id)
@@ -215,8 +221,7 @@ def calculate_consumption_with_voyage(
             (actual_arrivals.get(event.id) or event.effective_arrival_at),
             (actual_departures.get(event.id) or event.effective_departure_at),
         )
-        if plan.port_breakdowns is not None:
-            plan.port_breakdowns[event.id] = breakdown
+        port_breakdowns[event.id] = breakdown
         port_consumed = breakdown.total_consumed_mt
         consumed = {fuel_type: _add_optional(sea_consumed[fuel_type], port_consumed[fuel_type]) for fuel_type in FUEL_TYPES}
         for fuel_type in FUEL_TYPES:
@@ -233,7 +238,19 @@ def calculate_consumption_with_voyage(
                 port_consumed_mt=port_consumed,
             )
         )
-    return ScheduleFuelConsumption(rows=rows, totals_mt=totals)
+    return VoyageConsumptionResult(
+        consumption=ScheduleFuelConsumption(rows=rows, totals_mt=totals),
+        port_breakdowns=port_breakdowns,
+    )
+
+
+def calculate_consumption_with_voyage(
+    timeline: ScheduleTimeline,
+    events: list[ScheduleEvent],
+    plan: VoyagePlan,
+    profile: ConsumptionProfile,
+) -> ScheduleFuelConsumption:
+    return calculate_voyage_consumption(timeline, events, plan, profile).consumption
 
 
 def interpolate_speed_rates(
@@ -615,8 +632,3 @@ def _config_for_sea(config: VesselEnergyConfig, leg: VoyageLeg) -> VesselEnergyC
         port_ambient_c=config.port_ambient_c,
         sea_ambient_c=float(leg.override.sea_ambient_c),
     )
-
-
-
-
-
