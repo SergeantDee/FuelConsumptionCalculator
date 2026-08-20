@@ -3,11 +3,31 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 
 from fuel_consumption_calculator.domain.schedule import ScheduleCandidate
+from fuel_consumption_calculator.domain.voyage import MachineryFuelState
 from fuel_consumption_calculator.repositories.database import Database
 from fuel_consumption_calculator.repositories.schedule_repository import ScheduleRepository
 from fuel_consumption_calculator.repositories.vessel_repository import VesselRepository
 from fuel_consumption_calculator.repositories.voyage_repository import VoyageRepository
 from fuel_consumption_calculator.services.voyage_service import VoyageService
+
+
+def test_initial_machinery_fuel_state_is_unknown_until_saved(tmp_path):
+    database = Database(tmp_path / "test.db")
+    database.initialize()
+    service = VoyageService(VoyageRepository(database))
+
+    assert service.load_initial_fuel_state(1) is None
+
+
+def test_explicitly_saved_vlsfo_machinery_fuel_state_remains_authoritative(tmp_path):
+    database = Database(tmp_path / "test.db")
+    database.initialize()
+    vessel = VesselRepository(database).save_active("Maersk Labrea", "1234567")
+    service = VoyageService(VoyageRepository(database))
+
+    saved = service.save_initial_fuel_state(MachineryFuelState(vessel.id, "VLSFO", "VLSFO", "VLSFO"))
+
+    assert saved == MachineryFuelState(vessel.id, "VLSFO", "VLSFO", "VLSFO")
 
 
 def _candidate(

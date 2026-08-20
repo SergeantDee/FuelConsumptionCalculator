@@ -82,9 +82,9 @@ class VesselEnergyConfig:
 @dataclass(frozen=True, slots=True)
 class MachineryFuelState:
     vessel_id: int
-    main_engine_fuel_type: str = "VLSFO"
-    generators_fuel_type: str = "VLSFO"
-    aux_boiler_fuel_type: str = "VLSFO"
+    main_engine_fuel_type: str
+    generators_fuel_type: str
+    aux_boiler_fuel_type: str
 
     def fuel_for(self, machinery: str) -> str:
         if machinery == "MAIN_ENGINE":

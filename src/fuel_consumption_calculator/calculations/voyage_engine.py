@@ -333,7 +333,7 @@ def _sea_consumption(
     end_utc=None,
 ) -> dict[str, float]:
     if detailed_me_fuel_mt_per_hour is not None:
-        if initial_fuel_state and start_utc and end_utc:
+        if start_utc and end_utc:
             main_engine = _split_quantity_consumption(
                 "MAIN_ENGINE",
                 start_utc,
@@ -385,14 +385,13 @@ def _sea_consumption(
     )
     mode = "DETAILED SFOC" if detailed_ready and detailed_me_fuel_mt_per_hour is not None and me_allocation_ready else "INCOMPLETE"
     if detailed_ready:
-        if initial_fuel_state and start_utc and end_utc:
+        if start_utc and end_utc:
             generator = _split_quantity_consumption("GENERATORS", start_utc, end_utc, initial_fuel_state, fuel_changeovers or [], lambda hours: _generator_fuel(total_load_kw, generator_sfoc, hours))
+            if not egb_used:
+                boiler = _split_quantity_consumption("AUX_BOILER", start_utc, end_utc, initial_fuel_state, fuel_changeovers or [], lambda hours: hours * config.aux_boiler_mt_per_hour)
         else:
             generator[config.generator_fuel_type] += _generator_fuel(total_load_kw, generator_sfoc, sea_hours)
-        if not egb_used:
-            if initial_fuel_state and start_utc and end_utc:
-                boiler = _split_quantity_consumption("AUX_BOILER", start_utc, end_utc, initial_fuel_state, fuel_changeovers or [], lambda hours: hours * config.aux_boiler_mt_per_hour)
-            else:
+            if not egb_used:
                 boiler[config.boiler_fuel_type] += sea_hours * config.aux_boiler_mt_per_hour
     elif missing:
         warnings.append("Calculation incomplete: " + "; ".join(dict.fromkeys(missing)) + ".")
@@ -432,7 +431,7 @@ def _port_consumption(
     boiler = empty_fuel_totals()
     detailed_ready = _energy_config_ready(config, config.port_running_generators) and generator_load_percent is not None and generator_sfoc is not None
     if detailed_ready:
-        if initial_fuel_state and start_utc and end_utc:
+        if start_utc and end_utc:
             generator = _split_quantity_consumption("GENERATORS", start_utc, end_utc, initial_fuel_state, fuel_changeovers or [], lambda hours: _generator_fuel(total_load_kw, generator_sfoc, hours))
             boiler = _split_quantity_consumption("AUX_BOILER", start_utc, end_utc, initial_fuel_state, fuel_changeovers or [], lambda hours: hours * config.aux_boiler_mt_per_hour)
         else:
@@ -537,19 +536,21 @@ def _split_quantity_consumption(
     machinery: str,
     start_utc,
     end_utc,
-    initial_fuel_state: MachineryFuelState,
+    initial_fuel_state: MachineryFuelState | None,
     changeovers: list[FuelChangeoverEvent],
     quantity_for_hours,
-) -> dict[str, float]:
+) -> dict[str, float | None]:
     totals = empty_fuel_totals()
     if end_utc <= start_utc:
         return totals
-    active_fuel = initial_fuel_state.fuel_for(machinery)
+    active_fuel = initial_fuel_state.fuel_for(machinery) if initial_fuel_state else None
     for event in sorted(changeovers, key=lambda changeover: changeover.effective_at_utc):
         if event.machinery != machinery:
             continue
         if event.effective_at_utc <= start_utc:
             active_fuel = event.to_fuel_type
+    if active_fuel is None:
+        return {fuel_type: None for fuel_type in FUEL_TYPES}
     cursor = start_utc
     relevant = [
         event

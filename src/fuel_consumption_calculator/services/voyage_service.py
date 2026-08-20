@@ -52,7 +52,7 @@ class VoyageService:
         self._validate_main_engine_sfoc_points(points)
         return self._repository.save_main_engine_sfoc_points(vessel_id, points)
 
-    def load_initial_fuel_state(self, vessel_id: int) -> MachineryFuelState:
+    def load_initial_fuel_state(self, vessel_id: int) -> MachineryFuelState | None:
         return self._repository.load_initial_fuel_state(vessel_id)
 
     def save_initial_fuel_state(self, state: MachineryFuelState) -> MachineryFuelState:

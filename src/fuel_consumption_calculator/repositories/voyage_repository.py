@@ -418,7 +418,7 @@ class VoyageRepository:
                 )
         return self.list_generator_sfoc_points(vessel_id)
 
-    def load_initial_fuel_state(self, vessel_id: int) -> MachineryFuelState:
+    def load_initial_fuel_state(self, vessel_id: int) -> MachineryFuelState | None:
         with self._database.connect() as connection:
             row = connection.execute(
                 """
@@ -429,7 +429,7 @@ class VoyageRepository:
                 (vessel_id,),
             ).fetchone()
         if row is None:
-            return MachineryFuelState(vessel_id=vessel_id)
+            return None
         return MachineryFuelState(
             vessel_id=row["vessel_id"],
             main_engine_fuel_type=row["main_engine_fuel_type"],

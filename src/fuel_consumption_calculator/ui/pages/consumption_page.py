@@ -353,6 +353,10 @@ class ConsumptionPage(QWidget):
 
     def _refresh_fuel_state(self, vessel_id: int) -> None:
         state = self._voyage_service.load_initial_fuel_state(vessel_id)
+        if state is None:
+            for input_widget in self._initial_fuel_inputs.values():
+                input_widget.setCurrentIndex(-1)
+            return
         self._initial_fuel_inputs["MAIN_ENGINE"].setCurrentText(state.main_engine_fuel_type)
         self._initial_fuel_inputs["GENERATORS"].setCurrentText(state.generators_fuel_type)
         self._initial_fuel_inputs["AUX_BOILER"].setCurrentText(state.aux_boiler_fuel_type)

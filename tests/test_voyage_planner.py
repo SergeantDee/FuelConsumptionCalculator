@@ -110,7 +110,7 @@ def test_updated_projected_arrival_rob_changes_max_lift(tmp_path):
 def test_port_load_generator_and_boiler_consumption_are_detailed():
     events = _events()
     leg = _leg(VoyageLegOverride(1, 2, "Origin", "Destination", "2026-01-01T00:00", "2026-01-02T12:00", port_reefers=10))
-    plan = calculate_voyage_plan([leg], _profile(), [_speed_point(10, 24, 30)], _energy_config(), _sfoc_points())
+    plan = calculate_voyage_plan([leg], _profile(), [_speed_point(10, 24, 30)], _energy_config(), _sfoc_points(), _fuel_state())
 
     consumption = calculate_consumption_with_voyage(build_schedule_timeline(events), events, plan, _profile())
 
@@ -128,7 +128,7 @@ def test_speed_point_interpolates_main_engine_load_percent():
 def test_egb_unavailable_below_25_percent_applies_sea_boiler():
     leg = _leg(route=RouteDefinition("Origin", "Destination", 5, 2, 430.71, 5, 2), override=VoyageLegOverride(1, 2, "Origin", "Destination", "2026-01-01T00:00", "2026-01-02T12:00", departure_reefers=10, use_egb=True))
 
-    row = calculate_voyage_plan([leg], _profile(), [_speed_point(9.96, 23.9, 24.9), _speed_point(12, 28, 30)], _energy_config(), _sfoc_points()).legs[0]
+    row = calculate_voyage_plan([leg], _profile(), [_speed_point(9.96, 23.9, 24.9), _speed_point(12, 28, 30)], _energy_config(), _sfoc_points(), _fuel_state()).legs[0]
 
     assert round(row.predicted_me_load_percent, 1) == 24.9
     assert row.egb_available is False
@@ -139,7 +139,7 @@ def test_egb_unavailable_below_25_percent_applies_sea_boiler():
 def test_egb_available_at_25_percent_but_boiler_applies_until_selected():
     leg = _leg(VoyageLegOverride(1, 2, "Origin", "Destination", "2026-01-01T00:00", "2026-01-02T12:00", departure_reefers=10, use_egb=False))
 
-    row = calculate_voyage_plan([_leg(route=RouteDefinition("Origin", "Destination", 5, 2, 431.29, 5, 2), override=leg.leg.override if hasattr(leg, "leg") else leg.override)], _profile(), [_speed_point(10, 24, 25), _speed_point(12, 28, 30)], _energy_config(), _sfoc_points()).legs[0]
+    row = calculate_voyage_plan([_leg(route=RouteDefinition("Origin", "Destination", 5, 2, 431.29, 5, 2), override=leg.leg.override if hasattr(leg, "leg") else leg.override)], _profile(), [_speed_point(10, 24, 25), _speed_point(12, 28, 30)], _energy_config(), _sfoc_points(), _fuel_state()).legs[0]
 
     assert round(row.predicted_me_load_percent, 1) == 25.0
     assert row.egb_available is True
@@ -201,6 +201,10 @@ def _rate(mode: str, fuel: str) -> float:
 
 def _speed_point(speed: float, ulsfo_rate: float, me_load: float | None = None) -> SpeedConsumptionPoint:
     return SpeedConsumptionPoint(1, speed, {"ULSFO": ulsfo_rate, "VLSFO": 0.0, "MDO": 0.0}, me_load)
+
+
+def _fuel_state() -> MachineryFuelState:
+    return MachineryFuelState(1, "VLSFO", "ULSFO", "MDO")
 
 
 def _leg(override: VoyageLegOverride | None = None, route: RouteDefinition | None = None) -> VoyageLeg:
