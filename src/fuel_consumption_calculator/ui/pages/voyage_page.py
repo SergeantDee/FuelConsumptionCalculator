@@ -47,6 +47,11 @@ from fuel_consumption_calculator.services.vessel_service import VesselService
 from fuel_consumption_calculator.services.voyage_service import VoyageService
 from fuel_consumption_calculator.ui.widgets.page_header import PageHeader
 from fuel_consumption_calculator.ui.widgets.actual_rob_dialog import ActualROBDialog
+from fuel_consumption_calculator.ui.widgets.fuel_display import (
+    FuelTextDelegate,
+    format_fuel_html,
+    format_fuel_plain,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,7 +139,15 @@ class VoyagePage(QWidget):
         self.current_stage_label = QLabel("Current Stage: -")
         self.next_port_label = QLabel("Next Port: -")
         self.next_event_label = QLabel("Next Major Event: -")
-        self.summary_rob_label = QLabel("Current Predicted ROB: ULSFO 0.0 MT  |  VLSFO 0.0 MT  |  MDO 0.0 MT")
+        self.summary_rob_label = QLabel(
+            format_fuel_html(
+                {"ULSFO": 0.0, "VLSFO": 0.0, "MDO": 0.0},
+                decimals=2,
+                show_unit=True,
+                prefix="Current Predicted ROB: ",
+            )
+        )
+        self.summary_rob_label.setTextFormat(Qt.TextFormat.RichText)
         for label in (self.vessel_label, self.current_stage_label, self.next_port_label, self.next_event_label):
             label.setObjectName("fieldLabel")
         self.summary_rob_label.setObjectName("mutedText")
@@ -171,6 +184,10 @@ class VoyagePage(QWidget):
         self.stage_table.setObjectName("voyageStageTable")
         self.stage_table.setHorizontalHeaderLabels(self.TABLE_COLUMNS)
         self._update_time_headers()
+
+        self._fuel_text_delegate = FuelTextDelegate(self.stage_table)
+        self.stage_table.setItemDelegateForColumn(11, self._fuel_text_delegate)
+        self.stage_table.setItemDelegateForColumn(12, self._fuel_text_delegate)
         self.stage_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.stage_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.stage_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -209,7 +226,14 @@ class VoyagePage(QWidget):
             self.current_stage_label.setText("Current Stage: -")
             self.next_port_label.setText("Next Port: -")
             self.next_event_label.setText("Next Major Event: -")
-            self.summary_rob_label.setText("Current Predicted ROB: ULSFO 0.0 MT  |  VLSFO 0.0 MT  |  MDO 0.0 MT")
+            self.summary_rob_label.setText(
+            format_fuel_html(
+                {"ULSFO": 0.0, "VLSFO": 0.0, "MDO": 0.0},
+                decimals=2,
+                show_unit=True,
+                prefix="Current Predicted ROB: ",
+            )
+        )
             self.empty_state.setVisible(True)
             self.stage_table.setVisible(False)
             self.status_label.setText("Configure a vessel before planning voyage stages.")
@@ -253,7 +277,14 @@ class VoyagePage(QWidget):
         self.next_port_label.setText(f"Next Port: {self._timeline.next_port or '-'}")
         next_major = next((stage for stage in self._timeline.stages if stage.status != "COMPLETED"), None)
         self.next_event_label.setText(f"Next Major Event: {next_major.title if next_major else '-'}")
-        self.summary_rob_label.setText("Current Predicted ROB: " + _fmt_fuel_line(self._timeline.current_predicted_rob_mt))
+        self.summary_rob_label.setText(
+            format_fuel_html(
+                self._timeline.current_predicted_rob_mt,
+                decimals=2,
+                show_unit=True,
+                prefix="Current Predicted ROB: ",
+            )
+        )
 
         self.empty_state.setVisible(len(self._timeline.stages) == 0)
         self.stage_table.setVisible(len(self._display_rows) > 0)
@@ -851,7 +882,14 @@ class VoyagePage(QWidget):
         rob_title = QLabel("End-of-Event ROB")
         rob_title.setObjectName("fieldLabel")
 
-        rob_value = QLabel(_fmt_fuel_line(stage.rob.end_mt))
+        rob_value = QLabel(
+            format_fuel_html(
+                stage.rob.end_mt,
+                decimals=2,
+                show_unit=True,
+            )
+        )
+        rob_value.setTextFormat(Qt.TextFormat.RichText)
         rob_value.setObjectName("mutedText")
         rob_value.setWordWrap(False)
 
@@ -1749,14 +1787,18 @@ def _hours(start: datetime | None, end: datetime | None) -> float | None:
 
 
 def _fmt_fuel_line(values: dict[str, float | None]) -> str:
-    return "  |  ".join(f"{fuel} {_fmt_mt(values.get(fuel, 0.0))}" for fuel in FUEL_TYPES)
+    return format_fuel_plain(
+        values,
+        decimals=2,
+        show_unit=True,
+    )
 
 
 def _fmt_compact_rob(values: dict[str, float | None]) -> str:
-    labels = {"ULSFO": "U", "VLSFO": "V", "MDO": "M"}
-    return " | ".join(
-        f"{labels[fuel]} {_fmt_compact_mt(values.get(fuel))}"
-        for fuel in FUEL_TYPES
+    return format_fuel_plain(
+        values,
+        decimals=2,
+        show_unit=False,
     )
 
 
