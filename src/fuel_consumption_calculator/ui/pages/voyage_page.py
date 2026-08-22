@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from PySide6.QtCore import QDateTime, Qt, Signal
 from PySide6.QtGui import QAction, QColor
@@ -77,6 +78,8 @@ def build_planner_display_rows(
 class VoyagePage(QWidget):
     COLUMN_LAYOUT_SETTING = "voyage_planner_column_layout"
     EVENT_COLUMN = 1
+    START_TIME_COLUMN = 3
+    END_TIME_COLUMN = 4
     DEFAULT_HIDDEN_COLUMNS = frozenset({2, 8, 9, 10, 13})
     TABLE_COLUMNS = (
         "Status", "Event", "Stage", "Start UTC", "End UTC", "Duration",
@@ -101,6 +104,14 @@ class VoyagePage(QWidget):
         self._voyage_service = voyage_service
         self._rob_service = rob_service
         self._settings_service = settings_service
+        try:
+            saved_time_mode = str(
+                self._settings_service.load().get("voyage_time_display_mode", "UTC")
+            ).upper()
+        except RuntimeError:
+            saved_time_mode = "UTC"
+        self._time_display_mode = saved_time_mode if saved_time_mode in {"UTC", "LT"} else "UTC"
+        self._events_by_id = {}
         self._restoring_column_layout = True
         self._timeline: VoyageStageTimeline | None = None
         self._active_fuel_state: MachineryFuelState | None = None
@@ -144,11 +155,22 @@ class VoyagePage(QWidget):
         self.add_operational_event_button.clicked.connect(self._add_operational_event)
         actions.addWidget(self.add_operational_event_button)
         actions.addStretch()
+        actions.addWidget(QLabel("Time Display"))
+        self.time_display_combo = QComboBox()
+        self.time_display_combo.addItems(("UTC", "LT"))
+        self.time_display_combo.setCurrentText(self._time_display_mode)
+        self.time_display_combo.setMinimumWidth(76)
+        self.time_display_combo.setToolTip(
+            "UTC = authoritative calculation time. LT = configured port local time."
+        )
+        self.time_display_combo.currentTextChanged.connect(self._set_time_display_mode)
+        actions.addWidget(self.time_display_combo)
         layout.addLayout(actions)
 
         self.stage_table = QTableWidget(0, len(self.TABLE_COLUMNS))
         self.stage_table.setObjectName("voyageStageTable")
         self.stage_table.setHorizontalHeaderLabels(self.TABLE_COLUMNS)
+        self._update_time_headers()
         self.stage_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.stage_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.stage_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -194,6 +216,7 @@ class VoyagePage(QWidget):
             return
 
         events = self._schedule_service.list_events(vessel.id)
+        self._events_by_id = {event.id: event for event in events}
         schedule_timeline = self._schedule_service.get_timeline(vessel.id)
         if schedule_timeline.issues:
             self.empty_state.setVisible(True)
@@ -337,6 +360,153 @@ class VoyagePage(QWidget):
         except RuntimeError:
             self.status_label.setText("Column layout could not be saved locally.")
 
+    def _set_time_display_mode(self, mode: str) -> None:
+        normalized = "LT" if str(mode).upper() == "LT" else "UTC"
+        if normalized == self._time_display_mode:
+            self._update_time_headers()
+            return
+
+        self._time_display_mode = normalized
+        try:
+            settings = self._settings_service.load()
+            settings["voyage_time_display_mode"] = normalized
+            self._settings_service.save(settings)
+        except RuntimeError:
+            self.status_label.setText("Time display preference could not be saved locally.")
+
+        self._update_time_headers()
+        if getattr(self, "_display_rows", None):
+            self._populate_stage_table(self._display_rows)
+
+    def _update_time_headers(self) -> None:
+        if not hasattr(self, "stage_table"):
+            return
+        suffix = "LT" if self._time_display_mode == "LT" else "UTC"
+        self.stage_table.setHorizontalHeaderItem(
+            self.START_TIME_COLUMN, QTableWidgetItem(f"Start {suffix}")
+        )
+        self.stage_table.setHorizontalHeaderItem(
+            self.END_TIME_COLUMN, QTableWidgetItem(f"End {suffix}")
+        )
+
+    @staticmethod
+    def _aware_utc(value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+    def _event_for_stage_time(self, stage: OperationalStage, endpoint: str):
+        if stage.stage_type == STAGE_PORT_STAY:
+            if stage.event is not None:
+                return stage.event
+            if stage.incoming_leg is not None:
+                return self._events_by_id.get(stage.incoming_leg.leg.destination_event_id)
+            if stage.leg is not None:
+                return self._events_by_id.get(stage.leg.leg.origin_event_id)
+            return None
+
+        leg = stage.leg
+        if leg is None:
+            return stage.event
+
+        if stage.stage_type == STAGE_DEPARTURE_MANEUVERING:
+            return self._events_by_id.get(leg.leg.origin_event_id)
+
+        if stage.stage_type == STAGE_SEA_PASSAGE:
+            event_id = (
+                leg.leg.origin_event_id
+                if endpoint == "start"
+                else leg.leg.destination_event_id
+            )
+            return self._events_by_id.get(event_id)
+
+        if stage.stage_type == STAGE_ARRIVAL_MANEUVERING:
+            return self._events_by_id.get(leg.leg.destination_event_id)
+
+        return stage.event
+
+    def _port_local_context(self, stage: OperationalStage, endpoint: str):
+        event = self._event_for_stage_time(stage, endpoint)
+        if event is None:
+            return None, None
+        if event.timezone_status != "RESOLVED" or not event.port_timezone_id:
+            return event.port, None
+        return event.port, event.port_timezone_id
+
+    def _format_stage_time(
+        self,
+        stage: OperationalStage,
+        value: datetime | None,
+        endpoint: str,
+    ) -> str:
+        aware_utc = self._aware_utc(value)
+        if aware_utc is None:
+            return "-"
+
+        if self._time_display_mode == "UTC":
+            return aware_utc.strftime("%d %b %Y %H:%M")
+
+        port, timezone_id = self._port_local_context(stage, endpoint)
+        if not timezone_id:
+            return aware_utc.strftime("%d %b %Y %H:%M UTC")
+
+        try:
+            local_value = aware_utc.astimezone(ZoneInfo(timezone_id))
+        except Exception:
+            return aware_utc.strftime("%d %b %Y %H:%M UTC")
+
+        return local_value.strftime("%d %b %Y %H:%M")
+
+    def _stage_time_tooltip(self, stage: OperationalStage, endpoint: str) -> str:
+        if self._time_display_mode == "UTC":
+            return "UTC ? authoritative calculation timeline"
+
+        port, timezone_id = self._port_local_context(stage, endpoint)
+        if timezone_id:
+            return f"Local Time ? {port}\n{timezone_id}"
+        return "UTC ? port-local timezone context unavailable"
+
+    def _stage_for_timestamp(self, value: datetime | None) -> OperationalStage | None:
+        target = self._aware_utc(value)
+        if target is None or self._timeline is None:
+            return None
+
+        for stage in self._timeline.stages:
+            start = self._aware_utc(stage.start_utc)
+            end = self._aware_utc(stage.end_utc)
+            if start is not None and end is not None and start <= target <= end:
+                return stage
+        return None
+
+    def _format_changeover_time(self, value: datetime | None) -> str:
+        aware_utc = self._aware_utc(value)
+        if aware_utc is None:
+            return "-"
+
+        if self._time_display_mode == "UTC":
+            return aware_utc.strftime("%d %b %Y %H:%M")
+
+        stage = self._stage_for_timestamp(value)
+
+        # At sea there is no single authoritative port-local clock.
+        # Do not guess; retain UTC for the point event.
+        if stage is None or stage.stage_type == STAGE_SEA_PASSAGE:
+            return aware_utc.strftime("%d %b %Y %H:%M UTC")
+
+        return self._format_stage_time(stage, value, "start")
+
+    def _changeover_time_tooltip(self, value: datetime | None) -> str:
+        if self._time_display_mode == "UTC":
+            return "UTC ? authoritative fuel-changeover timestamp"
+
+        stage = self._stage_for_timestamp(value)
+        if stage is None or stage.stage_type == STAGE_SEA_PASSAGE:
+            return "UTC ? no unambiguous port-local timezone while at sea"
+
+        return self._stage_time_tooltip(stage, "start")
+
     def _populate_stage_table(self, display_rows: list[PlannerDisplayRow]) -> None:
         self.stage_table.setRowCount(len(display_rows))
         for row, display_row in enumerate(display_rows):
@@ -349,8 +519,8 @@ class VoyagePage(QWidget):
                 stage.status,
                 stage.title,
                 _stage_label(stage),
-                _fmt_dt(stage.start_utc),
-                _fmt_dt(stage.end_utc),
+                self._format_stage_time(stage, stage.start_utc, "start"),
+                self._format_stage_time(stage, stage.end_utc, "end"),
                 _fmt_duration(_hours(stage.start_utc, stage.end_utc)),
                 _stage_distance(stage),
                 _fmt_kn(leg.required_speed_knots if stage.stage_type == STAGE_SEA_PASSAGE and leg else None),
@@ -364,7 +534,12 @@ class VoyagePage(QWidget):
             )
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
-                item.setToolTip(value)
+                if column == self.START_TIME_COLUMN:
+                    item.setToolTip(self._stage_time_tooltip(stage, "start"))
+                elif column == self.END_TIME_COLUMN:
+                    item.setToolTip(self._stage_time_tooltip(stage, "end"))
+                else:
+                    item.setToolTip(value)
                 self._style_stage_item(item, stage.status)
                 self.stage_table.setItem(row, column, item)
             self.stage_table.setRowHeight(row, 34)
@@ -377,12 +552,15 @@ class VoyagePage(QWidget):
             status,
             "Fuel Changeover",
             "Fuel Changeover",
-            _fmt_dt(changeovers[0].effective_at_utc),
+            self._format_changeover_time(changeovers[0].effective_at_utc),
             *("-",) * 10, "",
         )
         for column, value in enumerate(values):
             item = QTableWidgetItem(value)
-            item.setToolTip(value)
+            if column == self.START_TIME_COLUMN:
+                item.setToolTip(self._changeover_time_tooltip(changeovers[0].effective_at_utc))
+            else:
+                item.setToolTip(value)
             self._style_stage_item(item, "COMPLETED" if status == "ACTUAL" else "PLANNED")
             self.stage_table.setItem(row, column, item)
         self.stage_table.setRowHeight(row, 34)
