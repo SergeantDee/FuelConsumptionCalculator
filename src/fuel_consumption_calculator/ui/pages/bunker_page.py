@@ -231,8 +231,15 @@ class BunkerPage(QWidget):
         self.update_sounding_button.clicked.connect(self._update_actual_sounding)
         sounding_layout.addWidget(self.update_sounding_button)
         layout.addWidget(sounding_panel)
+        actions = QHBoxLayout()
+        self.capacity_settings_button = QPushButton("Capacity Settings")
+        self.capacity_settings_button.clicked.connect(self._open_capacity_settings)
+        actions.addWidget(self.capacity_settings_button)
+        actions.addStretch()
+        layout.addLayout(actions)
 
-        capacity_panel = QFrame()
+        self.capacity_panel = QFrame()
+        capacity_panel = self.capacity_panel
         capacity_panel.setObjectName("panel")
         capacity_grid = QGridLayout(capacity_panel)
         capacity_grid.setContentsMargins(18, 16, 18, 16)
@@ -255,9 +262,8 @@ class BunkerPage(QWidget):
         self.save_capacity_button.setObjectName("primaryButton")
         self.save_capacity_button.clicked.connect(self._save_capacities)
         capacity_grid.addWidget(self.save_capacity_button, 5, 0, 1, 3)
-        layout.addWidget(capacity_panel)
-
-        plan_panel = QFrame()
+        self.plan_panel = QFrame()
+        plan_panel = self.plan_panel
         plan_panel.setObjectName("panel")
         plan_layout = QVBoxLayout(plan_panel)
         plan_layout.setContentsMargins(18, 16, 18, 16)
@@ -325,7 +331,6 @@ class BunkerPage(QWidget):
         actions.addWidget(self.clear_plan_button)
         actions.addStretch()
         plan_layout.addLayout(actions)
-        layout.addWidget(plan_panel)
 
         self.plans_model = BunkerPlansTableModel()
         self.plans_table = QTableView()
@@ -334,9 +339,6 @@ class BunkerPage(QWidget):
         self.plans_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.plans_table.verticalHeader().setDefaultSectionSize(32)
         self.plans_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        layout.addWidget(QLabel("CURRENT BUNKER PLANS"))
-        layout.addWidget(self.plans_table)
-
         self.projection_model = PortProjectionTableModel()
         self.projection_table = QTableView()
         self.projection_table.setModel(self.projection_model)
@@ -627,6 +629,9 @@ class BunkerPage(QWidget):
         row = self.projection_model.row_at(index.row())
         if row is None:
             return
+        event_index = next((position for position, event in enumerate(self._events) if event.id == row.event.id), -1)
+        if event_index >= 0:
+            self.event_combo.setCurrentIndex(event_index)
         details = QDialog(self)
         details.setWindowTitle(f"Port Bunker Details — {row.event.port}")
         layout = QVBoxLayout(details)
@@ -634,7 +639,7 @@ class BunkerPage(QWidget):
         layout.addWidget(QLabel(f"{row.event.port} | {row.event.effective_arrival_at:%d %b %Y %H:%M} UTC"))
         layout.addWidget(QLabel(f"Arrival ROB: {_format_fuels(row.arrival_rob_mt)} | {row.rob_source}"))
         layout.addWidget(QLabel("PLANNING"))
-        layout.addWidget(QLabel(f"Max Lift: {_format_fuels(row.max_lift_mt)} | Planned Lift: {_format_fuels(row.planned_bunker_mt)} | {row.plan_status}"))
+        layout.addWidget(self.plan_panel)
         layout.addWidget(QLabel("PORT CONSUMPTION"))
         layout.addWidget(QLabel(_format_fuels(row.port_consumption_mt)))
         layout.addWidget(QLabel("DEPARTURE"))
@@ -643,6 +648,15 @@ class BunkerPage(QWidget):
         close.clicked.connect(details.accept)
         layout.addWidget(close)
         details.exec()
+        self.plan_panel.setParent(self.content)
+
+    def _open_capacity_settings(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Capacity Settings")
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(self.capacity_panel)
+        dialog.exec()
+        self.capacity_panel.setParent(self.content)
 
     def _set_controls_enabled(self, enabled: bool) -> None:
         for widget in [self.event_combo, self.save_capacity_button, self.save_plan_button, self.confirm_plan_button, self.use_max_button, self.clear_plan_button]:

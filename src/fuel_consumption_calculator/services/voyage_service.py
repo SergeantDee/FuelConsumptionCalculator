@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fuel_consumption_calculator.calculations.consumption_engine import ScheduleFuelConsumption
 from fuel_consumption_calculator.calculations.voyage_engine import VoyageConsumptionResult, calculate_consumption_with_voyage, calculate_voyage_consumption, calculate_voyage_plan
@@ -79,6 +79,22 @@ class VoyageService:
 
     def save_actual_rob_observation(self, observation: ActualROBObservation) -> ActualROBObservation:
         self._validate_rob_observation(observation)
+        if observation.id is None:
+            existing = next(
+                (
+                    item for item in self.list_actual_rob_observations(observation.vessel_id)
+                    if _utc_instant(item.effective_at_utc) == _utc_instant(observation.effective_at_utc)
+                ),
+                None,
+            )
+            if existing is not None:
+                observation = ActualROBObservation(
+                    id=existing.id,
+                    vessel_id=observation.vessel_id,
+                    effective_at_utc=observation.effective_at_utc,
+                    quantities_mt=observation.quantities_mt,
+                    remarks=observation.remarks,
+                )
         return self._repository.save_actual_rob_observation(observation)
 
     def list_clock_adjustments(self, vessel_id: int) -> list[VesselClockAdjustment]:
@@ -407,10 +423,13 @@ class VoyageService:
         for fuel_type in FUEL_TYPES:
             if observation.quantity_for(fuel_type) < 0:
                 raise ValueError("Actual ROB quantities cannot be negative.")
-
     def _validate_fuel(self, fuel_type: str) -> None:
         if fuel_type not in FUEL_TYPES:
             raise ValueError("Fuel type must be ULSFO, VLSFO, or MDO.")
+
+
+def _utc_instant(value: datetime) -> datetime:
+    return value.astimezone(timezone.utc) if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
 def _identity_for_leg(vessel_id: int, origin: ScheduleEvent, destination: ScheduleEvent) -> tuple:

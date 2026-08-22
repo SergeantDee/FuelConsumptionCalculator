@@ -33,6 +33,7 @@ from fuel_consumption_calculator.domain.voyage_stages import (
 )
 from fuel_consumption_calculator.ui.pages.voyage_page import (
     StageEditDialog,
+    VoyagePage,
     build_planner_display_rows,
     _fmt_compact_rob,
     _stage_issue,
@@ -58,6 +59,13 @@ def test_stage_timeline_uses_port_departure_sea_arrival_sequence():
         STAGE_PORT_STAY,
     ]
     assert timeline.stages[0].rob.end_mt == timeline.stages[1].rob.start_mt
+
+
+def test_voyage_main_table_uses_operational_fuel_total_not_machinery_columns():
+    assert "Total Consumption" in VoyagePage.TABLE_COLUMNS
+    assert "Calculated Speed" in VoyagePage.TABLE_COLUMNS
+    assert "EOE ROB" in VoyagePage.TABLE_COLUMNS
+    assert not {"Main Engine", "Auxiliary Engines", "Auxiliary Boiler"}.intersection(VoyagePage.TABLE_COLUMNS)
 
 
 def test_pre_voyage_timeline_keeps_current_rob_at_starting_anchor():

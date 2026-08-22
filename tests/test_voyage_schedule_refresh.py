@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -92,6 +92,40 @@ def test_actual_rob_observations_are_retained_as_historical_anchors(tmp_path):
     )
 
     assert service.list_actual_rob_observations(vessel.id) == [first, second]
+
+
+def test_actual_rob_same_utc_instant_corrects_existing_observation(tmp_path):
+    database = Database(tmp_path / "test.db")
+    database.initialize()
+    vessel = VesselRepository(database).save_active("Maersk Labrea", "1234567")
+    service = VoyageService(VoyageRepository(database))
+    first = service.save_actual_rob_observation(
+        ActualROBObservation(None, vessel.id, datetime(2026, 8, 18, 6, 27, tzinfo=timezone.utc), {"ULSFO": 450.0, "VLSFO": 1800.0, "MDO": 300.0}, "first")
+    )
+    corrected = service.save_actual_rob_observation(
+        ActualROBObservation(None, vessel.id, datetime(2026, 8, 18, 6, 27, tzinfo=timezone.utc), {"ULSFO": 455.0, "VLSFO": 1795.0, "MDO": 298.0}, "corrected")
+    )
+
+    assert corrected.id == first.id
+    assert service.list_actual_rob_observations(vessel.id) == [corrected]
+    assert corrected.quantities_mt == {"ULSFO": 455.0, "VLSFO": 1795.0, "MDO": 298.0}
+    assert corrected.remarks == "corrected"
+
+
+def test_actual_rob_equivalent_offset_and_naive_utc_instants_correct_same_row(tmp_path):
+    database = Database(tmp_path / "test.db")
+    database.initialize()
+    vessel = VesselRepository(database).save_active("Maersk Labrea", "1234567")
+    service = VoyageService(VoyageRepository(database))
+    first = service.save_actual_rob_observation(
+        ActualROBObservation(None, vessel.id, datetime(2026, 8, 18, 6, 27), {"ULSFO": 0.0, "VLSFO": 1.0, "MDO": 2.0})
+    )
+    corrected = service.save_actual_rob_observation(
+        ActualROBObservation(None, vessel.id, datetime(2026, 8, 18, 14, 27, tzinfo=timezone(timedelta(hours=8))), {"ULSFO": 3.0, "VLSFO": 4.0, "MDO": 5.0})
+    )
+
+    assert corrected.id == first.id
+    assert len(service.list_actual_rob_observations(vessel.id)) == 1
 
 def _candidate(
     sequence: int,

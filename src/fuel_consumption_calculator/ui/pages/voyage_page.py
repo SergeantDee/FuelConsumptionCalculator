@@ -77,11 +77,11 @@ def build_planner_display_rows(
 class VoyagePage(QWidget):
     COLUMN_LAYOUT_SETTING = "voyage_planner_column_layout"
     EVENT_COLUMN = 1
-    DEFAULT_HIDDEN_COLUMNS = frozenset({2, 8, 9, 10, 15})
+    DEFAULT_HIDDEN_COLUMNS = frozenset({2, 8, 9, 10, 13})
     TABLE_COLUMNS = (
         "Status", "Event", "Stage", "Start UTC", "End UTC", "Duration",
-        "Distance", "Speed", "RPM", "ME Load", "DG Load", "Main Engine",
-        "Auxiliary Engines", "Auxiliary Boiler", "End-of-Event ROB", "ROB Update",
+        "Distance", "Calculated Speed", "RPM", "ME Load", "DG Load", "Total Consumption",
+        "EOE ROB", "ROB Update",
         "Issue",
     )
 
@@ -357,9 +357,7 @@ class VoyagePage(QWidget):
                 _fmt_rpm(leg.predicted_rpm if stage.stage_type == STAGE_SEA_PASSAGE and leg else None),
                 _fmt_percent(leg.predicted_me_load_percent if stage.stage_type == STAGE_SEA_PASSAGE and leg else None),
                 _stage_dg_load(stage),
-                self._machinery_table_text(stage, "MAIN_ENGINE"),
-                self._machinery_table_text(stage, "GENERATORS"),
-                self._machinery_table_text(stage, "AUX_BOILER"),
+                _fmt_fuel_line(stage.consumption_mt),
                 _fmt_compact_rob(stage.rob.end_mt),
                 _fmt_observation(self._latest_observation_for(stage)),
                 _stage_issue(stage),
@@ -368,10 +366,6 @@ class VoyagePage(QWidget):
                 item = QTableWidgetItem(value)
                 item.setToolTip(value)
                 self._style_stage_item(item, stage.status)
-                if 11 <= column <= 13:
-                    fuel = self._machinery_fuel_for_table(stage, ("MAIN_ENGINE", "GENERATORS", "AUX_BOILER")[column - 11])
-                    if fuel is not None:
-                        item.setForeground(QColor({"ULSFO": "#41c8d5", "VLSFO": "#e2b24c", "MDO": "#e47b68"}[fuel]))
                 self.stage_table.setItem(row, column, item)
             self.stage_table.setRowHeight(row, 34)
 
@@ -384,11 +378,7 @@ class VoyagePage(QWidget):
             "Fuel Changeover",
             "Fuel Changeover",
             _fmt_dt(changeovers[0].effective_at_utc),
-            "-", "-", "-", "-", "-", "-", "-",
-            _changeover_fuel_text(by_machinery.get("MAIN_ENGINE")),
-            _changeover_fuel_text(by_machinery.get("GENERATORS")),
-            _changeover_fuel_text(by_machinery.get("AUX_BOILER")),
-            "U - | V - | M -", "-", "",
+            *("-",) * 10, "",
         )
         for column, value in enumerate(values):
             item = QTableWidgetItem(value)
