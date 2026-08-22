@@ -267,9 +267,13 @@ class BunkerPage(QWidget):
         plan_panel.setObjectName("panel")
         plan_layout = QVBoxLayout(plan_panel)
         plan_layout.setContentsMargins(18, 16, 18, 16)
-        plan_layout.addWidget(QLabel("PLANNED BUNKER PORT"))
+        self.plan_port_title = QLabel("PLANNED BUNKER PORT")
+        self.plan_port_title.setVisible(False)
+        plan_layout.addWidget(self.plan_port_title)
+
         self.event_combo = QComboBox()
         self.event_combo.currentIndexChanged.connect(self._selection_changed)
+        self.event_combo.setVisible(False)
         plan_layout.addWidget(self.event_combo)
         self.plan_status_label = QLabel("Status: DRAFT")
         self.plan_status_label.setObjectName("fieldLabel")
@@ -629,33 +633,182 @@ class BunkerPage(QWidget):
         row = self.projection_model.row_at(index.row())
         if row is None:
             return
-        event_index = next((position for position, event in enumerate(self._events) if event.id == row.event.id), -1)
+
+        event_index = next(
+            (
+                position
+                for position, event in enumerate(self._events)
+                if event.id == row.event.id
+            ),
+            -1,
+        )
         if event_index >= 0:
+            # Keep the existing hidden selector as the authority for
+            # save / confirm / clear bunker-plan operations.
             self.event_combo.setCurrentIndex(event_index)
+
         details = QDialog(self)
-        details.setWindowTitle(f"Port Bunker Details — {row.event.port}")
-        layout = QVBoxLayout(details)
-        layout.addWidget(QLabel("ARRIVAL"))
-        layout.addWidget(QLabel(f"{row.event.port} | {row.event.effective_arrival_at:%d %b %Y %H:%M} UTC"))
-        layout.addWidget(QLabel(f"Arrival ROB: {_format_fuels(row.arrival_rob_mt)} | {row.rob_source}"))
-        layout.addWidget(QLabel("PLANNING"))
-        layout.addWidget(self.plan_panel)
-        layout.addWidget(QLabel("PORT CONSUMPTION"))
-        layout.addWidget(QLabel(_format_fuels(row.port_consumption_mt)))
-        layout.addWidget(QLabel("DEPARTURE"))
-        layout.addWidget(QLabel(f"Predicted Departure ROB: {_format_fuels(row.departure_rob_mt)}"))
+        details.setWindowTitle(f"Port Bunker Details - {row.event.port}")
+        details.resize(980, 650)
+
+        dialog_layout = QVBoxLayout(details)
+        dialog_layout.setContentsMargins(12, 12, 12, 12)
+        dialog_layout.setSpacing(8)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+
+        scroll_content = QWidget()
+        layout = QVBoxLayout(scroll_content)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(12)
+
+        scroll.setWidget(scroll_content)
+        dialog_layout.addWidget(scroll)
+
+        # Fixed port context: the operator already selected this row.
+        heading = QLabel(row.event.port)
+        heading.setObjectName("sectionTitle")
+        layout.addWidget(heading)
+
+        port_meta = QLabel(
+            f"Arrival: {row.event.effective_arrival_at:%d %b %Y %H:%M} UTC"
+            f"  |  Status: {row.status}"
+        )
+        layout.addWidget(port_meta)
+
+        # ARRIVAL
+        arrival_panel = QFrame()
+        arrival_panel.setObjectName("panel")
+        arrival_layout = QGridLayout(arrival_panel)
+        arrival_layout.setContentsMargins(16, 14, 16, 14)
+        arrival_layout.setHorizontalSpacing(24)
+        arrival_layout.setVerticalSpacing(8)
+
+        arrival_title = QLabel("ARRIVAL")
+        arrival_title.setObjectName("sectionTitle")
+        arrival_layout.addWidget(arrival_title, 0, 0, 1, 2)
+
+        arrival_layout.addWidget(QLabel("Arrival ROB"), 1, 0)
+        arrival_layout.addWidget(
+            QLabel(_format_fuels(row.arrival_rob_mt)),
+            1,
+            1,
+        )
+
+        arrival_layout.addWidget(QLabel("ROB Source"), 2, 0)
+        arrival_layout.addWidget(QLabel(row.rob_source), 2, 1)
+
+        layout.addWidget(arrival_panel)
+
+        # BUNKER PLAN
+        planning_panel = QFrame()
+        planning_panel.setObjectName("panel")
+        planning_layout = QVBoxLayout(planning_panel)
+        planning_layout.setContentsMargins(16, 14, 16, 14)
+        planning_layout.setSpacing(10)
+
+        planning_header = QHBoxLayout()
+
+        planning_title = QLabel("BUNKER PLAN")
+        planning_title.setObjectName("sectionTitle")
+        planning_header.addWidget(planning_title)
+
+        planning_header.addStretch()
+
+        capacity_button = QPushButton("Capacity Settings")
+        capacity_button.clicked.connect(self._open_capacity_settings)
+        planning_header.addWidget(capacity_button)
+
+        planning_layout.addLayout(planning_header)
+
+        # Reuse all existing bunker-plan widgets and service wiring.
+        planning_layout.addWidget(self.plan_panel)
+        layout.addWidget(planning_panel)
+
+        # PORT CONSUMPTION
+        consumption_panel = QFrame()
+        consumption_panel.setObjectName("panel")
+        consumption_layout = QGridLayout(consumption_panel)
+        consumption_layout.setContentsMargins(16, 14, 16, 14)
+        consumption_layout.setHorizontalSpacing(24)
+        consumption_layout.setVerticalSpacing(8)
+
+        consumption_title = QLabel("PORT CONSUMPTION")
+        consumption_title.setObjectName("sectionTitle")
+        consumption_layout.addWidget(consumption_title, 0, 0, 1, 2)
+
+        consumption_layout.addWidget(QLabel("Calculated"), 1, 0)
+        consumption_layout.addWidget(
+            QLabel(_format_fuels(row.port_consumption_mt)),
+            1,
+            1,
+        )
+
+        layout.addWidget(consumption_panel)
+
+        # DEPARTURE
+        departure_panel = QFrame()
+        departure_panel.setObjectName("panel")
+        departure_layout = QGridLayout(departure_panel)
+        departure_layout.setContentsMargins(16, 14, 16, 14)
+        departure_layout.setHorizontalSpacing(24)
+        departure_layout.setVerticalSpacing(8)
+
+        departure_title = QLabel("DEPARTURE")
+        departure_title.setObjectName("sectionTitle")
+        departure_layout.addWidget(departure_title, 0, 0, 1, 2)
+
+        departure_layout.addWidget(QLabel("Predicted Departure ROB"), 1, 0)
+        departure_layout.addWidget(
+            QLabel(_format_fuels(row.departure_rob_mt)),
+            1,
+            1,
+        )
+
+        layout.addWidget(departure_panel)
+
+        layout.addStretch()
+
+        close_row = QHBoxLayout()
+        close_row.addStretch()
+
         close = QPushButton("Close")
+        close.setFixedWidth(120)
         close.clicked.connect(details.accept)
-        layout.addWidget(close)
+        close_row.addWidget(close)
+
+        dialog_layout.addLayout(close_row)
+
         details.exec()
+
+        # Return reusable planner controls to their neutral parent.
         self.plan_panel.setParent(self.content)
 
     def _open_capacity_settings(self) -> None:
         dialog = QDialog(self)
-        dialog.setWindowTitle("Capacity Settings")
+        dialog.setWindowTitle("Vessel Fuel Capacity Settings")
+        dialog.resize(620, 360)
+
         layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(12)
+
         layout.addWidget(self.capacity_panel)
+
+        close_row = QHBoxLayout()
+        close_row.addStretch()
+
+        close = QPushButton("Close")
+        close.setFixedWidth(120)
+        close.clicked.connect(dialog.accept)
+        close_row.addWidget(close)
+
+        layout.addLayout(close_row)
+
         dialog.exec()
+
         self.capacity_panel.setParent(self.content)
 
     def _set_controls_enabled(self, enabled: bool) -> None:

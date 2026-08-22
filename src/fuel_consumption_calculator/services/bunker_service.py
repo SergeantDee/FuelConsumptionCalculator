@@ -190,5 +190,9 @@ class BunkerService:
             limit = lift_limits.get(quantity.fuel_type)
             if limit is not None and limit.max_lift_mt is None and quantity.quantity_mt > 0:
                 raise ValueError(f"Planned {quantity.fuel_type} lift cannot be validated because Max Lift is unavailable.")
-            if limit is not None and limit.max_lift_mt is not None and quantity.quantity_mt > limit.max_lift_mt:
+            if (
+                limit is not None
+                and limit.max_lift_mt is not None
+                and round(quantity.quantity_mt, 2) > round(limit.max_lift_mt, 2)
+            ):
                 raise ValueError(f"Planned {quantity.fuel_type} lift exceeds calculated Max Lift.")
