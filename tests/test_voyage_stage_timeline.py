@@ -246,7 +246,7 @@ def test_voyage_grid_helpers_keep_unknown_rob_and_flag_missing_sea_distance():
     sea_stage = next(stage for stage in timeline.stages if stage.stage_type == STAGE_SEA_PASSAGE)
 
     assert _stage_issue(sea_stage) == "Missing sea distance"
-    assert _fmt_compact_rob({"ULSFO": None, "VLSFO": 2.5, "MDO": None}) == "U - | V 2.50 | M -"
+    assert _fmt_compact_rob({"ULSFO": None, "VLSFO": 2.5, "MDO": None}) == "ULSFO -  |  VLSFO 2.50  |  MDO -"
 
 
 def test_actual_rob_dialog_accepts_zero_for_every_fuel():
