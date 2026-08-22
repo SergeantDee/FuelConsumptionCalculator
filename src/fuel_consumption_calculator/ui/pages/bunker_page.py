@@ -21,10 +21,12 @@ from PySide6.QtWidgets import (
 )
 
 from fuel_consumption_calculator.calculations.bunker_projection_engine import EventBunkerROBProjection
+from fuel_consumption_calculator.calculations.port_bunker_projection import PortBunkerProjectionRow, build_port_bunker_projection
 from fuel_consumption_calculator.domain.bunker import BunkerLiftLimit, BunkerPlanStatus
 from fuel_consumption_calculator.domain.consumption import FUEL_TYPES
 from fuel_consumption_calculator.domain.schedule import ScheduleEvent
 from fuel_consumption_calculator.domain.voyage import ActualROBObservation
+from fuel_consumption_calculator.domain.voyage_stages import build_voyage_stage_timeline
 from fuel_consumption_calculator.services.bunker_service import BunkerService
 from fuel_consumption_calculator.services.consumption_service import ConsumptionService
 from fuel_consumption_calculator.services.rob_service import ROBService
@@ -131,6 +133,44 @@ class BunkerProjectionTableModel(QAbstractTableModel):
         self.endResetModel()
 
 
+class PortProjectionTableModel(QAbstractTableModel):
+    HEADERS = ("Status", "Port", "Arrival UTC", "Arrival ROB", "ROB Source", "Max Lift", "Planned Bunker", "Plan Status", "Departure ROB", "Issue")
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._rows: list[PortBunkerProjectionRow] = []
+
+    def rowCount(self, parent=None) -> int:
+        return len(self._rows)
+
+    def columnCount(self, parent=None) -> int:
+        return len(self.HEADERS)
+
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid():
+            return None
+        row = self._rows[index.row()]
+        values = (row.status, row.event.port, row.event.effective_arrival_at.strftime("%d %b %Y %H:%M"), _format_fuels(row.arrival_rob_mt), row.rob_source, _format_fuels(row.max_lift_mt), _format_fuels(row.planned_bunker_mt), row.plan_status, _format_fuels(row.departure_rob_mt), row.issue or "")
+        if role == Qt.ItemDataRole.DisplayRole:
+            return values[index.column()]
+        if role == Qt.ItemDataRole.ToolTipRole and index.column() in {3, 5, 6, 8}:
+            return "ULSFO / VLSFO / MDO (MT)"
+        if role == Qt.ItemDataRole.ForegroundRole and row.issue:
+            return QColor("#f1c778")
+        return None
+
+    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+        return self.HEADERS[section] if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal else None
+
+    def set_rows(self, rows: list[PortBunkerProjectionRow]) -> None:
+        self.beginResetModel()
+        self._rows = rows
+        self.endResetModel()
+
+    def row_at(self, row: int) -> PortBunkerProjectionRow | None:
+        return self._rows[row] if 0 <= row < len(self._rows) else None
+
+
 class BunkerPage(QWidget):
     actual_sounding_saved = Signal()
     def __init__(
@@ -150,7 +190,7 @@ class BunkerPage(QWidget):
         self._rob_service = rob_service
         self._voyage_service = voyage_service
         self._events: list[ScheduleEvent] = []
-        self._last_projection_rows: list[EventBunkerROBProjection] = []
+        self._last_projection_rows: list[PortBunkerProjectionRow] = []
         self._capacity_inputs: dict[str, QDoubleSpinBox] = {}
         self._target_inputs: dict[str, QDoubleSpinBox] = {}
         self._planned_inputs: dict[str, QDoubleSpinBox] = {}
@@ -297,13 +337,14 @@ class BunkerPage(QWidget):
         layout.addWidget(QLabel("CURRENT BUNKER PLANS"))
         layout.addWidget(self.plans_table)
 
-        self.projection_model = BunkerProjectionTableModel()
+        self.projection_model = PortProjectionTableModel()
         self.projection_table = QTableView()
         self.projection_table.setModel(self.projection_model)
         self.projection_table.verticalHeader().setDefaultSectionSize(32)
         self.projection_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.projection_table.horizontalHeader().setStretchLastSection(True)
-        layout.addWidget(QLabel("PROJECTED ROB WITH PLANNED BUNKERS"))
+        self.projection_table.doubleClicked.connect(self._open_port_details)
+        layout.addWidget(QLabel("PORT PROJECTION"))
         layout.addWidget(self.projection_table, 1)
 
         self.status_label = QLabel("Ready")
@@ -507,27 +548,41 @@ class BunkerPage(QWidget):
             self._last_projection_rows = []
             return
         try:
-            consumption = self._consumption_service.calculate_schedule_consumption(vessel_id, timeline)
+            profile = self._consumption_service.load_profile(vessel_id)
+            voyage_plan = self._voyage_service.calculate_plan(vessel_id, self._events, profile)
+            voyage_result = self._voyage_service.calculate_consumption_for_plan(
+                events=self._events, timeline=timeline, plan=voyage_plan, profile=profile,
+            )
             starting_rob = self._rob_service.load_starting_rob(vessel_id)
-            projection = self._bunker_service.project_schedule_rob_with_bunkers(
-                starting_rob=starting_rob,
-                consumption=consumption,
-                active_bunker_plans=[status.plan for status in plan_statuses if status.status == "CONFIRMED"],
+            observations = self._voyage_service.list_actual_rob_observations(vessel_id)
+            additions = {
+                event.id: {fuel: status.plan.quantity_for(fuel) for fuel in FUEL_TYPES}
+                for event in self._events
+                for status in plan_statuses
+                if status.status == "CONFIRMED" and status.plan.sequence_number == event.sequence_number
+            }
+            authoritative_timeline = build_voyage_stage_timeline(
+                self._events, voyage_plan, starting_rob, port_breakdowns=voyage_result.port_breakdowns,
+                rob_observations=observations, port_bunker_additions=additions,
+            )
+            projection = build_port_bunker_projection(
+                self._events, authoritative_timeline, plan_statuses,
+                self._bunker_service.load_capacity_profile(vessel_id), observations,
             )
         except Exception as exc:
             self.projection_model.set_rows([])
             self._last_projection_rows = []
             self.status_label.setText(str(exc))
             return
-        self._last_projection_rows = projection.rows
-        self.projection_model.set_rows(projection.rows)
+        self._last_projection_rows = projection
+        self.projection_model.set_rows(projection)
 
     def _update_lift_limits(self) -> None:
         event = self._selected_event()
         if event is None:
             return
-        projection_row = next((row for row in self._last_projection_rows if row.sequence_number == event.sequence_number), None)
-        arrival_rob = projection_row.arrival_rob_mt if projection_row else {fuel_type: 0.0 for fuel_type in FUEL_TYPES}
+        projection_row = next((row for row in self._last_projection_rows if row.event.sequence_number == event.sequence_number), None)
+        arrival_rob = projection_row.arrival_rob_mt if projection_row else {fuel_type: None for fuel_type in FUEL_TYPES}
         profile = self._bunker_service.build_capacity_profile(
             self._vessel_service.get_active_vessel().id if self._vessel_service.get_active_vessel() else 0,
             {fuel_type: (self._capacity_inputs[fuel_type].value(), self._target_inputs[fuel_type].value()) for fuel_type in FUEL_TYPES},
@@ -568,6 +623,27 @@ class BunkerPage(QWidget):
                 return status
         return None
 
+    def _open_port_details(self, index) -> None:
+        row = self.projection_model.row_at(index.row())
+        if row is None:
+            return
+        details = QDialog(self)
+        details.setWindowTitle(f"Port Bunker Details — {row.event.port}")
+        layout = QVBoxLayout(details)
+        layout.addWidget(QLabel("ARRIVAL"))
+        layout.addWidget(QLabel(f"{row.event.port} | {row.event.effective_arrival_at:%d %b %Y %H:%M} UTC"))
+        layout.addWidget(QLabel(f"Arrival ROB: {_format_fuels(row.arrival_rob_mt)} | {row.rob_source}"))
+        layout.addWidget(QLabel("PLANNING"))
+        layout.addWidget(QLabel(f"Max Lift: {_format_fuels(row.max_lift_mt)} | Planned Lift: {_format_fuels(row.planned_bunker_mt)} | {row.plan_status}"))
+        layout.addWidget(QLabel("PORT CONSUMPTION"))
+        layout.addWidget(QLabel(_format_fuels(row.port_consumption_mt)))
+        layout.addWidget(QLabel("DEPARTURE"))
+        layout.addWidget(QLabel(f"Predicted Departure ROB: {_format_fuels(row.departure_rob_mt)}"))
+        close = QPushButton("Close")
+        close.clicked.connect(details.accept)
+        layout.addWidget(close)
+        details.exec()
+
     def _set_controls_enabled(self, enabled: bool) -> None:
         for widget in [self.event_combo, self.save_capacity_button, self.save_plan_button, self.confirm_plan_button, self.use_max_button, self.clear_plan_button]:
             widget.setEnabled(enabled)
@@ -583,6 +659,16 @@ def _spinbox(suffix: str, minimum: float, maximum: float, step: float) -> QDoubl
     spinbox.setSingleStep(step)
     spinbox.setSuffix(suffix)
     return spinbox
+
+
+def _format_fuels(values: dict[str, float | None], *, zero_blank: bool = False) -> str:
+    parts = []
+    for short, fuel in (("U", "ULSFO"), ("V", "VLSFO"), ("M", "MDO")):
+        value = values.get(fuel)
+        if zero_blank and value == 0:
+            continue
+        parts.append(f"{short} {'—' if value is None else f'{float(value):.1f}'}")
+    return " / ".join(parts) if parts else "—"
 
 
 def _format_mt(value: float | None) -> str:

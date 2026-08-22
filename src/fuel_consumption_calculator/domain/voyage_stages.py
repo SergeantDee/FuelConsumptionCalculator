@@ -66,6 +66,7 @@ def build_voyage_stage_timeline(
     port_breakdowns: dict[int, PortEnergyBreakdown] | None = None,
     now_utc: datetime | None = None,
     rob_observations: list[ActualROBObservation] | tuple[ActualROBObservation, ...] = (),
+    port_bunker_additions: dict[int, dict[str, float]] | None = None,
 ) -> VoyageStageTimeline:
     ordered_events = sorted(events, key=lambda event: (event.sequence_number, event.effective_arrival_at, event.id))
     incoming_by_event = {leg.leg.destination_event_id: leg for leg in plan.legs}
@@ -73,6 +74,7 @@ def build_voyage_stage_timeline(
     port_breakdowns = port_breakdowns or {}
     changeovers = tuple(sorted(plan.fuel_changeovers, key=lambda event: _instant(event.effective_at_utc) or datetime.min))
     observations = tuple(sorted(rob_observations, key=lambda observation: _instant(observation.effective_at_utc) or datetime.min))
+    port_bunker_additions = port_bunker_additions or {}
     applied_observation_indexes: set[int] = set()
     cursor_rob: dict[str, float | None] = {fuel_type: starting_rob.quantity_for(fuel_type) for fuel_type in FUEL_TYPES}
     stages: list[OperationalStage] = []
@@ -98,6 +100,7 @@ def build_voyage_stage_timeline(
             incoming_leg=incoming,
             consumption=port_consumption,
             cursor_rob=cursor_rob,
+            addition=port_bunker_additions.get(event.id),
             observations=observations,
             applied_observation_indexes=applied_observation_indexes,
             changeovers=_changeovers_between(changeovers, port_start, port_end),
@@ -127,6 +130,7 @@ def build_voyage_stage_timeline(
             incoming_leg=None,
             consumption=outgoing.departure_maneuvering_consumed_mt,
             cursor_rob=cursor_rob,
+            addition=None,
             observations=observations,
             applied_observation_indexes=applied_observation_indexes,
             changeovers=_changeovers_between(changeovers, outgoing.effective_berth_departure, outgoing.pilot_off),
@@ -152,6 +156,7 @@ def build_voyage_stage_timeline(
             incoming_leg=None,
             consumption=outgoing.sea_consumed_mt,
             cursor_rob=cursor_rob,
+            addition=None,
             observations=observations,
             applied_observation_indexes=applied_observation_indexes,
             changeovers=_changeovers_between(changeovers, outgoing.pilot_off, outgoing.pilot_on),
@@ -177,6 +182,7 @@ def build_voyage_stage_timeline(
             incoming_leg=None,
             consumption=outgoing.arrival_maneuvering_consumed_mt,
             cursor_rob=cursor_rob,
+            addition=None,
             observations=observations,
             applied_observation_indexes=applied_observation_indexes,
             changeovers=_changeovers_between(changeovers, outgoing.pilot_on, outgoing.effective_berth_arrival),
@@ -208,6 +214,7 @@ def _stage(
     incoming_leg: CalculatedVoyageLeg | None,
     consumption: dict[str, float | None],
     cursor_rob: dict[str, float | None],
+    addition: dict[str, float] | None,
     observations: tuple[ActualROBObservation, ...],
     applied_observation_indexes: set[int],
     changeovers: tuple[FuelChangeoverEvent, ...],
@@ -217,6 +224,10 @@ def _stage(
     normalized_end = _instant(end_utc)
     _apply_observations_through(cursor_rob, observations, applied_observation_indexes, normalized_start)
     start_rob = dict(cursor_rob)
+    if addition is not None:
+        for fuel_type in FUEL_TYPES:
+            if cursor_rob[fuel_type] is not None:
+                cursor_rob[fuel_type] = float(cursor_rob[fuel_type]) + float(addition.get(fuel_type, 0.0))
     normalized_consumption = {fuel_type: consumption.get(fuel_type, 0.0) for fuel_type in FUEL_TYPES}
     _apply_consumption_with_observations(
         cursor_rob,

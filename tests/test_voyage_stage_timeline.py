@@ -196,6 +196,20 @@ def test_actual_rob_observation_reanchors_after_unknown_detailed_departure_maneu
     assert sea_stage.rob.start_mt == departure_stage.rob.end_mt
 
 
+def test_confirmed_port_bunker_adjustment_is_applied_by_the_existing_stage_timeline():
+    events = _events()
+    timeline = build_voyage_stage_timeline(
+        events,
+        _plan(),
+        _starting_rob(),
+        port_bunker_additions={events[0].id: {"ULSFO": 0.0, "VLSFO": 25.0, "MDO": 0.0}},
+    )
+    origin_port = next(stage for stage in timeline.stages if stage.key == "port-1")
+
+    assert origin_port.rob.start_mt["VLSFO"] == 100.0
+    assert origin_port.rob.end_mt["VLSFO"] == 125.0
+
+
 def test_voyage_detail_dialog_uses_event_consumption_and_rob_tabs():
     app = QApplication.instance() or QApplication([])
     events = _events()
