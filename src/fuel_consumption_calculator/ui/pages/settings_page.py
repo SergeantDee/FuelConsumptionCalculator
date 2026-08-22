@@ -7,6 +7,8 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QComboBox, QDoubleSpinBox, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 
 from fuel_consumption_calculator.domain.voyage import RouteDefinition
+from fuel_consumption_calculator.domain.consumption import FUEL_TYPES
+from fuel_consumption_calculator.services.rob_service import ROBService
 from fuel_consumption_calculator.services.schedule_service import ScheduleService
 from fuel_consumption_calculator.services.settings_service import SettingsService
 from fuel_consumption_calculator.services.vessel_service import VesselService, VesselValidationError
@@ -22,12 +24,14 @@ class SettingsPage(QWidget):
     vessel_saved = Signal()
     vessel_time_offset_changed = Signal(int)
 
-    def __init__(self, vessel_service: VesselService, schedule_service: ScheduleService, settings_service: SettingsService, voyage_service: VoyageService, parent: QWidget | None = None) -> None:
+    def __init__(self, vessel_service: VesselService, schedule_service: ScheduleService, settings_service: SettingsService, voyage_service: VoyageService, rob_service: ROBService, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._vessel_service = vessel_service
         self._schedule_service = schedule_service
         self._settings_service = settings_service
         self._voyage_service = voyage_service
+        self._rob_service = rob_service
+        self._starting_rob_inputs: dict[str, QDoubleSpinBox] = {}
 
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(0, 0, 0, 0)
@@ -78,6 +82,31 @@ class SettingsPage(QWidget):
         actions.addWidget(self.save_button)
         panel_layout.addLayout(actions)
         layout.addWidget(panel)
+
+        rob_panel = QFrame()
+        rob_panel.setObjectName("card")
+        rob_layout = QVBoxLayout(rob_panel)
+        rob_layout.setContentsMargins(20, 18, 20, 18)
+        rob_layout.addWidget(QLabel("Projection Starting ROB"))
+        rob_note = QLabel("Used only as the initial projection anchor when no later Actual ROB observation is available.")
+        rob_note.setObjectName("mutedText")
+        rob_note.setWordWrap(True)
+        rob_layout.addWidget(rob_note)
+        rob_grid = QGridLayout()
+        for column, fuel in enumerate(FUEL_TYPES):
+            rob_grid.addWidget(self._field_label(fuel), 0, column)
+            value = QDoubleSpinBox()
+            value.setDecimals(2)
+            value.setRange(0.0, 999999.99)
+            value.setSingleStep(10.0)
+            value.setSuffix(" MT")
+            rob_grid.addWidget(value, 1, column)
+            self._starting_rob_inputs[fuel] = value
+        rob_layout.addLayout(rob_grid)
+        self.save_starting_rob_button = QPushButton("Save Projection Starting ROB")
+        self.save_starting_rob_button.clicked.connect(self._save_starting_rob)
+        rob_layout.addWidget(self.save_starting_rob_button)
+        layout.addWidget(rob_panel)
 
         timezone_panel = QFrame()
         timezone_panel.setObjectName("card")
@@ -178,6 +207,14 @@ class SettingsPage(QWidget):
         vessel = self._vessel_service.get_active_vessel()
         self.vessel_name_input.setText(vessel.name if vessel else "")
         self.imo_input.setText(vessel.imo if vessel else "")
+        self.save_starting_rob_button.setEnabled(vessel is not None)
+        if vessel is not None:
+            starting_rob = self._rob_service.load_starting_rob(vessel.id)
+            for fuel, input_widget in self._starting_rob_inputs.items():
+                input_widget.setValue(starting_rob.quantity_for(fuel))
+        else:
+            for input_widget in self._starting_rob_inputs.values():
+                input_widget.setValue(0.0)
         mode = self._settings_service.scraper_browser_mode()
         self.scraper_mode_input.setCurrentIndex(1 if mode == "headless" else 0)
         scale = self._settings_service.load().get("ui_scale_percent", 100)
@@ -187,6 +224,23 @@ class SettingsPage(QWidget):
         self.vessel_time_note.setText(f"Vessel clock display only. {format_gmt_offset(offset)}; voyage calculations remain UTC.")
         self._refresh_timezones()
         self._refresh_routes()
+
+    def _save_starting_rob(self) -> None:
+        vessel = self._vessel_service.get_active_vessel()
+        if vessel is None:
+            return
+        try:
+            saved = self._rob_service.save_starting_rob(
+                self._rob_service.build_starting_rob(
+                    vessel.id,
+                    {fuel: input_widget.value() for fuel, input_widget in self._starting_rob_inputs.items()},
+                )
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Starting ROB not saved", str(exc))
+            return
+        for fuel, input_widget in self._starting_rob_inputs.items():
+            input_widget.setValue(saved.quantity_for(fuel))
 
     def _build_routes_tab(self) -> QWidget:
         tab = QWidget()
