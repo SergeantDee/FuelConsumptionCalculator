@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import timezone
 
-from PySide6.QtCore import QDateTime
+from PySide6.QtCore import QDateTime, QTimeZone
 from PySide6.QtWidgets import (
     QComboBox,
     QDateTimeEdit,
@@ -37,7 +37,8 @@ class ActualROBDialog(QDialog):
         self.time_input = QDateTimeEdit()
         self.time_input.setCalendarPopup(True)
         self.time_input.setDisplayFormat("dd MMM yyyy HH:mm")
-        self.time_input.setDateTime(QDateTime(datetime.now(timezone.utc)))
+        self.time_input.setTimeZone(QTimeZone.utc())
+        self.time_input.setDateTime(QDateTime.currentDateTimeUtc())
         grid.addWidget(QLabel("Observation Time UTC"), 0, 0)
         grid.addWidget(self.time_input, 0, 1)
 
@@ -82,7 +83,7 @@ class ActualROBDialog(QDialog):
 
     def values(self) -> dict[str, object]:
         return {
-            "effective_at_utc": self.time_input.dateTime().toPython(),
+            "effective_at_utc": self.time_input.dateTime().toUTC().toPython().replace(tzinfo=timezone.utc),
             **{fuel: float(self._quantity_inputs[fuel].text().strip()) for fuel in FUEL_TYPES},
             "remarks": self.remarks_input.currentText().strip() or None,
         }

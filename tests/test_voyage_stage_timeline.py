@@ -5,7 +5,7 @@ from datetime import date, datetime, timezone
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QTabWidget
+from PySide6.QtWidgets import QApplication, QDialog, QLabel, QTabWidget
 
 from fuel_consumption_calculator.calculations.voyage_engine import calculate_consumption_with_voyage, calculate_voyage_consumption, calculate_voyage_plan
 from fuel_consumption_calculator.domain.consumption import FUEL_TYPES, ConsumptionProfile, ConsumptionRate
@@ -37,7 +37,9 @@ from fuel_consumption_calculator.ui.pages.voyage_page import (
     _fmt_compact_rob,
     _stage_issue,
 )
-from fuel_consumption_calculator.ui.pages.dashboard_page import DashboardPage
+from fuel_consumption_calculator.ui.pages.dashboard_page import DashboardPage, _latest_applicable_actual
+from fuel_consumption_calculator.ui.pages.bunker_page import BunkerPage
+import fuel_consumption_calculator.ui.pages.bunker_page as bunker_page_module
 from fuel_consumption_calculator.ui.widgets.actual_rob_dialog import ActualROBDialog
 
 
@@ -235,6 +237,7 @@ def test_actual_rob_dialog_accepts_zero_for_every_fuel():
     assert dialog.values()["ULSFO"] == 0.0
     assert dialog.values()["VLSFO"] == 0.0
     assert dialog.values()["MDO"] == 0.0
+    assert dialog.values()["effective_at_utc"].tzinfo == timezone.utc
 
 
 def test_dashboard_keeps_rob_unavailable_when_elapsed_consumption_cannot_be_calculated():
@@ -251,7 +254,64 @@ def test_dashboard_keeps_rob_unavailable_when_elapsed_consumption_cannot_be_calc
     )
 
     assert page._rob_values["ULSFO"].text() == "- MT"
-    assert "Last Actual ROB: -" in page.rob_metadata.text()
+    assert "Anchor: Projection Starting ROB" in page.rob_metadata.text()
+    assert not hasattr(page, "update_rob_button")
+    assert any(label.text() == "ESTIMATED CURRENT ROB" for label in page.findChildren(QLabel))
+
+
+def test_dashboard_anchor_ignores_future_actual_sounding():
+    earlier = ActualROBObservation(None, 1, datetime(2026, 1, 1, tzinfo=timezone.utc), {"ULSFO": 1.0, "VLSFO": 2.0, "MDO": 3.0})
+    later = ActualROBObservation(None, 1, datetime(2026, 1, 3, tzinfo=timezone.utc), {"ULSFO": 4.0, "VLSFO": 5.0, "MDO": 6.0})
+
+    assert _latest_applicable_actual([earlier, later], datetime(2026, 1, 2, tzinfo=timezone.utc)) == earlier
+
+
+def test_bunker_actual_sounding_uses_existing_actual_rob_persistence(monkeypatch):
+    QApplication.instance() or QApplication([])
+    class _SwitchableVesselService:
+        active = None
+
+        def get_active_vessel(self):
+            return self.active
+
+    vessel_service = _SwitchableVesselService()
+    voyage_service = _SavingActualROBVoyageService()
+    page = BunkerPage(vessel_service, object(), object(), object(), object(), voyage_service)
+    assert page.update_sounding_button.text() == "Update Actual Sounding ROB"
+    vessel_service.active = type("Vessel", (), {"id": 1, "name": "Test Vessel", "imo": "1234567"})()
+    page.refresh = lambda: None
+    saved_signal = []
+    page.actual_sounding_saved.connect(lambda: saved_signal.append(True))
+
+    class _Dialog:
+        def __init__(self, quantities_mt, parent):
+            assert quantities_mt is None
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        @staticmethod
+        def values():
+            return {
+                "effective_at_utc": datetime(2026, 1, 3, 12, tzinfo=timezone.utc),
+                "ULSFO": 10.0,
+                "VLSFO": 20.0,
+                "MDO": 30.0,
+                "remarks": "Noon sounding",
+            }
+
+    monkeypatch.setattr(bunker_page_module, "ActualROBDialog", _Dialog)
+
+    page._update_actual_sounding()
+
+    assert voyage_service.saved == ActualROBObservation(
+        None,
+        1,
+        datetime(2026, 1, 3, 12, tzinfo=timezone.utc),
+        {"ULSFO": 10.0, "VLSFO": 20.0, "MDO": 30.0},
+        "Noon sounding",
+    )
+    assert saved_signal == [True]
 
 
 def test_planner_display_groups_simultaneous_changeovers_at_effective_timestamp():
@@ -289,6 +349,16 @@ class _ActualROBVoyageService:
 
     def list_actual_rob_observations(self, vessel_id):
         return self._observations
+
+
+class _SavingActualROBVoyageService(_ActualROBVoyageService):
+    def __init__(self):
+        super().__init__([])
+        self.saved = None
+
+    def save_actual_rob_observation(self, observation):
+        self.saved = observation
+        return observation
 
 
 def _plan(override: VoyageLegOverride | None = None, changeovers: list[FuelChangeoverEvent] | None = None, detailed: bool = False):

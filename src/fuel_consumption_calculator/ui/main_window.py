@@ -80,7 +80,7 @@ class MainWindow(QMainWindow):
         self.schedule_page = SchedulePage(vessel_service, schedule_service, scraper_service, settings_service)
         self.voyage_page = VoyagePage(vessel_service, schedule_service, consumption_service, voyage_service, rob_service, settings_service)
         self.consumption_page = ConsumptionPage(vessel_service, consumption_service, schedule_service, voyage_service)
-        self.bunker_page = BunkerPage(vessel_service, bunker_service, schedule_service, consumption_service, rob_service)
+        self.bunker_page = BunkerPage(vessel_service, bunker_service, schedule_service, consumption_service, rob_service, voyage_service)
         self.settings_page = SettingsPage(vessel_service, schedule_service, settings_service, voyage_service, rob_service)
         pages = (
             self.dashboard_page,
@@ -110,6 +110,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Ready")
 
         self.settings_page.vessel_saved.connect(self._vessel_configuration_changed)
+        self.bunker_page.actual_sounding_saved.connect(self._actual_sounding_saved)
         self.settings_page.vessel_time_offset_changed.connect(self._set_vessel_time_offset)
         self._clock_timer = QTimer(self)
         self._clock_timer.timeout.connect(self._refresh_clock)
@@ -189,3 +190,9 @@ class MainWindow(QMainWindow):
         self.consumption_page.refresh()
         self.bunker_page.refresh()
         self.statusBar().showMessage("Vessel configuration saved", 4000)
+
+    def _actual_sounding_saved(self) -> None:
+        self.dashboard_page.refresh()
+        self.voyage_page.refresh()
+        self.bunker_page.refresh()
+        self.statusBar().showMessage("Actual Sounding ROB saved", 4000)

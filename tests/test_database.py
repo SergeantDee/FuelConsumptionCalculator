@@ -78,3 +78,7 @@ def test_schema_migration_v10_to_v11_preserves_energy_config_and_leaves_maneuver
 
     assert row == (123.0, None, None, None)
     assert user_version == SCHEMA_VERSION
+
+
+def test_schema_version_remains_11():
+    assert SCHEMA_VERSION == 11

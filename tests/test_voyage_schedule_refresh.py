@@ -78,6 +78,21 @@ def test_actual_rob_observation_requires_complete_fuel_snapshot(tmp_path):
     with pytest.raises(ValueError, match="complete"):
         service.save_actual_rob_observation(observation)
 
+
+def test_actual_rob_observations_are_retained_as_historical_anchors(tmp_path):
+    database = Database(tmp_path / "test.db")
+    database.initialize()
+    vessel = VesselRepository(database).save_active("Maersk Labrea", "1234567")
+    service = VoyageService(VoyageRepository(database))
+    first = service.save_actual_rob_observation(
+        ActualROBObservation(None, vessel.id, datetime(2026, 9, 1, 12, tzinfo=timezone.utc), {"ULSFO": 100.0, "VLSFO": 50.0, "MDO": 25.0})
+    )
+    second = service.save_actual_rob_observation(
+        ActualROBObservation(None, vessel.id, datetime(2026, 9, 2, 12, tzinfo=timezone.utc), {"ULSFO": 90.0, "VLSFO": 45.0, "MDO": 20.0})
+    )
+
+    assert service.list_actual_rob_observations(vessel.id) == [first, second]
+
 def _candidate(
     sequence: int,
     port: str,

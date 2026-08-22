@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QAbstractTableModel, Qt
+from PySide6.QtCore import QAbstractTableModel, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
+    QDialog,
     QDoubleSpinBox,
     QFrame,
     QGridLayout,
@@ -23,11 +24,14 @@ from fuel_consumption_calculator.calculations.bunker_projection_engine import Ev
 from fuel_consumption_calculator.domain.bunker import BunkerLiftLimit, BunkerPlanStatus
 from fuel_consumption_calculator.domain.consumption import FUEL_TYPES
 from fuel_consumption_calculator.domain.schedule import ScheduleEvent
+from fuel_consumption_calculator.domain.voyage import ActualROBObservation
 from fuel_consumption_calculator.services.bunker_service import BunkerService
 from fuel_consumption_calculator.services.consumption_service import ConsumptionService
 from fuel_consumption_calculator.services.rob_service import ROBService
 from fuel_consumption_calculator.services.schedule_service import ScheduleService
 from fuel_consumption_calculator.services.vessel_service import VesselService
+from fuel_consumption_calculator.services.voyage_service import VoyageService
+from fuel_consumption_calculator.ui.widgets.actual_rob_dialog import ActualROBDialog
 from fuel_consumption_calculator.ui.widgets.page_header import PageHeader
 
 
@@ -128,6 +132,7 @@ class BunkerProjectionTableModel(QAbstractTableModel):
 
 
 class BunkerPage(QWidget):
+    actual_sounding_saved = Signal()
     def __init__(
         self,
         vessel_service: VesselService,
@@ -135,6 +140,7 @@ class BunkerPage(QWidget):
         schedule_service: ScheduleService,
         consumption_service: ConsumptionService,
         rob_service: ROBService,
+        voyage_service: VoyageService,
     ) -> None:
         super().__init__()
         self._vessel_service = vessel_service
@@ -142,6 +148,7 @@ class BunkerPage(QWidget):
         self._schedule_service = schedule_service
         self._consumption_service = consumption_service
         self._rob_service = rob_service
+        self._voyage_service = voyage_service
         self._events: list[ScheduleEvent] = []
         self._last_projection_rows: list[EventBunkerROBProjection] = []
         self._capacity_inputs: dict[str, QDoubleSpinBox] = {}
@@ -169,6 +176,21 @@ class BunkerPage(QWidget):
         self.vessel_label = QLabel("Vessel: Not configured")
         self.vessel_label.setObjectName("fieldLabel")
         layout.addWidget(self.vessel_label)
+
+        sounding_panel = QFrame()
+        sounding_panel.setObjectName("panel")
+        sounding_layout = QVBoxLayout(sounding_panel)
+        sounding_layout.setContentsMargins(18, 16, 18, 16)
+        sounding_layout.addWidget(QLabel("ACTUAL SOUNDING ROB"))
+        self.actual_sounding_label = QLabel("No Actual Sounding ROB recorded")
+        self.actual_sounding_label.setObjectName("mutedText")
+        self.actual_sounding_label.setWordWrap(True)
+        sounding_layout.addWidget(self.actual_sounding_label)
+        self.update_sounding_button = QPushButton("Update Actual Sounding ROB")
+        self.update_sounding_button.setObjectName("primaryButton")
+        self.update_sounding_button.clicked.connect(self._update_actual_sounding)
+        sounding_layout.addWidget(self.update_sounding_button)
+        layout.addWidget(sounding_panel)
 
         capacity_panel = QFrame()
         capacity_panel.setObjectName("panel")
@@ -294,9 +316,21 @@ class BunkerPage(QWidget):
     def refresh(self) -> None:
         vessel = self._vessel_service.get_active_vessel()
         if vessel is None:
+            self.actual_sounding_label.setText("No Actual Sounding ROB recorded")
+            self.update_sounding_button.setEnabled(False)
             self.vessel_label.setText("Vessel: Not configured")
             self._set_controls_enabled(False)
             return
+
+        self.update_sounding_button.setEnabled(True)
+        observations = self._voyage_service.list_actual_rob_observations(vessel.id)
+        latest = max(observations, key=lambda item: item.effective_at_utc, default=None)
+        if latest is None:
+            self.actual_sounding_label.setText("No Actual Sounding ROB recorded")
+        else:
+            quantities = " | ".join(f"{fuel} {latest.quantities_mt.get(fuel):.2f} MT" for fuel in FUEL_TYPES)
+            remarks = f" | {latest.remarks}" if latest.remarks else ""
+            self.actual_sounding_label.setText(f"Effective: {latest.effective_at_utc:%d %b %Y %H:%M UTC} | {quantities}{remarks}")
         self.vessel_label.setText(f"Vessel: {vessel.name}  |  IMO {vessel.imo}")
         self._set_controls_enabled(True)
         self._events = self._schedule_service.list_events(vessel.id)
@@ -305,6 +339,32 @@ class BunkerPage(QWidget):
         self._refresh_projection(vessel.id)
         self._selection_changed()
         self.status_label.setText("Bunker planner loaded." if self._events else "No schedule events available.")
+
+    def _update_actual_sounding(self) -> None:
+        vessel = self._vessel_service.get_active_vessel()
+        if vessel is None:
+            return
+        observations = self._voyage_service.list_actual_rob_observations(vessel.id)
+        latest = max(observations, key=lambda item: item.effective_at_utc, default=None)
+        dialog = ActualROBDialog(latest.quantities_mt if latest else None, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        values = dialog.values()
+        try:
+            self._voyage_service.save_actual_rob_observation(
+                ActualROBObservation(
+                    id=None,
+                    vessel_id=vessel.id,
+                    effective_at_utc=values["effective_at_utc"],
+                    quantities_mt={fuel: values[fuel] for fuel in FUEL_TYPES},
+                    remarks=values["remarks"],
+                )
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Actual Sounding ROB not saved", str(exc))
+            return
+        self.refresh()
+        self.actual_sounding_saved.emit()
 
     def _load_capacities(self, vessel_id: int) -> None:
         profile = self._bunker_service.load_capacity_profile(vessel_id)
