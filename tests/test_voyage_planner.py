@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, datetime
 
 from fuel_consumption_calculator.calculations.rob_projection_engine import project_schedule_rob
@@ -10,7 +11,7 @@ from fuel_consumption_calculator.domain.consumption import ConsumptionProfile, C
 from fuel_consumption_calculator.domain.rob import ROBQuantity, StartingROB
 from fuel_consumption_calculator.domain.schedule import ScheduleEvent
 from fuel_consumption_calculator.domain.schedule_timeline import build_schedule_timeline
-from fuel_consumption_calculator.domain.voyage import GeneratorSfocPoint, MachineryFuelState, RouteDefinition, SpeedConsumptionPoint, VesselEnergyConfig, VoyageLeg, VoyageLegOverride
+from fuel_consumption_calculator.domain.voyage import FuelChangeoverEvent, GeneratorSfocPoint, MachineryFuelState, RouteDefinition, SpeedConsumptionPoint, VesselEnergyConfig, VoyageLeg, VoyageLegOverride
 from fuel_consumption_calculator.repositories.bunker_repository import BunkerRepository
 from fuel_consumption_calculator.repositories.database import Database
 from fuel_consumption_calculator.services.bunker_service import BunkerService
@@ -58,7 +59,156 @@ def test_detailed_voyage_does_not_use_legacy_maneuvering_rates():
     assert row.departure_maneuvering_consumed_mt == {fuel: None for fuel in FUEL_TYPES}
     assert row.arrival_maneuvering_consumed_mt == {fuel: None for fuel in FUEL_TYPES}
     assert row.total_pre_arrival_consumed_mt == {fuel: None for fuel in FUEL_TYPES}
-    assert any("Detailed maneuvering model unavailable" in warning for warning in row.warnings)
+    assert any("Detailed maneuvering configuration" in warning for warning in row.warnings)
+
+
+def test_configured_maneuvering_rates_allocate_by_machinery_fuel():
+    config = replace(
+        _energy_config(),
+        maneuvering_main_engine_mt_per_hour=1.5,
+        maneuvering_generators_mt_per_hour=0.3,
+        maneuvering_aux_boiler_mt_per_hour=0.1,
+    )
+    row = calculate_voyage_plan(
+        [_leg()],
+        _profile(),
+        [_speed_point(10, 24, 30)],
+        config,
+        _sfoc_points(),
+        _fuel_state(),
+    ).legs[0]
+
+    assert row.departure_maneuvering_consumed_mt == {"ULSFO": 0.6, "VLSFO": 3.0, "MDO": 0.2}
+    assert row.arrival_maneuvering_consumed_mt == {"ULSFO": 0.6, "VLSFO": 3.0, "MDO": 0.2}
+
+
+def test_maneuvering_changeover_splits_main_engine_quantity():
+    config = replace(
+        _energy_config(),
+        maneuvering_main_engine_mt_per_hour=1.5,
+        maneuvering_generators_mt_per_hour=0.0,
+        maneuvering_aux_boiler_mt_per_hour=0.0,
+    )
+    changeover = FuelChangeoverEvent(
+        None,
+        1,
+        "MAIN_ENGINE",
+        "VLSFO",
+        "ULSFO",
+        datetime(2026, 1, 1, 1),
+    )
+    row = calculate_voyage_plan(
+        [_leg()],
+        _profile(),
+        [_speed_point(10, 24, 30)],
+        config,
+        _sfoc_points(),
+        MachineryFuelState(1, "VLSFO", "VLSFO", "VLSFO"),
+        [changeover],
+    ).legs[0]
+
+    assert row.departure_maneuvering_consumed_mt == {"ULSFO": 1.5, "VLSFO": 1.5, "MDO": 0.0}
+
+
+def test_zero_rate_maneuvering_machinery_does_not_require_known_fuel():
+    config = replace(
+        _energy_config(),
+        maneuvering_main_engine_mt_per_hour=1.5,
+        maneuvering_generators_mt_per_hour=0.0,
+        maneuvering_aux_boiler_mt_per_hour=0.0,
+    )
+    changeover = FuelChangeoverEvent(
+        None,
+        1,
+        "MAIN_ENGINE",
+        "ULSFO",
+        "VLSFO",
+        datetime(2025, 12, 31, 23),
+    )
+
+    row = calculate_voyage_plan(
+        [_leg()],
+        _profile(),
+        [_speed_point(10, 24, 30)],
+        config,
+        _sfoc_points(),
+        None,
+        [changeover],
+    ).legs[0]
+
+    assert row.departure_maneuvering_consumed_mt == {
+        "ULSFO": 0.0,
+        "VLSFO": 3.0,
+        "MDO": 0.0,
+    }
+
+
+def test_actual_pilot_off_controls_detailed_maneuvering_and_passage_duration():
+    override = VoyageLegOverride(
+        vessel_id=1,
+        sequence_number=2,
+        origin_port_snapshot="Origin",
+        destination_port_snapshot="Destination",
+        origin_departure_snapshot="2026-01-01T00:00",
+        destination_arrival_snapshot="2026-01-02T12:00",
+        actual_pilot_off=datetime(2026, 1, 1, 4),
+    )
+    config = replace(
+        _energy_config(),
+        maneuvering_main_engine_mt_per_hour=1.5,
+        maneuvering_generators_mt_per_hour=0.0,
+        maneuvering_aux_boiler_mt_per_hour=0.0,
+    )
+
+    plan = calculate_voyage_plan(
+        [_leg(override)],
+        _profile(),
+        [_speed_point(10, 24), _speed_point(14, 48)],
+        config,
+        _sfoc_points(),
+        MachineryFuelState(1, "VLSFO", "VLSFO", "VLSFO"),
+    )
+    row = plan.legs[0]
+
+    assert row.departure_pilotage_hours == 2
+    assert row.sea_hours == 30
+    assert row.departure_maneuvering_consumed_mt["VLSFO"] == 6.0
+
+    events = _events()
+    consumption = calculate_consumption_with_voyage(
+        build_schedule_timeline(events),
+        events,
+        plan,
+        _profile(),
+    )
+
+    assert consumption.rows[1].sea_hours == 36.0
+
+
+def test_configured_maneuvering_restores_predicted_rob_and_max_lift(tmp_path):
+    config = replace(
+        _energy_config(),
+        maneuvering_main_engine_mt_per_hour=1.5,
+        maneuvering_generators_mt_per_hour=0.3,
+        maneuvering_aux_boiler_mt_per_hour=0.1,
+    )
+    plan = calculate_voyage_plan(
+        [_leg()],
+        _profile(),
+        [_speed_point(10, 24, 30)],
+        config,
+        _sfoc_points(),
+        _fuel_state(),
+    )
+    consumption = calculate_consumption_with_voyage(build_schedule_timeline(_events()), _events(), plan, _profile())
+    rob = project_schedule_rob(StartingROB(1, tuple(ROBQuantity(fuel, 100) for fuel in FUEL_TYPES)), consumption)
+    limits = BunkerService(BunkerRepository(Database(tmp_path / "unused.db"))).calculate_lift_limits(
+        BunkerCapacityProfile(1, tuple(BunkerCapacity(fuel, 1000, 90) for fuel in FUEL_TYPES)),
+        rob.rows[1].projected_rob_mt,
+    )
+
+    assert rob.rows[1].projected_rob_mt["VLSFO"] is not None
+    assert limits["VLSFO"].max_lift_mt is not None
 
 
 def test_actual_pilot_off_changes_available_sea_time_and_required_speed():
@@ -311,4 +461,5 @@ def test_missing_main_engine_fuel_state_does_not_default_to_vlsfo():
     assert row.sea_consumed_mt["ULSFO"] is None
     assert row.sea_consumed_mt["VLSFO"] is None
     assert row.sea_consumed_mt["MDO"] is None
+    assert row.departure_maneuvering_consumed_mt["VLSFO"] is None
 

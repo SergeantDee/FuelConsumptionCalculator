@@ -74,6 +74,8 @@ class Database:
                 self._migrate_to_v9(connection)
             if current_version < 10:
                 self._migrate_to_v10(connection)
+            if current_version < 11:
+                self._migrate_to_v11(connection)
             if current_version >= 9:
                 self._ensure_default_port_timezones(connection)
                 self._resolve_existing_schedule_timezones(connection)
@@ -491,6 +493,18 @@ class Database:
             """
         )
         LOGGER.info("Database migrated to schema version 10.")
+
+    def _migrate_to_v11(self, connection: sqlite3.Connection) -> None:
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(vessel_energy_config)").fetchall()}
+        if columns:
+            for column in (
+                "maneuvering_main_engine_mt_per_hour",
+                "maneuvering_generators_mt_per_hour",
+                "maneuvering_aux_boiler_mt_per_hour",
+            ):
+                if column not in columns:
+                    connection.execute(f"ALTER TABLE vessel_energy_config ADD COLUMN {column} REAL")
+        LOGGER.info("Database migrated to schema version 11.")
 
     def _ensure_default_port_timezones(self, connection: sqlite3.Connection) -> None:
         timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")

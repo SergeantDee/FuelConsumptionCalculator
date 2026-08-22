@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import os
 from datetime import date, datetime, timezone
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PySide6.QtWidgets import QApplication, QTabWidget
 
 from fuel_consumption_calculator.calculations.voyage_engine import calculate_consumption_with_voyage, calculate_voyage_consumption, calculate_voyage_plan
 from fuel_consumption_calculator.domain.consumption import FUEL_TYPES, ConsumptionProfile, ConsumptionRate
@@ -26,6 +31,14 @@ from fuel_consumption_calculator.domain.voyage_stages import (
     STAGE_SEA_PASSAGE,
     build_voyage_stage_timeline,
 )
+from fuel_consumption_calculator.ui.pages.voyage_page import (
+    StageEditDialog,
+    build_planner_display_rows,
+    _fmt_compact_rob,
+    _stage_issue,
+)
+from fuel_consumption_calculator.ui.pages.dashboard_page import DashboardPage
+from fuel_consumption_calculator.ui.widgets.actual_rob_dialog import ActualROBDialog
 
 
 def test_stage_timeline_uses_port_departure_sea_arrival_sequence():
@@ -179,6 +192,103 @@ def test_actual_rob_observation_reanchors_after_unknown_detailed_departure_maneu
     sea_stage = next(stage for stage in timeline.stages if stage.stage_type == STAGE_SEA_PASSAGE)
     assert departure_stage.rob.end_mt == {"ULSFO": 70.0, "VLSFO": 80.0, "MDO": 90.0}
     assert sea_stage.rob.start_mt == departure_stage.rob.end_mt
+
+
+def test_voyage_detail_dialog_uses_event_consumption_and_rob_tabs():
+    app = QApplication.instance() or QApplication([])
+    events = _events()
+    timeline = build_voyage_stage_timeline(events, _plan(), _starting_rob())
+    stage = next(stage for stage in timeline.stages if stage.stage_type == STAGE_SEA_PASSAGE)
+
+    dialog = StageEditDialog(stage, None)
+
+    tabs = dialog.findChild(QTabWidget)
+    assert app is not None
+    assert tabs is not None
+    assert [tabs.tabText(index) for index in range(tabs.count())] == ["Event", "Consumption", "ROB"]
+
+
+def test_voyage_grid_helpers_keep_unknown_rob_and_flag_missing_sea_distance():
+    override = VoyageLegOverride(
+        1,
+        2,
+        "Origin",
+        "Destination",
+        "2026-01-01T00:00+00:00",
+        "2026-01-02T12:00+00:00",
+        sea_distance_nm=0.0,
+    )
+    timeline = build_voyage_stage_timeline(_events(), _plan(override), _starting_rob())
+    sea_stage = next(stage for stage in timeline.stages if stage.stage_type == STAGE_SEA_PASSAGE)
+
+    assert _stage_issue(sea_stage) == "Missing sea distance"
+    assert _fmt_compact_rob({"ULSFO": None, "VLSFO": 2.5, "MDO": None}) == "U - | V 2.50 | M -"
+
+
+def test_actual_rob_dialog_accepts_zero_for_every_fuel():
+    QApplication.instance() or QApplication([])
+    dialog = ActualROBDialog({"ULSFO": 0.0, "VLSFO": 0.0, "MDO": 0.0})
+
+    dialog.accept()
+
+    assert dialog.result() == dialog.DialogCode.Accepted
+    assert dialog.values()["ULSFO"] == 0.0
+    assert dialog.values()["VLSFO"] == 0.0
+    assert dialog.values()["MDO"] == 0.0
+
+
+def test_dashboard_keeps_rob_unavailable_when_elapsed_consumption_cannot_be_calculated():
+    QApplication.instance() or QApplication([])
+    older = ActualROBObservation(None, 1, datetime(2026, 1, 1, tzinfo=timezone.utc), {"ULSFO": 1.0, "VLSFO": 2.0, "MDO": 3.0})
+    latest = ActualROBObservation(None, 1, datetime(2026, 1, 2, tzinfo=timezone.utc), {"ULSFO": 4.0, "VLSFO": 5.0, "MDO": 6.0})
+
+    page = DashboardPage(
+        _ActiveVesselService(),
+        object(),
+        object(),
+        _ActualROBVoyageService([older, latest]),
+        object(),
+    )
+
+    assert page._rob_values["ULSFO"].text() == "- MT"
+    assert "Last Actual ROB: -" in page.rob_metadata.text()
+
+
+def test_planner_display_groups_simultaneous_changeovers_at_effective_timestamp():
+    planned = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+    actual = datetime(2026, 1, 1, 18, tzinfo=timezone.utc)
+    events = [
+        FuelChangeoverEvent(None, 1, machinery, "VLSFO", "ULSFO", planned, actual_at_utc=actual)
+        for machinery in ("MAIN_ENGINE", "GENERATORS", "AUX_BOILER")
+    ]
+
+    rows = build_planner_display_rows([], tuple(events))
+
+    assert len(rows) == 1
+    assert rows[0].timestamp == actual
+    assert len(rows[0].changeovers) == 3
+
+
+def test_planner_display_keeps_non_simultaneous_changeovers_separate_and_ordered():
+    first = FuelChangeoverEvent(None, 1, "MAIN_ENGINE", "VLSFO", "ULSFO", datetime(2026, 1, 1, 12, tzinfo=timezone.utc))
+    second = FuelChangeoverEvent(None, 1, "GENERATORS", "VLSFO", "ULSFO", datetime(2026, 1, 1, 13, tzinfo=timezone.utc))
+
+    rows = build_planner_display_rows([], (second, first))
+
+    assert [row.timestamp for row in rows] == [first.effective_at_utc, second.effective_at_utc]
+
+
+class _ActiveVesselService:
+    def get_active_vessel(self):
+        return type("Vessel", (), {"id": 1, "name": "Test Vessel", "imo": "1234567"})()
+
+
+class _ActualROBVoyageService:
+    def __init__(self, observations):
+        self._observations = observations
+
+    def list_actual_rob_observations(self, vessel_id):
+        return self._observations
 
 
 def _plan(override: VoyageLegOverride | None = None, changeovers: list[FuelChangeoverEvent] | None = None, detailed: bool = False):

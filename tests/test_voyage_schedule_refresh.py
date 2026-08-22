@@ -5,7 +5,7 @@ from datetime import date, datetime, timezone
 import pytest
 
 from fuel_consumption_calculator.domain.schedule import ScheduleCandidate
-from fuel_consumption_calculator.domain.voyage import ActualROBObservation, MachineryFuelState
+from fuel_consumption_calculator.domain.voyage import ActualROBObservation, MachineryFuelState, RouteDefinition, VesselEnergyConfig
 from fuel_consumption_calculator.repositories.database import Database
 from fuel_consumption_calculator.repositories.schedule_repository import ScheduleRepository
 from fuel_consumption_calculator.repositories.vessel_repository import VesselRepository
@@ -30,6 +30,36 @@ def test_explicitly_saved_vlsfo_machinery_fuel_state_remains_authoritative(tmp_p
     saved = service.save_initial_fuel_state(MachineryFuelState(vessel.id, "VLSFO", "VLSFO", "VLSFO"))
 
     assert saved == MachineryFuelState(vessel.id, "VLSFO", "VLSFO", "VLSFO")
+
+
+def test_energy_config_preserves_optional_maneuvering_rates(tmp_path):
+    database = Database(tmp_path / "test.db")
+    database.initialize()
+    vessel = VesselRepository(database).save_active("Maersk Labrea", "1234567")
+    service = VoyageService(VoyageRepository(database))
+
+    saved = service.save_energy_config(
+        VesselEnergyConfig(
+            vessel.id,
+            maneuvering_main_engine_mt_per_hour=0.0,
+            maneuvering_generators_mt_per_hour=None,
+            maneuvering_aux_boiler_mt_per_hour=0.1,
+        )
+    )
+
+    assert saved.maneuvering_main_engine_mt_per_hour == 0.0
+    assert saved.maneuvering_generators_mt_per_hour is None
+    assert saved.maneuvering_aux_boiler_mt_per_hour == 0.1
+
+
+def test_route_library_saves_and_loads_operational_distances(tmp_path):
+    database = Database(tmp_path / "test.db")
+    database.initialize()
+    service = VoyageService(VoyageRepository(database))
+
+    saved = service.save_route(RouteDefinition("Santos", "Rotterdam", 2.0, 1.5, 5_100.0, 3.0, 1.0))
+
+    assert saved in service.list_routes()
 
 
 def test_actual_rob_observation_requires_complete_fuel_snapshot(tmp_path):

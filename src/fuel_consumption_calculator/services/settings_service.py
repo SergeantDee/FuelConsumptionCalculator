@@ -39,3 +39,17 @@ class SettingsService:
         settings = self.load()
         settings["scraper_browser_mode"] = normalized
         self.save(settings)
+
+    def vessel_time_offset_minutes(self) -> int:
+        value = self.load().get("vessel_time_offset_minutes", 0)
+        try:
+            minutes = int(value)
+        except (TypeError, ValueError):
+            return 0
+        return max(-12 * 60, min(14 * 60, minutes))
+
+    def save_vessel_time_offset_minutes(self, minutes: int) -> None:
+        normalized = max(-12 * 60, min(14 * 60, int(minutes)))
+        settings = self.load()
+        settings["vessel_time_offset_minutes"] = normalized
+        self.save(settings)

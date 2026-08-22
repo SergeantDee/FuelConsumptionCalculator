@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import timedelta, timezone
 
 from fuel_consumption_calculator.calculations.consumption_engine import EventFuelConsumption, ScheduleFuelConsumption
 from fuel_consumption_calculator.calculations.performance_engine import DEFAULT_ME_SFOC_POINTS, calculate_main_engine_performance, reefer_kw_per_unit
@@ -46,7 +46,7 @@ def calculate_voyage_plan(
     detailed_me_enabled = energy_config is not None
     config = energy_config or VesselEnergyConfig(vessel_id=legs[0].vessel_id if legs else 0)
     active_fuel_state = initial_fuel_state
-    changeovers = sorted(fuel_changeovers or [], key=lambda event: event.effective_at_utc)
+    changeovers = sorted(fuel_changeovers or [], key=lambda event: _utc_instant(event.effective_at_utc))
 
     for leg in legs:
         override = leg.override
@@ -76,9 +76,22 @@ def calculate_voyage_plan(
             required_speed = sea_distance_nm / sea_hours
 
         if detailed_me_enabled:
-            departure_maneuvering = {fuel_type: None for fuel_type in FUEL_TYPES}
-            arrival_maneuvering = {fuel_type: None for fuel_type in FUEL_TYPES}
-            leg_warnings.append("Detailed maneuvering model unavailable; maneuvering fuel consumption unavailable.")
+            departure_maneuvering = _maneuvering_consumption(
+                config,
+                active_fuel_state,
+                changeovers,
+                berth_departure,
+                pilot_off,
+            )
+            arrival_maneuvering = _maneuvering_consumption(
+                config,
+                active_fuel_state,
+                changeovers,
+                pilot_on,
+                berth_arrival,
+            )
+            if any(value is None for value in departure_maneuvering.values()) or any(value is None for value in arrival_maneuvering.values()):
+                leg_warnings.append("Detailed maneuvering configuration or fuel allocation unavailable.")
         else:
             departure_maneuvering = {
                 fuel_type: _consume(dep_pilotage_hours, profile.rate_for("MANEUVERING", fuel_type))
@@ -179,10 +192,13 @@ def calculate_voyage_consumption(
         for calculated_leg in plan.legs
     }
     leg_hours_by_destination = {
-        calculated_leg.leg.destination_event_id: (
-            calculated_leg.departure_pilotage_hours
-            + calculated_leg.sea_hours
-            + calculated_leg.arrival_pilotage_hours
+        calculated_leg.leg.destination_event_id: max(
+            0.0,
+            (
+                calculated_leg.effective_berth_arrival
+                - calculated_leg.effective_berth_departure
+            ).total_seconds()
+            / 3600,
         )
         for calculated_leg in plan.legs
     }
@@ -519,6 +535,47 @@ def _add_optional(*values: float | None) -> float | None:
     return sum(float(value) for value in values)
 
 
+def _maneuvering_consumption(
+    config: VesselEnergyConfig,
+    initial_fuel_state: MachineryFuelState | None,
+    changeovers: list[FuelChangeoverEvent],
+    start_utc,
+    end_utc,
+) -> dict[str, float | None]:
+    if end_utc <= start_utc:
+        return empty_fuel_totals()
+
+    rates = {
+        "MAIN_ENGINE": config.maneuvering_main_engine_mt_per_hour,
+        "GENERATORS": config.maneuvering_generators_mt_per_hour,
+        "AUX_BOILER": config.maneuvering_aux_boiler_mt_per_hour,
+    }
+    if any(rate is None for rate in rates.values()):
+        return {fuel_type: None for fuel_type in FUEL_TYPES}
+
+    allocations = []
+    for machinery, rate in rates.items():
+        if rate == 0.0:
+            allocations.append(empty_fuel_totals())
+            continue
+
+        allocations.append(
+            _split_quantity_consumption(
+                machinery,
+                start_utc,
+                end_utc,
+                initial_fuel_state,
+                changeovers,
+                lambda interval_hours, rate=rate: interval_hours * rate,
+            )
+        )
+
+    return {
+        fuel_type: _add_optional(*(allocation[fuel_type] for allocation in allocations))
+        for fuel_type in FUEL_TYPES
+    }
+
+
 def _split_rate_consumption(
     machinery: str,
     start_utc,
@@ -546,28 +603,34 @@ def _split_quantity_consumption(
     quantity_for_hours,
 ) -> dict[str, float | None]:
     totals = empty_fuel_totals()
-    if end_utc <= start_utc:
+    start = _utc_instant(start_utc)
+    end = _utc_instant(end_utc)
+    if end <= start:
         return totals
     active_fuel = initial_fuel_state.fuel_for(machinery) if initial_fuel_state else None
-    for event in sorted(changeovers, key=lambda changeover: changeover.effective_at_utc):
+    normalized_changeovers = sorted(
+        ((event, _utc_instant(event.effective_at_utc)) for event in changeovers),
+        key=lambda item: item[1],
+    )
+    for event, event_at in normalized_changeovers:
         if event.machinery != machinery:
             continue
-        if event.effective_at_utc <= start_utc:
+        if event_at <= start:
             active_fuel = event.to_fuel_type
     if active_fuel is None:
         return {fuel_type: None for fuel_type in FUEL_TYPES}
-    cursor = start_utc
+    cursor = start
     relevant = [
-        event
-        for event in sorted(changeovers, key=lambda changeover: changeover.effective_at_utc)
-        if event.machinery == machinery and start_utc < event.effective_at_utc < end_utc
+        (event, event_at)
+        for event, event_at in normalized_changeovers
+        if event.machinery == machinery and start < event_at < end
     ]
-    for event in relevant:
-        hours = (event.effective_at_utc - cursor).total_seconds() / 3600
+    for event, event_at in relevant:
+        hours = (event_at - cursor).total_seconds() / 3600
         totals[active_fuel] += _call_quantity(quantity_for_hours, hours, active_fuel)
         active_fuel = event.to_fuel_type
-        cursor = event.effective_at_utc
-    hours = (end_utc - cursor).total_seconds() / 3600
+        cursor = event_at
+    hours = (end - cursor).total_seconds() / 3600
     totals[active_fuel] += _call_quantity(quantity_for_hours, hours, active_fuel)
     return totals
 
@@ -577,6 +640,10 @@ def _call_quantity(quantity_for_hours, hours: float, fuel: str) -> float:
         return quantity_for_hours(hours, fuel)
     except TypeError:
         return quantity_for_hours(hours)
+
+
+def _utc_instant(value):
+    return value.astimezone(timezone.utc) if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
 def _effective_float(override: float | None, default: float) -> float:

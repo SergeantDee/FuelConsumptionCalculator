@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -33,11 +34,12 @@ from fuel_consumption_calculator.ui.widgets.page_header import PageHeader
 
 
 class ConsumptionProjectionTableModel(QAbstractTableModel):
-    HEADERS = ("Port", "Sea Duration", "Port Duration", "ULSFO", "VLSFO", "MDO")
+    HEADERS = ("Port", "Sea Duration", "Port Duration", "ULSFO", "VLSFO", "MDO", "Issue / Reason")
 
     def __init__(self) -> None:
         super().__init__()
         self._rows: list[EventFuelConsumption] = []
+        self._issues: dict[int, str] = {}
 
     def rowCount(self, parent=None) -> int:
         return len(self._rows)
@@ -56,6 +58,7 @@ class ConsumptionProjectionTableModel(QAbstractTableModel):
             _format_mt(row.consumed_mt["ULSFO"]),
             _format_mt(row.consumed_mt["VLSFO"]),
             _format_mt(row.consumed_mt["MDO"]),
+            self._issues.get(row.event_id, ""),
         )
         return values[index.column()]
 
@@ -66,9 +69,10 @@ class ConsumptionProjectionTableModel(QAbstractTableModel):
             return self.HEADERS[section]
         return str(section + 1)
 
-    def set_rows(self, rows: list[EventFuelConsumption]) -> None:
+    def set_rows(self, rows: list[EventFuelConsumption], issues: dict[int, str] | None = None) -> None:
         self.beginResetModel()
         self._rows = rows
+        self._issues = dict(issues or {})
         self.endResetModel()
 
 
@@ -87,6 +91,7 @@ class ConsumptionPage(QWidget):
         self._voyage_service = voyage_service
         self._initial_fuel_inputs: dict[str, QComboBox] = {}
         self._energy_inputs: dict[str, QDoubleSpinBox] = {}
+        self._maneuvering_rate_inputs: dict[str, QLineEdit] = {}
         self._main_engine_sfoc_inputs: list[tuple[QDoubleSpinBox, QDoubleSpinBox]] = []
         self._sfoc_inputs: list[tuple[QDoubleSpinBox, QDoubleSpinBox]] = []
 
@@ -130,13 +135,15 @@ class ConsumptionPage(QWidget):
                 spinbox.setSingleStep(0.0001)
             engine_grid.addWidget(spinbox, 3, column)
             self._energy_inputs[key] = spinbox
-        for column, header in enumerate(("ME Load %", "ME SFOC g/kWh")):
+        for column, header in enumerate(("ME Load %", "ME SFOC g/kWh", "ME Load %", "ME SFOC g/kWh")):
             engine_grid.addWidget(QLabel(header), 4, column)
-        for row in range(17):
+        for index in range(17):
             load_input = _spinbox(" %", 0, 200, 5)
             sfoc_input = _spinbox(" g/kWh", 0, 9999, 1)
-            engine_grid.addWidget(load_input, row + 5, 0)
-            engine_grid.addWidget(sfoc_input, row + 5, 1)
+            row = 5 + index // 2
+            column = 0 if index % 2 == 0 else 2
+            engine_grid.addWidget(load_input, row, column)
+            engine_grid.addWidget(sfoc_input, row, column + 1)
             self._main_engine_sfoc_inputs.append((load_input, sfoc_input))
         performance_layout.addWidget(engine_panel)
 
@@ -175,6 +182,16 @@ class ConsumptionPage(QWidget):
             spinbox = _spinbox(" °C", -50, 80, 1)
             electrical_grid.addWidget(spinbox, 6, column)
             self._energy_inputs[key] = spinbox
+        for label, key, column in (
+            ("ME Maneuvering MT/h", "maneuvering_main_engine_mt_per_hour", 0),
+            ("DG Maneuvering MT/h", "maneuvering_generators_mt_per_hour", 1),
+            ("Aux Boiler Maneuvering MT/h", "maneuvering_aux_boiler_mt_per_hour", 2),
+        ):
+            electrical_grid.addWidget(QLabel(label), 7, column)
+            input_widget = QLineEdit()
+            input_widget.setPlaceholderText("Not configured")
+            electrical_grid.addWidget(input_widget, 8, column)
+            self._maneuvering_rate_inputs[key] = input_widget
         self.generator_fuel_combo = QComboBox()
         self.generator_fuel_combo.addItems(FUEL_TYPES)
         self.boiler_fuel_combo = QComboBox()
@@ -318,7 +335,21 @@ class ConsumptionPage(QWidget):
         except Exception as exc:
             self._clear_projection(str(exc))
             return
-        self.projection_table_model.set_rows(result.rows)
+        routes = {(route.origin_port, route.destination_port): route for route in self._voyage_service.list_routes()}
+        issues: dict[int, str] = {}
+        previous_port: str | None = None
+        for row in timeline.rows:
+            if previous_port is not None:
+                route = routes.get((previous_port, row.event.port))
+                if route is None or route.sea_distance_nm <= 0:
+                    issues[row.event.id] = "Missing sea distance"
+                elif row.interval_from_previous_hours is None:
+                    issues[row.event.id] = "Upstream projection unavailable"
+            previous_port = row.event.port
+        for row in result.rows:
+            if any(row.consumed_mt.get(fuel) is None for fuel in FUEL_TYPES):
+                issues[row.event_id] = "Consumption incomplete"
+        self.projection_table_model.set_rows(result.rows, issues)
         self.totals_label.setText(
             "ULSFO Total: "
             f"{_format_mt(result.totals_mt['ULSFO'])}   |   "
@@ -433,6 +464,9 @@ class ConsumptionPage(QWidget):
         config = self._voyage_service.load_energy_config(vessel_id)
         for key, spinbox in self._energy_inputs.items():
             spinbox.setValue(getattr(config, key))
+        for key, input_widget in self._maneuvering_rate_inputs.items():
+            value = getattr(config, key)
+            input_widget.setText("" if value is None else str(value))
         self.generator_fuel_combo.setCurrentText(config.generator_fuel_type)
         self.boiler_fuel_combo.setCurrentText(config.boiler_fuel_type)
         me_sfoc_points = self._voyage_service.list_main_engine_sfoc_points(vessel_id)
@@ -469,6 +503,9 @@ class ConsumptionPage(QWidget):
                     mcr_power_kw=self._energy_inputs["mcr_power_kw"].value(),
                     port_ambient_c=self._energy_inputs["port_ambient_c"].value(),
                     sea_ambient_c=self._energy_inputs["sea_ambient_c"].value(),
+                    maneuvering_main_engine_mt_per_hour=_optional_float(self._maneuvering_rate_inputs["maneuvering_main_engine_mt_per_hour"]),
+                    maneuvering_generators_mt_per_hour=_optional_float(self._maneuvering_rate_inputs["maneuvering_generators_mt_per_hour"]),
+                    maneuvering_aux_boiler_mt_per_hour=_optional_float(self._maneuvering_rate_inputs["maneuvering_aux_boiler_mt_per_hour"]),
                 )
             )
             me_sfoc_points = [
@@ -515,6 +552,11 @@ def _spinbox(suffix: str, minimum: float, maximum: float, step: float) -> QDoubl
     spinbox.setSingleStep(step)
     spinbox.setSuffix(suffix)
     return spinbox
+
+
+def _optional_float(input_widget: QLineEdit) -> float | None:
+    text = input_widget.text().strip()
+    return None if not text else float(text)
 
 
 def _section_label(text: str) -> QLabel:

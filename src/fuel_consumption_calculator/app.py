@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from types import TracebackType
 
@@ -72,6 +73,13 @@ def run(paths: AppPaths | None = None) -> int:
     resolved_paths.ensure_runtime_directories()
     logger = configure_logging(resolved_paths.log_file)
     logger.info("Application startup: %s %s", APPLICATION_NAME, APPLICATION_VERSION)
+
+    try:
+        scale = int(SettingsService(resolved_paths.settings_file).load().get("ui_scale_percent", 100))
+    except (RuntimeError, ValueError, TypeError):
+        scale = 100
+    if scale in {80, 90, 100, 110, 125}:
+        os.environ.setdefault("QT_SCALE_FACTOR", str(scale / 100))
 
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName(APPLICATION_NAME)

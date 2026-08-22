@@ -372,6 +372,11 @@ class VoyageService:
             config.speed_rpm_factor,
             config.power_coefficient,
             config.mcr_power_kw,
+            *(value for value in (
+                config.maneuvering_main_engine_mt_per_hour,
+                config.maneuvering_generators_mt_per_hour,
+                config.maneuvering_aux_boiler_mt_per_hour,
+            ) if value is not None),
         ):
             if value < 0:
                 raise ValueError("Energy configuration values cannot be negative.")

@@ -82,6 +82,30 @@ def test_me_fuel_change_splits_main_engine_consumption():
     assert round(main_vlsfo + main_ulsfo, 2) == round(plan.legs[0].predicted_me_fuel_mt_per_hour * 24, 2)
 
 
+def test_naive_utc_changeover_inside_aware_stage_splits_consumption_without_crashing():
+    plan = _plan_with_changeovers(
+        [FuelChangeoverEvent(None, 1, "MAIN_ENGINE", "VLSFO", "ULSFO", datetime(2026, 1, 1, 12))]
+    )
+
+    sea = plan.legs[0].sea_consumed_mt
+    main_vlsfo = sea["VLSFO"] - plan.legs[0].sea_generator_consumed_mt["VLSFO"] - plan.legs[0].sea_boiler_consumed_mt["VLSFO"]
+    main_ulsfo = sea["ULSFO"] - plan.legs[0].sea_generator_consumed_mt["ULSFO"] - plan.legs[0].sea_boiler_consumed_mt["ULSFO"]
+
+    assert main_vlsfo > 0
+    assert main_ulsfo > 0
+
+
+def test_naive_utc_future_changeover_leaves_current_stage_on_previous_fuel():
+    plan = _plan_with_changeovers(
+        [FuelChangeoverEvent(None, 1, "MAIN_ENGINE", "VLSFO", "ULSFO", datetime(2026, 1, 2, 12))]
+    )
+
+    sea = plan.legs[0].sea_consumed_mt
+    main_ulsfo = sea["ULSFO"] - plan.legs[0].sea_generator_consumed_mt["ULSFO"] - plan.legs[0].sea_boiler_consumed_mt["ULSFO"]
+
+    assert main_ulsfo == 0.0
+
+
 def test_dg_changeover_is_independent_from_main_engine():
     plan = _plan_with_changeovers(
         [
@@ -146,8 +170,14 @@ def test_actual_changeover_timestamp_overrides_planned_and_changes_rob_allocatio
 
     main_vlsfo = plan.legs[0].sea_consumed_mt["VLSFO"] - plan.legs[0].sea_generator_consumed_mt["VLSFO"] - plan.legs[0].sea_boiler_consumed_mt["VLSFO"]
     assert round(main_vlsfo, 2) == round(plan.legs[0].predicted_me_fuel_mt_per_hour * 18, 2)
-    assert rob.rows[1].arrival_rob_mt["VLSFO"] is None
-    assert rob.rows[1].arrival_rob_mt["ULSFO"] is None
+    assert round(rob.rows[1].arrival_rob_mt["VLSFO"], 6) == round(
+        100 - plan.legs[0].total_pre_arrival_consumed_mt["VLSFO"],
+        6,
+    )
+    assert round(rob.rows[1].arrival_rob_mt["ULSFO"], 6) == round(
+        100 - plan.legs[0].total_pre_arrival_consumed_mt["ULSFO"],
+        6,
+    )
 
 
 def _plan_with_changeovers(changeovers: list[FuelChangeoverEvent], *, me_load: float = 30, use_egb: bool = False):

@@ -77,6 +77,9 @@ class VesselEnergyConfig:
     mcr_power_kw: float = 38880.0
     port_ambient_c: float = 20.0
     sea_ambient_c: float = 20.0
+    maneuvering_main_engine_mt_per_hour: float | None = None
+    maneuvering_generators_mt_per_hour: float | None = None
+    maneuvering_aux_boiler_mt_per_hour: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
