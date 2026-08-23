@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from math import isclose, isfinite
 
@@ -70,6 +71,12 @@ class FuelTankService:
             raise RuntimeError("Fuel tank could not be read after assigning its batch.")
         return saved
 
+    def assign_fuel_batch_to_tank(self, tank_id: int, fuel_batch_id: int) -> FuelTank:
+        return self.assign_current_fuel_batch(tank_id, fuel_batch_id)
+
+    def clear_fuel_batch_from_tank(self, tank_id: int) -> FuelTank:
+        return self.assign_current_fuel_batch(tank_id, None)
+
     def list_fuel_batches(self, vessel_id: int) -> list[FuelBatch]:
         return self._repository.list_fuel_batches(vessel_id)
 
@@ -90,7 +97,10 @@ class FuelTankService:
         return self.save_fuel_batch(batch)
 
     def save_fuel_batch(self, batch: FuelBatch) -> FuelBatch:
+        batch = replace(batch, batch_name=batch.batch_name.strip())
         self._validate_batch(batch)
+        if not self._repository.vessel_exists(batch.vessel_id):
+            raise FuelTankValidationError("Fuel batch vessel does not exist.")
         return self._repository.save_fuel_batch(batch)
 
     def list_calibration_points(self, tank_id: int) -> list[TankCalibrationPoint]:
@@ -191,9 +201,13 @@ class FuelTankService:
         if batch.fuel_type not in FUEL_BATCH_TYPES:
             raise FuelTankValidationError("Fuel type is invalid.")
         self._validate_number(batch.density_15_kg_m3, "Density at 15°C", minimum=0, strictly_positive=True)
-        for label, value in (("Sulfur percent", batch.sulfur_percent), ("Viscosity", batch.viscosity_50_cst), ("Water percent", batch.water_percent)):
+        for label, value in (("Sulfur percent", batch.sulfur_percent), ("Water percent", batch.water_percent)):
             if value is not None:
                 self._validate_number(value, label, minimum=0)
+        if batch.viscosity_50_cst is not None:
+            self._validate_number(
+                batch.viscosity_50_cst, "Viscosity", minimum=0, strictly_positive=True
+            )
         for label, value in (("Flash point", batch.flash_point_c), ("Pour point", batch.pour_point_c)):
             if value is not None:
                 self._validate_number(value, label)

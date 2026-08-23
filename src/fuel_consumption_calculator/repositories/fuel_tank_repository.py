@@ -10,6 +10,13 @@ class FuelTankRepository:
     def __init__(self, database: Database) -> None:
         self._database = database
 
+    def vessel_exists(self, vessel_id: int) -> bool:
+        with self._database.connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM vessels WHERE id = ?", (vessel_id,)
+            ).fetchone()
+        return row is not None
+
     def list_tanks(self, vessel_id: int, *, include_inactive: bool = False) -> list[FuelTank]:
         query = "SELECT * FROM fuel_tanks WHERE vessel_id = ?"
         if not include_inactive:
