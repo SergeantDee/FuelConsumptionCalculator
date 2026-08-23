@@ -78,6 +78,8 @@ class Database:
                 self._migrate_to_v11(connection)
             if current_version < 12:
                 self._migrate_to_v12(connection)
+            if current_version < 13:
+                self._migrate_to_v13(connection)
             if current_version >= 9:
                 self._ensure_default_port_timezones(connection)
                 self._resolve_existing_schedule_timezones(connection)
@@ -612,6 +614,14 @@ class Database:
             """
         )
         LOGGER.info("Database migrated to schema version 12.")
+
+    def _migrate_to_v13(self, connection: sqlite3.Connection) -> None:
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(tank_soundings)").fetchall()}
+        if "manual_vcf" not in columns:
+            connection.execute("ALTER TABLE tank_soundings ADD COLUMN manual_vcf REAL")
+        if "standard_volume_15_m3" not in columns:
+            connection.execute("ALTER TABLE tank_soundings ADD COLUMN standard_volume_15_m3 REAL")
+        LOGGER.info("Database migrated to schema version 13.")
 
     def _ensure_default_port_timezones(self, connection: sqlite3.Connection) -> None:
         timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")

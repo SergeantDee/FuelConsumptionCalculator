@@ -80,5 +80,32 @@ def test_schema_migration_v10_to_v11_preserves_energy_config_and_leaves_maneuver
     assert user_version == SCHEMA_VERSION
 
 
-def test_schema_version_remains_12():
-    assert SCHEMA_VERSION == 12
+def test_schema_version_remains_13():
+    assert SCHEMA_VERSION == 13
+
+
+def test_schema_migration_v12_to_v13_adds_nullable_manual_vcf_snapshots_and_preserves_data(tmp_path):
+    database_file = tmp_path / "v12.db"
+    with sqlite3.connect(database_file) as connection:
+        connection.executescript("""
+            CREATE TABLE vessels (id INTEGER PRIMARY KEY, name TEXT NOT NULL, imo TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+            CREATE TABLE application_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE port_timezones (port_key TEXT PRIMARY KEY, port TEXT NOT NULL, timezone_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+            CREATE TABLE schedule_events (id INTEGER PRIMARY KEY, port TEXT NOT NULL, arrival_at TEXT NOT NULL, departure_at TEXT, arrival_at_utc TEXT, timezone_status TEXT);
+            CREATE TABLE tank_soundings (id INTEGER PRIMARY KEY, tank_id INTEGER NOT NULL, effective_at_utc TEXT NOT NULL, reading_type TEXT NOT NULL, reading_cm REAL NOT NULL, trim_m REAL NOT NULL, temperature_c REAL, calculated_volume_m3 REAL NOT NULL, calculated_density_kg_m3 REAL, calculated_mass_mt REAL, fuel_batch_id INTEGER, remarks TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+            INSERT INTO vessels VALUES (1, 'Existing Vessel', '7654321', 'x', 'x');
+            INSERT INTO tank_soundings VALUES (1, 4, '2026-01-01T00:00:00+00:00', 'SOUNDING', 10, 0, 35, 12.5, 950, 11.875, NULL, 'existing', 'x', 'x');
+            PRAGMA user_version = 12;
+        """)
+    database = Database(database_file)
+    database.initialize()
+    database.initialize()
+    with sqlite3.connect(database_file) as connection:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(tank_soundings)")}
+        row = connection.execute("SELECT calculated_volume_m3, calculated_density_kg_m3, calculated_mass_mt, manual_vcf, standard_volume_15_m3, remarks FROM tank_soundings WHERE id = 1").fetchone()
+        vessel = connection.execute("SELECT name FROM vessels WHERE id = 1").fetchone()
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+    assert {"manual_vcf", "standard_volume_15_m3"}.issubset(columns)
+    assert row == (12.5, 950.0, 11.875, None, None, "existing")
+    assert vessel == ("Existing Vessel",)
+    assert version == 13
