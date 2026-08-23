@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from math import isfinite
+from math import isclose, isfinite
 
+from fuel_consumption_calculator.calculations.manual_vcf_mass import (
+    ManualVcfMassError,
+    ManualVcfMassResult,
+    calculate_manual_vcf_mass as calculate_pure_manual_vcf_mass,
+)
 from fuel_consumption_calculator.calculations.tank_calibration_engine import calculate_calibrated_volume_m3
 from fuel_consumption_calculator.domain.fuel_tank import (
     FUEL_BATCH_TYPES,
@@ -105,10 +110,25 @@ class FuelTankService:
         except ValueError as error:
             raise FuelTankValidationError(str(error)) from error
 
+    def calculate_manual_vcf_mass(
+        self,
+        observed_volume_m3: float,
+        manual_vcf: float,
+        density_15_kg_m3: float,
+    ) -> ManualVcfMassResult:
+        try:
+            return calculate_pure_manual_vcf_mass(
+                observed_volume_m3, manual_vcf, density_15_kg_m3
+            )
+        except ManualVcfMassError as error:
+            raise FuelTankValidationError(str(error)) from error
+
     def save_sounding_observation(
         self, *, tank_id: int, reading_type: str, reading_cm: float, trim_m: float,
         effective_at_utc: datetime | str | None = None, temperature_c: float | None = None,
         fuel_batch_id: int | None = None, remarks: str | None = None,
+        manual_vcf: float | None = None, standard_volume_15_m3: float | None = None,
+        calculated_density_kg_m3: float | None = None, calculated_mass_mt: float | None = None,
     ) -> TankSounding:
         tank = self.get_tank(tank_id)
         if tank is None:
@@ -121,11 +141,25 @@ class FuelTankService:
             self._validate_number(temperature_c, "Temperature")
         self._validate_batch_belongs_to_vessel(tank.vessel_id, fuel_batch_id)
         volume = self.calculate_calibrated_volume(tank_id, reading_type, reading_cm, trim_m)
+        self._validate_mass_snapshot(
+            calculated_volume_m3=volume,
+            manual_vcf=manual_vcf,
+            standard_volume_15_m3=standard_volume_15_m3,
+            calculated_density_kg_m3=calculated_density_kg_m3,
+            calculated_mass_mt=calculated_mass_mt,
+        )
         return self._repository.save_sounding(TankSounding(
             id=None, tank_id=tank_id, effective_at_utc=_utc_timestamp(effective_at_utc), reading_type=reading_type,
             reading_cm=float(reading_cm), trim_m=float(trim_m), temperature_c=float(temperature_c) if temperature_c is not None else None,
-            calculated_volume_m3=volume, calculated_density_kg_m3=None, calculated_mass_mt=None,
+            calculated_volume_m3=volume,
+            calculated_density_kg_m3=(float(calculated_density_kg_m3)
+                                        if calculated_density_kg_m3 is not None else None),
+            calculated_mass_mt=(float(calculated_mass_mt)
+                                if calculated_mass_mt is not None else None),
             fuel_batch_id=fuel_batch_id, remarks=remarks,
+            manual_vcf=float(manual_vcf) if manual_vcf is not None else None,
+            standard_volume_15_m3=(float(standard_volume_15_m3)
+                                    if standard_volume_15_m3 is not None else None),
         ))
 
     def get_latest_sounding(self, tank_id: int) -> TankSounding | None:
@@ -194,6 +228,45 @@ class FuelTankService:
             batch = self.get_fuel_batch(batch_id)
             if batch is None or batch.vessel_id != vessel_id:
                 raise FuelTankValidationError("Fuel batch must belong to the tank vessel.")
+
+    def _validate_mass_snapshot(
+        self,
+        *,
+        calculated_volume_m3: float,
+        manual_vcf: float | None,
+        standard_volume_15_m3: float | None,
+        calculated_density_kg_m3: float | None,
+        calculated_mass_mt: float | None,
+    ) -> None:
+        values = (
+            manual_vcf,
+            standard_volume_15_m3,
+            calculated_density_kg_m3,
+            calculated_mass_mt,
+        )
+        if all(value is None for value in values):
+            return
+        if any(value is None for value in values):
+            raise FuelTankValidationError(
+                "Mass snapshot requires manual VCF, standard volume, density, and mass."
+            )
+
+        self._validate_number(standard_volume_15_m3, "Standard volume at 15 C", minimum=0)
+        self._validate_number(calculated_mass_mt, "Calculated mass", minimum=0)
+        expected = self.calculate_manual_vcf_mass(
+            calculated_volume_m3, manual_vcf, calculated_density_kg_m3
+        )
+        if not isclose(
+            float(standard_volume_15_m3), expected.standard_volume_15_m3,
+            rel_tol=1e-9, abs_tol=1e-9,
+        ):
+            raise FuelTankValidationError(
+                "Standard volume does not match the manual VCF snapshot calculation."
+            )
+        if not isclose(float(calculated_mass_mt), expected.mass_mt, rel_tol=1e-9, abs_tol=1e-9):
+            raise FuelTankValidationError(
+                "Calculated mass does not match the manual VCF snapshot calculation."
+            )
 
     @staticmethod
     def _validate_number(value: float, label: str, minimum: float | None = None, strictly_positive: bool = False) -> None:
