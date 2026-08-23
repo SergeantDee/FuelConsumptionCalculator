@@ -76,6 +76,8 @@ class Database:
                 self._migrate_to_v10(connection)
             if current_version < 11:
                 self._migrate_to_v11(connection)
+            if current_version < 12:
+                self._migrate_to_v12(connection)
             if current_version >= 9:
                 self._ensure_default_port_timezones(connection)
                 self._resolve_existing_schedule_timezones(connection)
@@ -505,6 +507,111 @@ class Database:
                 if column not in columns:
                     connection.execute(f"ALTER TABLE vessel_energy_config ADD COLUMN {column} REAL")
         LOGGER.info("Database migrated to schema version 11.")
+
+    def _migrate_to_v12(self, connection: sqlite3.Connection) -> None:
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS fuel_batches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vessel_id INTEGER NOT NULL,
+                batch_name TEXT NOT NULL,
+                fuel_type TEXT NOT NULL,
+                density_15_kg_m3 REAL NOT NULL,
+                sulfur_percent REAL,
+                viscosity_50_cst REAL,
+                flash_point_c REAL,
+                pour_point_c REAL,
+                water_percent REAL,
+                lab_reference TEXT,
+                bunker_port TEXT,
+                bunker_date TEXT,
+                remarks TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (vessel_id) REFERENCES vessels(id) ON DELETE CASCADE,
+                CHECK (fuel_type IN ('ULSFO', 'VLSFO', 'MDO')),
+                CHECK (density_15_kg_m3 > 0),
+                CHECK (sulfur_percent IS NULL OR sulfur_percent >= 0),
+                CHECK (viscosity_50_cst IS NULL OR viscosity_50_cst >= 0),
+                CHECK (water_percent IS NULL OR water_percent >= 0)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_fuel_batches_vessel
+                ON fuel_batches (vessel_id, batch_name);
+
+            CREATE TABLE IF NOT EXISTS fuel_tanks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vessel_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                tank_type TEXT NOT NULL,
+                capacity_m3 REAL NOT NULL,
+                preferred_measurement_type TEXT NOT NULL,
+                bunker_receiving_eligible INTEGER NOT NULL DEFAULT 0,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                current_fuel_batch_id INTEGER,
+                notes TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (vessel_id) REFERENCES vessels(id) ON DELETE CASCADE,
+                FOREIGN KEY (current_fuel_batch_id) REFERENCES fuel_batches(id) ON DELETE SET NULL,
+                UNIQUE (vessel_id, name),
+                CHECK (tank_type IN ('BUNKER', 'SETTLING', 'SERVICE', 'OTHER')),
+                CHECK (capacity_m3 > 0),
+                CHECK (preferred_measurement_type IN ('SOUNDING', 'ULLAGE')),
+                CHECK (bunker_receiving_eligible IN (0, 1)),
+                CHECK (is_active IN (0, 1))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_fuel_tanks_vessel_active
+                ON fuel_tanks (vessel_id, is_active, name);
+
+            CREATE TABLE IF NOT EXISTS tank_calibration_points (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tank_id INTEGER NOT NULL,
+                sounding_cm REAL,
+                ullage_cm REAL,
+                trim_m REAL NOT NULL,
+                volume_m3 REAL NOT NULL,
+                FOREIGN KEY (tank_id) REFERENCES fuel_tanks(id) ON DELETE CASCADE,
+                UNIQUE (tank_id, sounding_cm, ullage_cm, trim_m),
+                CHECK (sounding_cm IS NOT NULL OR ullage_cm IS NOT NULL),
+                CHECK (sounding_cm IS NULL OR sounding_cm >= 0),
+                CHECK (ullage_cm IS NULL OR ullage_cm >= 0),
+                CHECK (volume_m3 >= 0)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_tank_calibration_points_tank
+                ON tank_calibration_points (tank_id, trim_m);
+
+            CREATE TABLE IF NOT EXISTS tank_soundings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tank_id INTEGER NOT NULL,
+                effective_at_utc TEXT NOT NULL,
+                reading_type TEXT NOT NULL,
+                reading_cm REAL NOT NULL,
+                trim_m REAL NOT NULL,
+                temperature_c REAL,
+                calculated_volume_m3 REAL NOT NULL,
+                calculated_density_kg_m3 REAL,
+                calculated_mass_mt REAL,
+                fuel_batch_id INTEGER,
+                remarks TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (tank_id) REFERENCES fuel_tanks(id) ON DELETE CASCADE,
+                FOREIGN KEY (fuel_batch_id) REFERENCES fuel_batches(id) ON DELETE SET NULL,
+                CHECK (reading_type IN ('SOUNDING', 'ULLAGE')),
+                CHECK (reading_cm >= 0),
+                CHECK (calculated_volume_m3 >= 0),
+                CHECK (calculated_density_kg_m3 IS NULL OR calculated_density_kg_m3 > 0),
+                CHECK (calculated_mass_mt IS NULL OR calculated_mass_mt >= 0)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_tank_soundings_tank_time
+                ON tank_soundings (tank_id, effective_at_utc DESC, id DESC);
+            """
+        )
+        LOGGER.info("Database migrated to schema version 12.")
 
     def _ensure_default_port_timezones(self, connection: sqlite3.Connection) -> None:
         timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
