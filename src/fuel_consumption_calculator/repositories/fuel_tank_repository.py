@@ -105,11 +105,13 @@ class FuelTankRepository:
         with self._database.connect() as connection:
             cursor = connection.execute(
                 """INSERT INTO tank_soundings (tank_id, effective_at_utc, reading_type, reading_cm, trim_m, temperature_c,
-                   calculated_volume_m3, calculated_density_kg_m3, calculated_mass_mt, fuel_batch_id, remarks, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   calculated_volume_m3, calculated_density_kg_m3, calculated_mass_mt, fuel_batch_id, remarks, created_at, updated_at,
+                   manual_vcf, standard_volume_15_m3)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (sounding.tank_id, sounding.effective_at_utc, sounding.reading_type, sounding.reading_cm, sounding.trim_m,
                  sounding.temperature_c, sounding.calculated_volume_m3, sounding.calculated_density_kg_m3,
-                 sounding.calculated_mass_mt, sounding.fuel_batch_id, sounding.remarks, timestamp, timestamp),
+                 sounding.calculated_mass_mt, sounding.fuel_batch_id, sounding.remarks, timestamp, timestamp,
+                 sounding.manual_vcf, sounding.standard_volume_15_m3),
             )
         return self._get_sounding(cursor.lastrowid)
 
@@ -165,4 +167,5 @@ def _point_from_row(row) -> TankCalibrationPoint:
 def _sounding_from_row(row) -> TankSounding:
     return TankSounding(row["id"], row["tank_id"], row["effective_at_utc"], row["reading_type"], float(row["reading_cm"]),
                          float(row["trim_m"]), row["temperature_c"], float(row["calculated_volume_m3"]), row["calculated_density_kg_m3"],
-                         row["calculated_mass_mt"], row["fuel_batch_id"], row["remarks"], row["created_at"], row["updated_at"])
+                         row["calculated_mass_mt"], row["fuel_batch_id"], row["remarks"], row["created_at"], row["updated_at"],
+                         row["manual_vcf"], row["standard_volume_15_m3"])

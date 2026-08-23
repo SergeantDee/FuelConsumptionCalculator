@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 from typing import Literal
 
 
@@ -75,3 +76,16 @@ class TankSounding:
     remarks: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
+    manual_vcf: float | None = None
+    standard_volume_15_m3: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.manual_vcf is not None and (
+            not isfinite(self.manual_vcf) or self.manual_vcf <= 0
+        ):
+            raise ValueError("Manual VCF must be finite and greater than 0.")
+        if self.standard_volume_15_m3 is not None and (
+            not isfinite(self.standard_volume_15_m3)
+            or self.standard_volume_15_m3 < 0
+        ):
+            raise ValueError("Standard volume at 15 C must be finite and at least 0.")
