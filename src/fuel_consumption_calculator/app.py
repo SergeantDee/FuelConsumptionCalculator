@@ -13,12 +13,14 @@ from fuel_consumption_calculator.paths import AppPaths
 from fuel_consumption_calculator.repositories.bunker_repository import BunkerRepository
 from fuel_consumption_calculator.repositories.consumption_repository import ConsumptionRepository
 from fuel_consumption_calculator.repositories.database import Database
+from fuel_consumption_calculator.repositories.fuel_tank_repository import FuelTankRepository
 from fuel_consumption_calculator.repositories.rob_repository import ROBRepository
 from fuel_consumption_calculator.repositories.schedule_repository import ScheduleRepository
 from fuel_consumption_calculator.repositories.vessel_repository import VesselRepository
 from fuel_consumption_calculator.repositories.voyage_repository import VoyageRepository
 from fuel_consumption_calculator.services.bunker_service import BunkerService
 from fuel_consumption_calculator.services.consumption_service import ConsumptionService
+from fuel_consumption_calculator.services.fuel_tank_service import FuelTankService
 from fuel_consumption_calculator.services.rob_service import ROBService
 from fuel_consumption_calculator.services.schedule_service import ScheduleService
 from fuel_consumption_calculator.services.scraper_service import ScraperService
@@ -42,8 +44,9 @@ def build_main_window(paths: AppPaths) -> MainWindow:
     consumption_service = ConsumptionService(ConsumptionRepository(database), voyage_service)
     rob_service = ROBService(ROBRepository(database))
     bunker_service = BunkerService(BunkerRepository(database))
+    fuel_tank_service = FuelTankService(FuelTankRepository(database))
     scraper_service = ScraperService()
-    return MainWindow(vessel_service, schedule_service, scraper_service, consumption_service, rob_service, bunker_service, voyage_service, settings_service)
+    return MainWindow(vessel_service, schedule_service, scraper_service, consumption_service, rob_service, bunker_service, fuel_tank_service, voyage_service, settings_service)
 
 
 def install_global_exception_handler() -> None:
