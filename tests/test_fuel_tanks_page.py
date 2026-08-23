@@ -24,6 +24,13 @@ from fuel_consumption_calculator.ui.pages.fuel_tanks_page import (
     _position_for_tank,
     _short_display_name,
 )
+from fuel_consumption_calculator.ui.pages.fuel_tank_operational_dialogs import (
+    CalibrationDialog,
+    UpdateTankROBDialog,
+    export_calibration_xlsx,
+    generate_calibration_points,
+    import_calibration_xlsx,
+)
 
 
 @pytest.fixture(scope="module")
@@ -181,3 +188,25 @@ def test_bulk_tank_set_creates_selected_tanks_and_skips_alias_duplicates(tmp_pat
     assert {tank.name for tank in tanks} == {"HFO Deep Tank 1 STBD", "HFO DEEP TK 1P", "HFO SETT.TK"}
     assert tank_service.list_fuel_batches(vessel.id) == []
     assert all(tank_service.list_sounding_history(tank.id) == [] for tank in tanks)
+
+
+def test_calibration_dialog_excel_round_trip_generator_and_update_rob(tmp_path, qapp):
+    vessel_service, tank_service = _services(tmp_path)
+    vessel = vessel_service.configure_active_vessel("Test Vessel", "1234567")
+    tank = tank_service.create_tank(FuelTank(None, vessel.id, "HFO DEEP TK 1P", "BUNKER", 100, "ULLAGE"))
+    points = generate_calibration_points(tank.id, 100, 50, 1, 1, 1, 100, 90, 110)
+    assert {point.trim_m for point in points} == {-1, 0, 1}
+    workbook = tmp_path / "calibration.xlsx"
+    export_calibration_xlsx(workbook, tank, points)
+    imported = import_calibration_xlsx(workbook, tank.id)
+    assert len(imported) == len(points)
+    dialog = CalibrationDialog(tank_service, tank)
+    dialog.set_points(imported)
+    dialog.save()
+    assert len(tank_service.list_calibration_points(tank.id)) == len(points)
+    rob = UpdateTankROBDialog(tank_service, tank)
+    assert set(rob.types) == {"SOUNDING", "ULLAGE"}
+    rob.type.setCurrentText("SOUNDING")
+    rob.reading.setText("50"); rob.trim.setText("0")
+    rob.update_preview()
+    assert "50.000" in rob.preview.text()

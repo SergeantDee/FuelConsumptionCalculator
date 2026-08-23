@@ -15,6 +15,7 @@ from fuel_consumption_calculator.domain.fuel_tank import FUEL_TANK_TYPES, FuelTa
 from fuel_consumption_calculator.services.fuel_tank_service import FuelTankService
 from fuel_consumption_calculator.services.vessel_service import VesselService
 from fuel_consumption_calculator.ui.widgets.page_header import PageHeader
+from fuel_consumption_calculator.ui.pages.fuel_tank_operational_dialogs import CalibrationDialog, UpdateTankROBDialog
 
 
 FUEL_COLORS = {"ULSFO": "#7ec8f5", "VLSFO": "#b293e8", "MDO": "#f1c778"}
@@ -239,7 +240,7 @@ class VesselTankSetDialog(QDialog):
 
 
 class TankDetailsDialog(QDialog):
-    def __init__(self, tank: FuelTank, fuel_type: str | None, batch_name: str | None, latest: TankSounding | None, parent: QWidget | None = None) -> None:
+    def __init__(self, service: FuelTankService, tank: FuelTank, fuel_type: str | None, batch_name: str | None, latest: TankSounding | None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Tank Details")
         self.setMinimumWidth(380)
@@ -258,8 +259,10 @@ class TankDetailsDialog(QDialog):
             form.addRow(label, QLabel(value))
         layout.addLayout(form)
         future = QHBoxLayout()
-        for text in ("Update ROB (Coming next)", "Calibration (Coming next)", "Fuel / Batch Details (Coming next)"):
-            button = QPushButton(text); button.setEnabled(False); future.addWidget(button)
+        update = QPushButton("Update ROB"); update.clicked.connect(lambda: UpdateTankROBDialog(service, tank, self).exec())
+        calibration = QPushButton("Calibration"); calibration.clicked.connect(lambda: CalibrationDialog(service, tank, self).exec())
+        batch = QPushButton("Fuel / Batch Details (Coming next)"); batch.setEnabled(False)
+        for button in (update, calibration, batch): future.addWidget(button)
         layout.addLayout(future)
         close_button = QDialogButtonBox(QDialogButtonBox.StandardButton.Close); close_button.rejected.connect(self.reject); layout.addWidget(close_button)
 
@@ -297,8 +300,10 @@ class FuelTanksPage(QWidget):
         actions = QHBoxLayout()
         self.add_tank_button = QPushButton("Add Tank"); self.add_tank_button.setObjectName("primaryButton"); self.add_tank_button.clicked.connect(self._add_tank)
         self.load_tank_set_button = QPushButton("Load Vessel Tank Set"); self.load_tank_set_button.clicked.connect(self._load_vessel_tank_set)
+        self.update_rob_button = QPushButton("Update ROB"); self.update_rob_button.setEnabled(False); self.update_rob_button.clicked.connect(self._update_rob)
+        self.calibration_button = QPushButton("Calibration"); self.calibration_button.setEnabled(False); self.calibration_button.clicked.connect(self._open_calibration)
         self.edit_tank_button = QPushButton("Edit Selected Tank"); self.edit_tank_button.setEnabled(False); self.edit_tank_button.clicked.connect(self._edit_selected_tank)
-        actions.addWidget(self.add_tank_button); actions.addWidget(self.load_tank_set_button); actions.addWidget(self.edit_tank_button); actions.addStretch(); layout.addLayout(actions)
+        actions.addWidget(self.add_tank_button); actions.addWidget(self.load_tank_set_button); actions.addWidget(self.edit_tank_button); actions.addWidget(self.update_rob_button); actions.addWidget(self.calibration_button); actions.addStretch(); layout.addLayout(actions)
         recent_title = QLabel("RECENT SOUNDINGS / ROB HISTORY"); recent_title.setObjectName("sectionTitle"); layout.addWidget(recent_title)
         self.history_table = QTableWidget(0, 8); self.history_table.setHorizontalHeaderLabels(("UTC", "Tank", "Type", "Reading", "Trim", "Temperature", "Volume m³", "Fuel"))
         self.history_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers); self.history_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection); self.history_table.setAlternatingRowColors(True)
@@ -308,7 +313,7 @@ class FuelTanksPage(QWidget):
 
     def refresh(self) -> None:
         vessel = self._vessel_service.get_active_vessel()
-        self._selected_tank_id = None; self.tank_cards = []; self.edit_tank_button.setEnabled(False); self._clear_layout(self.arrangement_layout); self.history_table.setRowCount(0)
+        self._selected_tank_id = None; self.tank_cards = []; self.edit_tank_button.setEnabled(False); self.update_rob_button.setEnabled(False); self.calibration_button.setEnabled(False); self._clear_layout(self.arrangement_layout); self.history_table.setRowCount(0)
         if vessel is None:
             self.vessel_label.setText("Vessel: Not configured"); self.empty_label.setText("Configure a vessel before adding fuel oil tanks.")
             self.empty_label.show(); self.arrangement_panel.hide(); self.add_tank_button.setEnabled(False); self.load_tank_set_button.setEnabled(False); self.history_empty_label.show(); return
@@ -430,7 +435,7 @@ class FuelTanksPage(QWidget):
             elif item.layout() is not None: self._clear_layout(item.layout())
 
     def _select_tank(self, tank_id: int) -> None:
-        self._selected_tank_id = tank_id; self.edit_tank_button.setEnabled(True)
+        self._selected_tank_id = tank_id; self.edit_tank_button.setEnabled(True); self.update_rob_button.setEnabled(True); self.calibration_button.setEnabled(True)
         for card in self.tank_cards:
             card.set_selected(card._tank_id == tank_id)
 
@@ -449,11 +454,21 @@ class FuelTanksPage(QWidget):
         tank = self._fuel_tank_service.get_tank(self._selected_tank_id)
         if tank and TankDialog(self._fuel_tank_service, tank.vessel_id, tank, self).exec() == QDialog.DialogCode.Accepted: self.refresh()
 
+    def _open_calibration(self) -> None:
+        if self._selected_tank_id is None: return
+        tank = self._fuel_tank_service.get_tank(self._selected_tank_id)
+        if tank and CalibrationDialog(self._fuel_tank_service, tank, self).exec() == QDialog.DialogCode.Accepted: self.refresh()
+
+    def _update_rob(self) -> None:
+        if self._selected_tank_id is None: return
+        tank = self._fuel_tank_service.get_tank(self._selected_tank_id)
+        if tank and UpdateTankROBDialog(self._fuel_tank_service, tank, self).exec() == QDialog.DialogCode.Accepted: self.refresh()
+
     def _show_tank_details(self, tank_id: int) -> None:
         tank = self._fuel_tank_service.get_tank(tank_id)
         if tank is None: return
         batch = self._fuel_tank_service.get_fuel_batch(tank.current_fuel_batch_id) if tank.current_fuel_batch_id else None
-        TankDetailsDialog(tank, batch.fuel_type if batch else None, batch.batch_name if batch else None, self._fuel_tank_service.get_latest_sounding(tank_id), self).exec()
+        TankDetailsDialog(self._fuel_tank_service, tank, batch.fuel_type if batch else None, batch.batch_name if batch else None, self._fuel_tank_service.get_latest_sounding(tank_id), self).exec()
 
 
 def _normalized_name(name: str) -> str:
