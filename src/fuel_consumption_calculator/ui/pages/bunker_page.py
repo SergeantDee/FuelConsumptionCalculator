@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from PySide6.QtCore import QAbstractTableModel, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
+    QCheckBox,
     QDialog,
+    QDialogButtonBox,
     QDoubleSpinBox,
+    QFormLayout,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -15,6 +20,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QTableWidget,
+    QTableWidgetItem,
     QTableView,
     QVBoxLayout,
     QWidget,
@@ -22,7 +29,7 @@ from PySide6.QtWidgets import (
 
 from fuel_consumption_calculator.calculations.bunker_projection_engine import EventBunkerROBProjection
 from fuel_consumption_calculator.calculations.port_bunker_projection import PortBunkerProjectionRow, build_port_bunker_projection
-from fuel_consumption_calculator.domain.bunker import BunkerLiftLimit, BunkerPlanStatus
+from fuel_consumption_calculator.domain.bunker import BunkerLiftLimit, BunkerPlanStatus, BunkerReceivingTankPlan
 from fuel_consumption_calculator.domain.consumption import FUEL_TYPES
 from fuel_consumption_calculator.domain.schedule import ScheduleEvent
 from fuel_consumption_calculator.domain.voyage import ActualROBObservation
@@ -169,6 +176,47 @@ class PortProjectionTableModel(QAbstractTableModel):
 
     def row_at(self, row: int) -> PortBunkerProjectionRow | None:
         return self._rows[row] if 0 <= row < len(self._rows) else None
+
+
+class ReceivingTanksDialog(QDialog):
+    """Manual per-tank receiving plan; projected arrival is never inferred."""
+    def __init__(self, service: BunkerService, plan, default_target: float, parent=None):
+        super().__init__(parent); self._service, self._plan = service, plan; self.setWindowTitle("Receiving Tanks"); self.resize(900, 520)
+        layout = QVBoxLayout(self); layout.addWidget(QLabel("Select receiving tanks and enter projected arrival volumes explicitly."))
+        self.table = QTableWidget(0, 7); self.table.setHorizontalHeaderLabels(("Selected", "Tank", "Capacity m3", "Latest Actual m3", "Projected Arrival m3", "Target Fill %", "Available m3")); self.table.horizontalHeader().setStretchLastSection(True); layout.addWidget(self.table)
+        incoming = QFormLayout(); self.batch_input = QComboBox(); self.batch_input.addItem("No incoming batch", None)
+        for batch in service.list_fuel_batches(plan.vessel_id): self.batch_input.addItem(f"{batch.batch_name} ({batch.fuel_type})", batch.id)
+        self.fuel_label = QLabel("--"); self.density_label = QLabel("--"); self.vcf_input = QLineEdit(); self.vcf_input.setPlaceholderText("Manual VCF, e.g. 0.98500")
+        incoming.addRow("Incoming Batch", self.batch_input); incoming.addRow("Fuel Type", self.fuel_label); incoming.addRow("Density @15 C", self.density_label); incoming.addRow("Manual VCF", self.vcf_input); layout.addLayout(incoming); layout.addWidget(QLabel("VCF is entered manually. Automatic ASTM/API calculation is not enabled."))
+        self.summary_label = QLabel("Selected Tanks: 0 | Available Volume: -- | Tank-Based Max Lift: --"); layout.addWidget(self.summary_label)
+        actions = QHBoxLayout(); self.use_latest_button = QPushButton("Use Latest Actual"); self.use_latest_button.clicked.connect(self._use_latest); actions.addWidget(self.use_latest_button); actions.addStretch(); layout.addLayout(actions)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel); buttons.button(QDialogButtonBox.StandardButton.Save).setText("Save Receiving Plan"); buttons.accepted.connect(self._save); buttons.rejected.connect(self.reject); layout.addWidget(buttons)
+        persisted = {row.tank_id: row for row in service.list_receiving_tank_plan(plan)}; snapshot = service.load_incoming_fuel_snapshot(plan)
+        if snapshot.fuel_batch_id is not None: self.batch_input.setCurrentIndex(next((i for i in range(self.batch_input.count()) if self.batch_input.itemData(i) == snapshot.fuel_batch_id), 0))
+        if snapshot.manual_vcf is not None: self.vcf_input.setText(f"{snapshot.manual_vcf:.5f}")
+        for row, (tank, latest) in enumerate(service.list_eligible_receiving_tanks(plan.vessel_id)):
+            saved = persisted.get(tank.id); self.table.insertRow(row); check=QCheckBox(); check.setChecked(saved is not None); self.table.setCellWidget(row,0,check); item=QTableWidgetItem(tank.name); item.setData(Qt.ItemDataRole.UserRole,(tank.id,latest)); self.table.setItem(row,1,item); self.table.setItem(row,2,QTableWidgetItem(f"{tank.capacity_m3:.3f}")); self.table.setItem(row,3,QTableWidgetItem("--" if latest is None else f"{latest:.3f}")); projected=QLineEdit("" if saved is None or saved.projected_arrival_volume_m3 is None else str(saved.projected_arrival_volume_m3)); target=QDoubleSpinBox(); target.setRange(.01,100); target.setValue(saved.target_fill_percent if saved else default_target); self.table.setCellWidget(row,4,projected); self.table.setCellWidget(row,5,target); self.table.setItem(row,6,QTableWidgetItem("--"))
+        self.batch_input.currentIndexChanged.connect(self._batch_changed); self._batch_changed()
+
+    def _batch_changed(self):
+        batch_id=self.batch_input.currentData(); batch=next((b for b in self._service.list_fuel_batches(self._plan.vessel_id) if b.id==batch_id),None); self.fuel_label.setText(batch.fuel_type if batch else "--"); self.density_label.setText(f"{batch.density_15_kg_m3:.3f} kg/m3" if batch else "--")
+
+    def _use_latest(self):
+        row=self.table.currentRow()
+        if row < 0: return
+        latest=self.table.item(row,1).data(Qt.ItemDataRole.UserRole)[1]
+        if latest is None: QMessageBox.warning(self,"Latest Actual unavailable","This tank has no latest actual volume."); return
+        self.table.cellWidget(row,4).setText(str(latest))
+
+    def _save(self):
+        rows=[]
+        for row in range(self.table.rowCount()):
+            if not self.table.cellWidget(row,0).isChecked(): continue
+            tank_id,_=self.table.item(row,1).data(Qt.ItemDataRole.UserRole); text=self.table.cellWidget(row,4).text().strip()
+            rows.append(BunkerReceivingTankPlan(tank_id, float(text) if text else None, self.table.cellWidget(row,5).value()))
+        try: self._service.save_receiving_tank_plan(self._plan, rows, self.batch_input.currentData(), float(self.vcf_input.text()) if self.vcf_input.text().strip() else None)
+        except (ValueError, TypeError) as error: QMessageBox.warning(self,"Receiving plan not saved",str(error)); return
+        self.accept()
 
 
 class BunkerPage(QWidget):
@@ -326,12 +374,18 @@ class BunkerPage(QWidget):
         self.confirm_plan_button.clicked.connect(self._confirm_plan)
         self.use_max_button = QPushButton("Use Max Lift")
         self.use_max_button.clicked.connect(self._use_max_lift)
+        self.receiving_tanks_button = QPushButton("Receiving Tanks...")
+        self.receiving_tanks_button.clicked.connect(self._open_receiving_tanks)
         self.clear_plan_button = QPushButton("Clear Bunker Plan")
         self.clear_plan_button.setObjectName("dangerButton")
         self.clear_plan_button.clicked.connect(self._clear_plan)
         actions.addWidget(self.save_plan_button)
         actions.addWidget(self.confirm_plan_button)
         actions.addWidget(self.use_max_button)
+        actions.addWidget(self.receiving_tanks_button)
+        self.receiving_summary_label = QLabel("Receiving tanks not configured")
+        self.receiving_summary_label.setObjectName("mutedText")
+        actions.addWidget(self.receiving_summary_label)
         actions.addWidget(self.clear_plan_button)
         actions.addStretch()
         plan_layout.addLayout(actions)
@@ -449,7 +503,7 @@ class BunkerPage(QWidget):
             return
         quantities = {fuel_type: self._planned_inputs[fuel_type].value() for fuel_type in FUEL_TYPES}
         try:
-            plan = self._bunker_service.build_plan(vessel_id=vessel.id, event=event, quantities=quantities, lift_limits=self._lift_limits)
+            plan = self._bunker_service.build_plan(vessel_id=vessel.id, event=event, quantities=quantities, lift_limits=None if self._has_tank_plan(event) and self._bunker_service.tank_based_max_lift(self._current_event_plan()) is None else self._lift_limits)
             self._bunker_service.save_plan(plan)
         except Exception as exc:
             QMessageBox.warning(self, "Bunker plan not saved", str(exc))
@@ -471,6 +525,14 @@ class BunkerPage(QWidget):
         if matching_status.status == "STALE":
             QMessageBox.warning(self, "Stale bunker plan", "This bunker plan no longer matches the current schedule event.")
             return
+        if self._has_tank_plan(event):
+            result = self._bunker_service.tank_based_max_lift(matching_status.plan)
+            if result is None or result.total_max_lift_mt is None:
+                QMessageBox.warning(self, "Receiving plan incomplete", "Complete the Receiving Tanks plan before confirming this bunker quantity.")
+                return
+            if sum(self._planned_inputs[fuel].value() for fuel in FUEL_TYPES) > round(result.total_max_lift_mt, 2):
+                QMessageBox.warning(self, "Bunker plan not confirmed", "Planned Lift exceeds calculated Max Lift.")
+                return
         try:
             self._bunker_service.confirm_plan(matching_status.plan)
         except Exception as exc:
@@ -545,6 +607,14 @@ class BunkerPage(QWidget):
         for fuel_type, limit in self._lift_limits.items():
             self._planned_inputs[fuel_type].setValue(limit.max_lift_mt)
 
+    def _open_receiving_tanks(self) -> None:
+        vessel=self._vessel_service.get_active_vessel(); event=self._selected_event()
+        if vessel is None or event is None: return
+        plan=self._bunker_service.build_plan(vessel_id=vessel.id,event=event,quantities={fuel: self._planned_inputs[fuel].value() for fuel in FUEL_TYPES})
+        default_target=next(iter(self._target_inputs.values())).value() if self._target_inputs else 90
+        if ReceivingTanksDialog(self._bunker_service,plan,default_target,self).exec() == QDialog.DialogCode.Accepted:
+            self._refresh_projection(vessel.id); self._selection_changed(); self.status_label.setText("Receiving tank plan saved as DRAFT.")
+
     def _refresh_projection(self, vessel_id: int) -> None:
         plan_statuses = self._bunker_service.list_plan_statuses(vessel_id, self._events)
         self.plans_model.set_rows(plan_statuses)
@@ -598,13 +668,37 @@ class BunkerPage(QWidget):
             arrival_rob,
             {fuel_type: self._target_inputs[fuel_type].value() for fuel_type in FUEL_TYPES},
         )
+        plan = self._current_event_plan()
+        tank_plan = plan is not None and self._bunker_service.has_receiving_tank_plan(plan)
+        tank_result = self._bunker_service.tank_based_max_lift(plan) if tank_plan else None
+        if tank_plan:
+            rows = self._bunker_service.list_receiving_tank_plan(plan)
+            if tank_result is None or tank_result.total_max_lift_mt is None:
+                self.receiving_summary_label.setText(f"{len(rows)} tanks selected · Max Lift incomplete")
+                self._lift_limits = {fuel: replace(limit, max_lift_mt=None) for fuel, limit in self._lift_limits.items()}
+            else:
+                self.receiving_summary_label.setText(f"{len(rows)} tanks selected · {tank_result.total_available_volume_m3:.3f} m3 available")
+                snapshot = self._bunker_service.load_incoming_fuel_snapshot(plan)
+                batch = next((b for b in self._bunker_service.list_fuel_batches(plan.vessel_id) if b.id == snapshot.fuel_batch_id), None)
+                self._lift_limits = {fuel: replace(limit, max_lift_mt=tank_result.total_max_lift_mt if batch and fuel == batch.fuel_type else 0.0) for fuel, limit in self._lift_limits.items()}
+        else:
+            self.receiving_summary_label.setText("Receiving tanks not configured")
         for fuel_type, limit in self._lift_limits.items():
             getattr(self, f"_{fuel_type.lower()}_capacity_label").setText(_format_mt(limit.capacity_mt))
             getattr(self, f"_{fuel_type.lower()}_target_label").setText(f"{limit.target_fill_percent:.2f} %")
             self._target_rob_labels[fuel_type].setText(_format_mt(limit.target_rob_mt))
             self._arrival_rob_labels[fuel_type].setText(_format_mt(limit.arrival_rob_mt))
             self._max_lift_labels[fuel_type].setText(_format_mt(limit.max_lift_mt))
-            self._planned_inputs[fuel_type].setMaximum(limit.max_lift_mt if limit.max_lift_mt is not None else 0.0)
+            self._planned_inputs[fuel_type].setMaximum(limit.max_lift_mt if limit.max_lift_mt is not None and not tank_plan else 999999.99)
+
+    def _current_event_plan(self):
+        vessel=self._vessel_service.get_active_vessel(); event=self._selected_event()
+        if vessel is None or event is None: return None
+        return self._bunker_service.build_plan(vessel_id=vessel.id,event=event,quantities={fuel: self._planned_inputs[fuel].value() for fuel in FUEL_TYPES})
+
+    def _has_tank_plan(self, event):
+        plan=self._current_event_plan()
+        return plan is not None and self._bunker_service.has_receiving_tank_plan(plan)
 
     def _selected_event(self) -> ScheduleEvent | None:
         index = self.event_combo.currentIndex()

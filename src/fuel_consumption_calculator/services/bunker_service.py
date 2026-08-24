@@ -167,6 +167,9 @@ class BunkerService:
         incoming = self._repository.load_incoming_fuel_snapshot(plan)
         return calculate_tank_max_lift([SelectedReceivingTank(row.tank_id, tanks[row.tank_id].capacity_m3, row.projected_arrival_volume_m3, row.target_fill_percent) for row in rows], incoming_density_15_kg_m3=incoming.density_15_kg_m3, incoming_manual_vcf=incoming.manual_vcf)
 
+    def has_receiving_tank_plan(self, plan: PlannedBunker) -> bool:
+        return self._repository.has_receiving_tank_plan(plan)
+
     def list_plan_statuses(self, vessel_id: int, current_events: list[ScheduleEvent]) -> list[BunkerPlanStatus]:
         current_by_sequence = {
             event.sequence_number: event

@@ -167,6 +167,11 @@ class BunkerRepository:
             row = connection.execute("SELECT fuel_batch_id,density_15_kg_m3,manual_vcf FROM bunker_incoming_fuel_snapshots WHERE vessel_id=? AND sequence_number=? AND port_snapshot=? AND arrival_snapshot=?", (plan.vessel_id,plan.sequence_number,plan.port_snapshot,plan.arrival_snapshot)).fetchone()
         return BunkerIncomingFuelSnapshot(None,None,None) if row is None else BunkerIncomingFuelSnapshot(row["fuel_batch_id"], row["density_15_kg_m3"], row["manual_vcf"])
 
+    def has_receiving_tank_plan(self, plan: PlannedBunker) -> bool:
+        with self._database.connect() as connection:
+            row = connection.execute("SELECT 1 FROM bunker_receiving_tank_plans WHERE vessel_id=? AND sequence_number=? AND port_snapshot=? AND arrival_snapshot=? UNION SELECT 1 FROM bunker_incoming_fuel_snapshots WHERE vessel_id=? AND sequence_number=? AND port_snapshot=? AND arrival_snapshot=? LIMIT 1", (plan.vessel_id, plan.sequence_number, plan.port_snapshot, plan.arrival_snapshot, plan.vessel_id, plan.sequence_number, plan.port_snapshot, plan.arrival_snapshot)).fetchone()
+        return row is not None
+
     def list_fuel_batches(self, vessel_id: int) -> list[FuelBatch]:
         with self._database.connect() as connection:
             rows=connection.execute("SELECT * FROM fuel_batches WHERE vessel_id=? ORDER BY batch_name COLLATE NOCASE,id",(vessel_id,)).fetchall()
