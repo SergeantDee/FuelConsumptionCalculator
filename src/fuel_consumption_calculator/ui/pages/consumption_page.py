@@ -1,10 +1,14 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QAbstractTableModel, QDateTime, Qt
+from datetime import datetime, timedelta, timezone
+
+from PySide6.QtCore import QAbstractTableModel, QDateTime, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDateTimeEdit,
+    QDialog,
+    QDialogButtonBox,
     QDoubleSpinBox,
     QFrame,
     QGridLayout,
@@ -78,6 +82,8 @@ class ConsumptionProjectionTableModel(QAbstractTableModel):
 
 
 class ConsumptionPage(QWidget):
+    changeover_saved = Signal()
+
     def __init__(
         self,
         vessel_service: VesselService,
@@ -95,6 +101,7 @@ class ConsumptionPage(QWidget):
         self._maneuvering_rate_inputs: dict[str, QLineEdit] = {}
         self._main_engine_sfoc_inputs: list[tuple[QDoubleSpinBox, QDoubleSpinBox]] = []
         self._sfoc_inputs: list[tuple[QDoubleSpinBox, QDoubleSpinBox]] = []
+        self._changeover_result = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(32, 28, 32, 28)
@@ -314,6 +321,10 @@ class ConsumptionPage(QWidget):
         self.changeover_reset_button.clicked.connect(self._reset_changeover)
         calculator_grid.addWidget(self.changeover_calculate_button, 6, 0)
         calculator_grid.addWidget(self.changeover_reset_button, 6, 1)
+        self.apply_changeover_button = QPushButton("Apply to Fuel Changeovers...")
+        self.apply_changeover_button.setEnabled(False)
+        self.apply_changeover_button.clicked.connect(self._apply_changeover_calculation)
+        calculator_grid.addWidget(self.apply_changeover_button, 7, 0, 1, 2)
         calculator_grid.setColumnStretch(0, 1)
         calculator_grid.setColumnStretch(1, 1)
         input_row.addWidget(self.changeover_inputs_panel, 3)
@@ -488,9 +499,11 @@ class ConsumptionPage(QWidget):
             self.change_actual_input,
             self.add_changeover_button,
             self.delete_changeover_button,
+            self.apply_changeover_button,
         ]:
             widget.setEnabled(enabled)
         self.change_actual_input.setEnabled(enabled and self.change_actual_enabled.isChecked())
+        self.apply_changeover_button.setEnabled(enabled and self._changeover_result is not None)
 
     def _refresh_fuel_state(self, vessel_id: int) -> None:
         state = self._voyage_service.load_initial_fuel_state(vessel_id)
@@ -645,6 +658,7 @@ class ConsumptionPage(QWidget):
         except FuelChangeoverCalculationError as error:
             QMessageBox.warning(self, "Changeover calculation", str(error)); return
         self._changeover_result = result
+        self.apply_changeover_button.setEnabled(self._vessel_service.get_active_vessel() is not None)
         self.changeover_result_label.setText(f"{result.changeover_time_hours:.1f} h")
         self.changeover_minutes_label.setText(f"{result.changeover_time_hours * 60:.0f} min")
         self.changeover_final_value.setText(f"{result.final_sulfur_percent:.5f} %"); self.changeover_steps_value.setText(str(result.steps)); self.changeover_timestep_value.setText(f"{result.time_step_hours:.1f} h")
@@ -660,9 +674,158 @@ class ConsumptionPage(QWidget):
         except ValueError:
             self.changeover_temperature_advisory.setText("--")
 
+    def _apply_changeover_calculation(self) -> None:
+        vessel = self._vessel_service.get_active_vessel()
+        if vessel is None or self._changeover_result is None:
+            return
+        dialog = ApplyChangeoverCalculationDialog(
+            self._changeover_result,
+            self.changeover_calculator_inputs["from"].value(),
+            self.changeover_calculator_inputs["to"].value(),
+            self.changeover_calculator_inputs["target"].value(),
+            lambda machinery, effective_at_utc: self._planned_fuel_before(vessel.id, machinery, effective_at_utc),
+            self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        values = dialog.values()
+        event = FuelChangeoverEvent(
+            id=None,
+            vessel_id=vessel.id,
+            machinery=values["machinery"],
+            from_fuel_type=values["from_fuel_type"],
+            to_fuel_type=values["to_fuel_type"],
+            planned_at_utc=values["effective_at_utc"],
+            actual_at_utc=None,
+            time_basis="UTC",
+            status="PLANNED",
+        )
+        try:
+            self._voyage_service.save_fuel_changeover(event)
+        except Exception as exc:
+            QMessageBox.warning(self, "Changeover not saved", str(exc))
+            return
+        self._refresh_changeovers(vessel.id)
+        self._refresh_projection(vessel.id)
+        self.status_label.setText("Fuel changeover saved at its effective completion time.")
+        self.changeover_saved.emit()
+
+    def _planned_fuel_before(self, vessel_id: int, machinery: str, effective_at_utc: datetime) -> str | None:
+        state = self._voyage_service.load_initial_fuel_state(vessel_id)
+        if state is None:
+            return None
+        fuel = state.fuel_for(machinery)
+        cutoff = _as_utc(effective_at_utc)
+        for event in self._voyage_service.list_fuel_changeovers(vessel_id):
+            if event.machinery != machinery or _as_utc(event.effective_at_utc) >= cutoff:
+                continue
+            fuel = event.to_fuel_type
+        return fuel
+
     def _reset_changeover(self) -> None:
         for widget in self.changeover_calculator_inputs.values(): widget.setValue(0)
+        self._changeover_result = None
+        self.apply_changeover_button.setEnabled(False)
         self.changeover_from_temperature.clear(); self.changeover_to_temperature.clear(); self.changeover_result_label.setText("-- h"); self.changeover_minutes_label.setText("-- min"); self.changeover_final_value.setText("--"); self.changeover_steps_value.setText("--"); self.changeover_timestep_value.setText("--"); self.changeover_temperature_advisory.setText("--"); self.changeover_trace_table.setRowCount(0)
+
+
+class ApplyChangeoverCalculationDialog(QDialog):
+    def __init__(self, result, from_sulfur_percent: float, to_sulfur_percent: float, target_sulfur_percent: float, planned_fuel_before, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Apply Changeover Calculation")
+        self._result = result
+        self._planned_fuel_before = planned_fuel_before
+
+        layout = QVBoxLayout(self)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(8)
+        layout.addLayout(grid)
+
+        self.machinery_input = QComboBox()
+        self.machinery_input.addItem("Select machinery...", None)
+        for machinery, label in (("MAIN_ENGINE", "Main Engine"), ("GENERATORS", "Generators"), ("AUX_BOILER", "Auxiliary Boiler")):
+            self.machinery_input.addItem(label, machinery)
+        self.from_fuel_input = QComboBox()
+        self.from_fuel_input.addItem("Select FROM fuel...", None)
+        self.to_fuel_input = QComboBox()
+        self.to_fuel_input.addItem("Select TO fuel...", None)
+        for fuel_type in FUEL_TYPES:
+            self.from_fuel_input.addItem(fuel_type, fuel_type)
+            self.to_fuel_input.addItem(fuel_type, fuel_type)
+
+        self.duration_value = QLabel(f"{result.changeover_time_hours:.1f} h / {result.changeover_time_hours * 60:.0f} min")
+        self.target_sulfur_value = QLabel(f"{target_sulfur_percent:.5f} %")
+        self.from_sulfur_value = QLabel(f"{from_sulfur_percent:.5f} %")
+        self.to_sulfur_value = QLabel(f"{to_sulfur_percent:.5f} %")
+        self.effective_input = QDateTimeEdit(QDateTime.currentDateTimeUtc())
+        self.effective_input.setCalendarPopup(True)
+        self.effective_input.setDisplayFormat("dd MMM yyyy HH:mm 'UTC'")
+        self.recommended_start_value = QLabel()
+        self.remarks_input = QLineEdit()
+        self.remarks_input.setPlaceholderText("Optional; not persisted with the current event schema")
+
+        for row, (label, widget) in enumerate((
+            ("Machinery", self.machinery_input),
+            ("FROM Fuel", self.from_fuel_input),
+            ("TO Fuel", self.to_fuel_input),
+            ("Calculated Duration", self.duration_value),
+            ("Target Sulphur", self.target_sulfur_value),
+            ("FROM Sulphur", self.from_sulfur_value),
+            ("TO Sulphur", self.to_sulfur_value),
+            ("Effective / Completion Time UTC", self.effective_input),
+            ("Recommended Start Time UTC", self.recommended_start_value),
+            ("Remarks", self.remarks_input),
+        )):
+            grid.addWidget(QLabel(label), row, 0)
+            grid.addWidget(widget, row, 1)
+        self.effective_input.dateTimeChanged.connect(self._update_recommended_start)
+        self._update_recommended_start()
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Apply | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self._validate_and_accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _effective_at_utc(self) -> datetime:
+        value = self.effective_input.dateTime().toUTC().toPython()
+        return _as_utc(value)
+
+    def _update_recommended_start(self) -> None:
+        start = self._effective_at_utc() - timedelta(hours=self._result.changeover_time_hours)
+        self.recommended_start_value.setText(start.strftime("%d %b %Y %H:%M UTC"))
+
+    def values(self) -> dict[str, object]:
+        effective_at_utc = self._effective_at_utc()
+        return {
+            "machinery": self.machinery_input.currentData(),
+            "from_fuel_type": self.from_fuel_input.currentData(),
+            "to_fuel_type": self.to_fuel_input.currentData(),
+            "effective_at_utc": effective_at_utc,
+            "recommended_start_utc": effective_at_utc - timedelta(hours=self._result.changeover_time_hours),
+            "remarks": self.remarks_input.text().strip(),
+        }
+
+    def _validate_and_accept(self) -> None:
+        machinery = self.machinery_input.currentData()
+        if machinery is None:
+            QMessageBox.warning(self, "Apply Changeover", "Select machinery before applying the changeover.")
+            return
+        if self.from_fuel_input.currentData() is None:
+            QMessageBox.warning(self, "Apply Changeover", "Select a FROM fuel explicitly.")
+            return
+        if self.to_fuel_input.currentData() is None:
+            QMessageBox.warning(self, "Apply Changeover", "Select a TO fuel explicitly.")
+            return
+        planned_fuel = self._planned_fuel_before(machinery, self._effective_at_utc())
+        if planned_fuel is not None and planned_fuel != self.from_fuel_input.currentData():
+            QMessageBox.warning(self, "Apply Changeover", f"Selected FROM fuel ({self.from_fuel_input.currentData()}) does not match the planned {planned_fuel} fuel for this machinery before the effective time.")
+            return
+        self.accept()
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 
 def _format_mt(value: float | None) -> str:

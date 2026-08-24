@@ -116,6 +116,7 @@ class MainWindow(QMainWindow):
 
         self.settings_page.vessel_saved.connect(self._vessel_configuration_changed)
         self.bunker_page.actual_sounding_saved.connect(self._actual_sounding_saved)
+        self.consumption_page.changeover_saved.connect(self._fuel_changeover_saved)
         self.settings_page.vessel_time_offset_changed.connect(self._set_vessel_time_offset)
         self._clock_timer = QTimer(self)
         self._clock_timer.timeout.connect(self._refresh_clock)
@@ -204,3 +205,8 @@ class MainWindow(QMainWindow):
         self.voyage_page.refresh()
         self.bunker_page.refresh()
         self.statusBar().showMessage("Actual Sounding ROB saved", 4000)
+
+    def _fuel_changeover_saved(self) -> None:
+        self.voyage_page.refresh()
+        self.dashboard_page.refresh()
+        self.statusBar().showMessage("Fuel changeover saved; voyage and ROB projections refreshed", 4000)
