@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from PySide6.QtCore import QAbstractTableModel, QDateTime, Qt, Signal
+from PySide6.QtCore import QAbstractTableModel, QDateTime, QTimeZone, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -758,7 +758,9 @@ class ApplyChangeoverCalculationDialog(QDialog):
         self.target_sulfur_value = QLabel(f"{target_sulfur_percent:.5f} %")
         self.from_sulfur_value = QLabel(f"{from_sulfur_percent:.5f} %")
         self.to_sulfur_value = QLabel(f"{to_sulfur_percent:.5f} %")
-        self.effective_input = QDateTimeEdit(QDateTime.currentDateTimeUtc())
+        self.effective_input = QDateTimeEdit()
+        self.effective_input.setTimeZone(QTimeZone.utc())
+        self.effective_input.setDateTime(QDateTime.currentDateTimeUtc())
         self.effective_input.setCalendarPopup(True)
         self.effective_input.setDisplayFormat("dd MMM yyyy HH:mm 'UTC'")
         self.recommended_start_value = QLabel()
@@ -788,8 +790,8 @@ class ApplyChangeoverCalculationDialog(QDialog):
         layout.addWidget(buttons)
 
     def _effective_at_utc(self) -> datetime:
-        value = self.effective_input.dateTime().toUTC().toPython()
-        return _as_utc(value)
+        utc_value = self.effective_input.dateTime().toUTC()
+        return datetime.fromtimestamp(utc_value.toSecsSinceEpoch(), timezone.utc)
 
     def _update_recommended_start(self) -> None:
         start = self._effective_at_utc() - timedelta(hours=self._result.changeover_time_hours)

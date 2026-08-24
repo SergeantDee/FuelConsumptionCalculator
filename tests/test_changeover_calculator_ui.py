@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtCore import QDateTime, Qt
+from PySide6.QtCore import QDateTime, QTimeZone, Qt
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from fuel_consumption_calculator.app import build_main_window
@@ -121,6 +122,21 @@ def test_apply_dialog_recommends_utc_start_from_completion(qapp):
     dialog.close()
 
 
+def test_apply_dialog_keeps_utc_completion_out_of_host_local_timezone(qapp):
+    result = calculate_fuel_changeover(0.2, 1.0, 1.2, 0.1, 0.5)
+    dialog = ApplyChangeoverCalculationDialog(result, 1.2, 0.1, 0.5, lambda *_: None)
+    completion = QDateTime.fromString("2026-08-25T04:56:00+00:00", Qt.DateFormat.ISODate)
+    dialog.effective_input.setDateTime(completion)
+    values = dialog.values()
+
+    assert dialog.effective_input.timeZone().id().data() == QTimeZone.utc().id().data()
+    assert dialog.effective_input.dateTime().toUTC().toString(Qt.DateFormat.ISODate) == "2026-08-25T04:56:00Z"
+    assert values["effective_at_utc"] == datetime(2026, 8, 25, 4, 56, tzinfo=timezone.utc)
+    assert values["recommended_start_utc"] == datetime(2026, 8, 24, 23, 56, tzinfo=timezone.utc)
+    assert dialog.recommended_start_value.text() == "24 Aug 2026 23:56 UTC"
+    dialog.close()
+
+
 def test_apply_creates_one_normal_effective_changeover_and_refreshes(tmp_path, qapp, monkeypatch):
     window, page = _show_calculator(tmp_path, qapp, (1365, 900))
     try:
@@ -137,7 +153,7 @@ def test_apply_creates_one_normal_effective_changeover_and_refreshes(tmp_path, q
         monkeypatch.setattr(window.voyage_page, "refresh", lambda: refreshes.append("voyage"))
         monkeypatch.setattr(window.dashboard_page, "refresh", lambda: refreshes.append("dashboard"))
 
-        effective_at_utc = QDateTime.fromString("2026-08-25T12:00:00+00:00", Qt.DateFormat.ISODate).toPython()
+        effective_at_utc = datetime(2026, 8, 25, 4, 56, tzinfo=timezone.utc)
 
         class AcceptedDialog:
             def __init__(self, *args):
