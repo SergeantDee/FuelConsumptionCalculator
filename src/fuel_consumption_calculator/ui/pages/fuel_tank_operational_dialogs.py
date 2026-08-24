@@ -135,7 +135,7 @@ class GenerateCalibrationDialog(QDialog):
     def values(self) -> tuple[float,...]: return tuple(widget.value() for widget in self.inputs)
 
 
-class UpdateTankROBDialog(QDialog):
+class LegacyUpdateTankROBDialog(QDialog):
     def __init__(self, service: FuelTankService, tank: FuelTank, parent=None) -> None:
         super().__init__(parent); self._service, self._tank=service,tank; self.setWindowTitle("Update Tank ROB"); layout=QVBoxLayout(self)
         points=service.list_calibration_points(tank.id); self.types=[kind for kind in MEASUREMENT_TYPES if any((p.sounding_cm if kind=="SOUNDING" else p.ullage_cm) is not None for p in points)]
@@ -156,6 +156,85 @@ class UpdateTankROBDialog(QDialog):
             self._service.save_sounding_observation(tank_id=self._tank.id,reading_type=self.type.currentText(),reading_cm=float(self.reading.text()),trim_m=float(self.trim.text()),temperature_c=temp,fuel_batch_id=self._tank.current_fuel_batch_id,remarks=self.remarks.toPlainText().strip() or None,effective_at_utc=self.time.dateTime().toPython().replace(tzinfo=timezone.utc))
         except ValueError as error: QMessageBox.warning(self,"ROB not saved",str(error)); return
         self.accept()
+
+
+class UpdateTankROBDialog(QDialog):
+    def __init__(self, service: FuelTankService, tank: FuelTank, parent=None) -> None:
+        super().__init__(parent)
+        self._service, self._tank = service, tank
+        self._batch = service.get_fuel_batch(tank.current_fuel_batch_id) if tank.current_fuel_batch_id else None
+        self._snapshot = None
+        self._valid = False
+        self.setWindowTitle("Update Tank ROB")
+        layout = QVBoxLayout(self)
+        points = service.list_calibration_points(tank.id)
+        self.types = [kind for kind in MEASUREMENT_TYPES if any((p.sounding_cm if kind == "SOUNDING" else p.ullage_cm) is not None for p in points)]
+        if not self.types:
+            layout.addWidget(QLabel("No calibration table is configured for this tank."))
+            button = QPushButton("Open Calibration"); button.clicked.connect(self._open_calibration); layout.addWidget(button)
+            return
+        form = QFormLayout()
+        self.time = QDateTimeEdit(QDateTime.currentDateTimeUtc()); self.time.setTimeSpec(Qt.TimeSpec.UTC)
+        self.type = QComboBox(); self.type.addItems(self.types)
+        self.reading = QLineEdit(); self.trim = QLineEdit("0"); self.temperature = QLineEdit(); self.manual_vcf = QLineEdit(); self.manual_vcf.setPlaceholderText("Optional, e.g. 0.98500")
+        self.remarks = QTextEdit()
+        form.addRow("Observation Time UTC", self.time); form.addRow("Measurement Type", self.type); form.addRow("Reading cm", self.reading); form.addRow("Trim m", self.trim); form.addRow("Temperature C", self.temperature)
+        form.addRow("Fuel", QLabel(self._batch.fuel_type if self._batch else "UNKNOWN")); form.addRow("Batch", QLabel(self._batch.batch_name if self._batch else "No batch assigned")); form.addRow("Density @15°C", QLabel(f"{self._batch.density_15_kg_m3:.3f} kg/m³" if self._batch else "--")); form.addRow("Manual VCF", self.manual_vcf); form.addRow("Remarks", self.remarks)
+        layout.addLayout(form)
+        layout.addWidget(_muted_label("VCF is entered manually. Automatic ASTM/API calculation is not enabled."))
+        self.preview = QLabel("Enter reading and trim to calculate volume."); self.preview.setWordWrap(True); layout.addWidget(self.preview)
+        layout.addWidget(_muted_label("Temperature is recorded with the observation. VCF is entered manually in the current version."))
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.save); buttons.rejected.connect(self.reject); layout.addWidget(buttons)
+        self.reading.textChanged.connect(self.update_preview); self.trim.textChanged.connect(self.update_preview); self.type.currentTextChanged.connect(self.update_preview); self.manual_vcf.textChanged.connect(self.update_preview)
+        self.update_preview()
+
+    def _open_calibration(self) -> None:
+        CalibrationDialog(self._service, self._tank, self).exec()
+
+    def update_preview(self) -> None:
+        self._snapshot = None
+        try:
+            volume = self._service.calculate_calibrated_volume(self._tank.id, self.type.currentText(), float(self.reading.text()), float(self.trim.text()))
+            lines = [f"Observed Volume: {volume:.3f} m3", f"Fill: {volume / self._tank.capacity_m3 * 100:.1f}%"]
+            vcf_text = self.manual_vcf.text().strip()
+            if not vcf_text:
+                lines.append("Mass snapshot: not recorded (Manual VCF not entered).")
+            elif self._batch is None:
+                lines.append("Mass snapshot: not recorded (no fuel batch assigned).")
+            elif self._batch.density_15_kg_m3 < 100:
+                lines.append("Mass snapshot unavailable: batch density must be entered in kg/m3 (for example 978, not 0.978).")
+            else:
+                vcf = _finite(vcf_text, "Manual VCF")
+                result = self._service.calculate_manual_vcf_mass(volume, vcf, self._batch.density_15_kg_m3)
+                self._snapshot = (vcf, result.standard_volume_15_m3, self._batch.density_15_kg_m3, result.mass_mt)
+                lines.extend((f"Manual VCF: {vcf:.5f}", f"Volume @15 C: {result.standard_volume_15_m3:.3f} m3", f"Density @15 C: {self._batch.density_15_kg_m3:.3f} kg/m3", f"Calculated Mass: {result.mass_mt:.3f} MT"))
+            self.preview.setText("\n".join(lines)); self._valid = True
+        except Exception as error:
+            self.preview.setText(str(error)); self._valid = False
+
+    def save(self) -> None:
+        self.update_preview()
+        if not self._valid:
+            return
+        try:
+            temp = _finite_optional(self.temperature.text(), "Temperature") if self.temperature.text().strip() else None
+            snapshot = self._snapshot
+            self._service.save_sounding_observation(
+                tank_id=self._tank.id, reading_type=self.type.currentText(), reading_cm=float(self.reading.text()), trim_m=float(self.trim.text()),
+                temperature_c=temp, fuel_batch_id=self._tank.current_fuel_batch_id, remarks=self.remarks.toPlainText().strip() or None,
+                effective_at_utc=self.time.dateTime().toPython().replace(tzinfo=timezone.utc),
+                manual_vcf=snapshot[0] if snapshot else None, standard_volume_15_m3=snapshot[1] if snapshot else None,
+                calculated_density_kg_m3=snapshot[2] if snapshot else None, calculated_mass_mt=snapshot[3] if snapshot else None,
+            )
+        except ValueError as error:
+            QMessageBox.warning(self, "ROB not saved", str(error)); return
+        self.accept()
+
+
+def _muted_label(text: str) -> QLabel:
+    label = QLabel(text); label.setWordWrap(True); label.setStyleSheet("color: #8caabd; font-size: 8pt;")
+    return label
 
 
 def _finite(value, label):

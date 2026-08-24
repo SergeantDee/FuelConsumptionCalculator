@@ -201,6 +201,10 @@ class FuelTankService:
         if batch.fuel_type not in FUEL_BATCH_TYPES:
             raise FuelTankValidationError("Fuel type is invalid.")
         self._validate_number(batch.density_15_kg_m3, "Density at 15°C", minimum=0, strictly_positive=True)
+        if float(batch.density_15_kg_m3) < 100:
+            raise FuelTankValidationError(
+                "Density must be entered in kg/m³ (for example 978, not 0.978)."
+            )
         for label, value in (("Sulfur percent", batch.sulfur_percent), ("Water percent", batch.water_percent)):
             if value is not None:
                 self._validate_number(value, label, minimum=0)
