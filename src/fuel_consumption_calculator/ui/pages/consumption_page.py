@@ -560,14 +560,19 @@ class ConsumptionPage(QWidget):
             time_basis="UTC",
             status="PLANNED",
         )
+        if self._save_fuel_changeover(event):
+            self.status_label.setText("Fuel changeover saved.")
+
+    def _save_fuel_changeover(self, event: FuelChangeoverEvent) -> bool:
         try:
             self._voyage_service.save_fuel_changeover(event)
         except Exception as exc:
             QMessageBox.warning(self, "Changeover not saved", str(exc))
-            return
-        self._refresh_changeovers(vessel.id)
-        self._refresh_projection(vessel.id)
-        self.status_label.setText("Fuel changeover saved.")
+            return False
+        self._refresh_changeovers(event.vessel_id)
+        self._refresh_projection(event.vessel_id)
+        self.changeover_saved.emit()
+        return True
 
     def _delete_changeover(self) -> None:
         vessel = self._vessel_service.get_active_vessel()
@@ -684,14 +689,15 @@ class ConsumptionPage(QWidget):
             self.changeover_calculator_inputs["to"].value(),
             self.changeover_calculator_inputs["target"].value(),
             lambda machinery, effective_at_utc: self._planned_fuel_before(vessel.id, machinery, effective_at_utc),
+            lambda values: self._save_calculated_changeover(vessel.id, values),
             self,
         )
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-        values = dialog.values()
+        dialog.exec()
+
+    def _save_calculated_changeover(self, vessel_id: int, values: dict[str, object]) -> bool:
         event = FuelChangeoverEvent(
             id=None,
-            vessel_id=vessel.id,
+            vessel_id=vessel_id,
             machinery=values["machinery"],
             from_fuel_type=values["from_fuel_type"],
             to_fuel_type=values["to_fuel_type"],
@@ -700,15 +706,11 @@ class ConsumptionPage(QWidget):
             time_basis="UTC",
             status="PLANNED",
         )
-        try:
-            self._voyage_service.save_fuel_changeover(event)
-        except Exception as exc:
-            QMessageBox.warning(self, "Changeover not saved", str(exc))
-            return
-        self._refresh_changeovers(vessel.id)
-        self._refresh_projection(vessel.id)
+        if not self._save_fuel_changeover(event):
+            return False
+        self.tabs.setCurrentIndex(1)
         self.status_label.setText("Fuel changeover saved at its effective completion time.")
-        self.changeover_saved.emit()
+        return True
 
     def _planned_fuel_before(self, vessel_id: int, machinery: str, effective_at_utc: datetime) -> str | None:
         state = self._voyage_service.load_initial_fuel_state(vessel_id)
@@ -730,11 +732,12 @@ class ConsumptionPage(QWidget):
 
 
 class ApplyChangeoverCalculationDialog(QDialog):
-    def __init__(self, result, from_sulfur_percent: float, to_sulfur_percent: float, target_sulfur_percent: float, planned_fuel_before, parent: QWidget | None = None) -> None:
+    def __init__(self, result, from_sulfur_percent: float, to_sulfur_percent: float, target_sulfur_percent: float, planned_fuel_before, apply_changeover, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Apply Changeover Calculation")
         self._result = result
         self._planned_fuel_before = planned_fuel_before
+        self._apply_changeover = apply_changeover
 
         layout = QVBoxLayout(self)
         grid = QGridLayout()
@@ -785,7 +788,8 @@ class ApplyChangeoverCalculationDialog(QDialog):
         self._update_recommended_start()
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Apply | QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(self._validate_and_accept)
+        self.apply_button = buttons.button(QDialogButtonBox.StandardButton.Apply)
+        self.apply_button.clicked.connect(self._validate_and_apply)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
@@ -808,7 +812,7 @@ class ApplyChangeoverCalculationDialog(QDialog):
             "remarks": self.remarks_input.text().strip(),
         }
 
-    def _validate_and_accept(self) -> None:
+    def _validate_and_apply(self) -> None:
         machinery = self.machinery_input.currentData()
         if machinery is None:
             QMessageBox.warning(self, "Apply Changeover", "Select machinery before applying the changeover.")
@@ -819,11 +823,17 @@ class ApplyChangeoverCalculationDialog(QDialog):
         if self.to_fuel_input.currentData() is None:
             QMessageBox.warning(self, "Apply Changeover", "Select a TO fuel explicitly.")
             return
+        if self.from_fuel_input.currentData() == self.to_fuel_input.currentData():
+            QMessageBox.warning(self, "Apply Changeover", "FROM and TO fuel must be different.")
+            return
         planned_fuel = self._planned_fuel_before(machinery, self._effective_at_utc())
         if planned_fuel is not None and planned_fuel != self.from_fuel_input.currentData():
-            QMessageBox.warning(self, "Apply Changeover", f"Selected FROM fuel ({self.from_fuel_input.currentData()}) does not match the planned {planned_fuel} fuel for this machinery before the effective time.")
+            machinery_label = self.machinery_input.currentText()
+            selected_fuel = self.from_fuel_input.currentData()
+            QMessageBox.warning(self, "Apply Changeover", f"{machinery_label} is planned to be using {planned_fuel} before this changeover. The selected FROM fuel is {selected_fuel}.\n\nSelect {planned_fuel} as the FROM fuel or update the preceding fuel state/changeover.")
             return
-        self.accept()
+        if self._apply_changeover(self.values()):
+            self.accept()
 
 
 def _as_utc(value: datetime) -> datetime:

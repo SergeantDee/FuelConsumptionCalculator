@@ -94,14 +94,14 @@ def test_changeover_calculator_reference_case_is_unchanged(tmp_path, qapp):
 
 def test_apply_dialog_requires_explicit_choices_and_keeps_sulfur_separate(monkeypatch, qapp):
     result = calculate_fuel_changeover(0.2, 1.0, 1.2, 0.1, 0.5)
-    dialog = ApplyChangeoverCalculationDialog(result, 1.2, 0.1, 0.5, lambda *_: None)
+    dialog = ApplyChangeoverCalculationDialog(result, 1.2, 0.1, 0.5, lambda *_: None, lambda _: True)
     warnings = []
     monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
 
     assert dialog.machinery_input.currentData() is None
     assert dialog.from_fuel_input.currentData() is None
     assert dialog.to_fuel_input.currentData() is None
-    dialog._validate_and_accept()
+    dialog._validate_and_apply()
     assert warnings == ["Select machinery before applying the changeover."]
 
     assert {dialog.machinery_input.itemData(index) for index in range(1, dialog.machinery_input.count())} == {"MAIN_ENGINE", "GENERATORS", "AUX_BOILER"}
@@ -110,7 +110,7 @@ def test_apply_dialog_requires_explicit_choices_and_keeps_sulfur_separate(monkey
 
 def test_apply_dialog_recommends_utc_start_from_completion(qapp):
     result = calculate_fuel_changeover(0.2, 1.0, 1.2, 0.1, 0.5)
-    dialog = ApplyChangeoverCalculationDialog(result, 1.2, 0.1, 0.5, lambda *_: None)
+    dialog = ApplyChangeoverCalculationDialog(result, 1.2, 0.1, 0.5, lambda *_: None, lambda _: True)
     completion = QDateTime.fromString("2026-08-25T12:00:00+00:00", Qt.DateFormat.ISODate)
     dialog.effective_input.setDateTime(completion)
     values = dialog.values()
@@ -124,7 +124,7 @@ def test_apply_dialog_recommends_utc_start_from_completion(qapp):
 
 def test_apply_dialog_keeps_utc_completion_out_of_host_local_timezone(qapp):
     result = calculate_fuel_changeover(0.2, 1.0, 1.2, 0.1, 0.5)
-    dialog = ApplyChangeoverCalculationDialog(result, 1.2, 0.1, 0.5, lambda *_: None)
+    dialog = ApplyChangeoverCalculationDialog(result, 1.2, 0.1, 0.5, lambda *_: None, lambda _: True)
     completion = QDateTime.fromString("2026-08-25T04:56:00+00:00", Qt.DateFormat.ISODate)
     dialog.effective_input.setDateTime(completion)
     values = dialog.values()
@@ -135,6 +135,43 @@ def test_apply_dialog_keeps_utc_completion_out_of_host_local_timezone(qapp):
     assert values["recommended_start_utc"] == datetime(2026, 8, 24, 23, 56, tzinfo=timezone.utc)
     assert dialog.recommended_start_value.text() == "24 Aug 2026 23:56 UTC"
     dialog.close()
+
+
+def test_apply_button_rejects_from_mismatch_and_keeps_dialog_open(monkeypatch, qapp):
+    result = calculate_fuel_changeover(0.2, 1.0, 1.2, 0.1, 0.5)
+    saved = []
+    dialog = ApplyChangeoverCalculationDialog(result, 1.2, 0.1, 0.5, lambda *_: "VLSFO", lambda values: saved.append(values) or True)
+    dialog.machinery_input.setCurrentIndex(1)
+    dialog.from_fuel_input.setCurrentText("ULSFO")
+    dialog.to_fuel_input.setCurrentText("MDO")
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+
+    dialog.apply_button.click()
+
+    assert saved == []
+    assert dialog.result() == QDialog.DialogCode.Rejected
+    assert warnings == [
+        "Main Engine is planned to be using VLSFO before this changeover. The selected FROM fuel is ULSFO.\n\nSelect VLSFO as the FROM fuel or update the preceding fuel state/changeover."
+    ]
+    dialog.close()
+
+
+def test_apply_button_saves_once_and_closes_after_success(qapp):
+    result = calculate_fuel_changeover(0.2, 1.0, 1.2, 0.1, 0.5)
+    saved = []
+    dialog = ApplyChangeoverCalculationDialog(result, 1.2, 0.1, 0.5, lambda *_: "VLSFO", lambda values: saved.append(values) or True)
+    dialog.machinery_input.setCurrentIndex(1)
+    dialog.from_fuel_input.setCurrentText("VLSFO")
+    dialog.to_fuel_input.setCurrentText("MDO")
+    dialog.effective_input.setDateTime(QDateTime.fromString("2026-08-25T05:06:00+00:00", Qt.DateFormat.ISODate))
+
+    dialog.apply_button.click()
+
+    assert len(saved) == 1
+    assert saved[0]["effective_at_utc"] == datetime(2026, 8, 25, 5, 6, tzinfo=timezone.utc)
+    assert saved[0]["recommended_start_utc"] == datetime(2026, 8, 25, 0, 6, tzinfo=timezone.utc)
+    assert dialog.result() == QDialog.DialogCode.Accepted
 
 
 def test_apply_creates_one_normal_effective_changeover_and_refreshes(tmp_path, qapp, monkeypatch):
@@ -158,17 +195,16 @@ def test_apply_creates_one_normal_effective_changeover_and_refreshes(tmp_path, q
         class AcceptedDialog:
             def __init__(self, *args):
                 self.result = args[0]
+                self._save = args[5]
 
             def exec(self):
-                return QDialog.DialogCode.Accepted
-
-            def values(self):
-                return {
+                self._save({
                     "machinery": "MAIN_ENGINE",
                     "from_fuel_type": "VLSFO",
-                    "to_fuel_type": "ULSFO",
+                    "to_fuel_type": "MDO",
                     "effective_at_utc": effective_at_utc,
-                }
+                })
+                return QDialog.DialogCode.Accepted
 
         monkeypatch.setattr(consumption_page, "ApplyChangeoverCalculationDialog", AcceptedDialog)
         page._apply_changeover_calculation()
@@ -178,9 +214,10 @@ def test_apply_creates_one_normal_effective_changeover_and_refreshes(tmp_path, q
         assert events[0].vessel_id == vessel.id
         assert events[0].machinery == "MAIN_ENGINE"
         assert events[0].from_fuel_type == "VLSFO"
-        assert events[0].to_fuel_type == "ULSFO"
+        assert events[0].to_fuel_type == "MDO"
         assert events[0].effective_at_utc == effective_at_utc
         assert events[0].actual_at_utc is None
         assert refreshes == ["voyage", "dashboard"]
+        assert page.tabs.currentIndex() == 1
     finally:
         window.close()
