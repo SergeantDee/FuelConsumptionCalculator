@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from fuel_consumption_calculator.calculations.consumption_engine import EventFuelConsumption
+from fuel_consumption_calculator.calculations.fuel_changeover import FuelChangeoverCalculationError, calculate_fuel_changeover
 from fuel_consumption_calculator.domain.consumption import FUEL_TYPES
 from fuel_consumption_calculator.domain.voyage import FuelChangeoverEvent, GeneratorSfocPoint, MachineryFuelState, MACHINERY_TYPES, MainEngineSfocPoint, VesselEnergyConfig
 from fuel_consumption_calculator.services.consumption_service import ConsumptionService
@@ -271,6 +272,115 @@ class ConsumptionPage(QWidget):
         self.changeover_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         changeover_layout.addWidget(self.changeover_table)
         self.tabs.addTab(changeover_tab, "Fuel Changeovers")
+
+        calculator_tab = QWidget()
+        calculator_root = QVBoxLayout(calculator_tab)
+        calculator_root.setContentsMargins(0, 0, 0, 0)
+        self.changeover_calculator_scroll = QScrollArea()
+        self.changeover_calculator_scroll.setWidgetResizable(True)
+        self.changeover_calculator_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        calculator_content = QWidget()
+        calculator_layout = QVBoxLayout(calculator_content)
+        calculator_layout.setContentsMargins(18, 18, 18, 18)
+        calculator_layout.setSpacing(10)
+        calculator_layout.addWidget(_section_label("CHANGEOVER CALCULATOR")); calculator_layout.addWidget(_help_label("0.1 h complete-mixing model based on verified LR/FOBAS calculator behavior.")); calculator_layout.addWidget(_help_label("0.10% and 0.50% replacement fuels use verified internal reference offsets."))
+        input_row = QHBoxLayout()
+        input_row.setSpacing(12)
+        self.changeover_inputs_panel = QFrame()
+        self.changeover_inputs_panel.setObjectName("panel")
+        calculator_grid = QGridLayout(self.changeover_inputs_panel)
+        calculator_grid.setContentsMargins(18, 16, 18, 16)
+        calculator_grid.setHorizontalSpacing(16)
+        calculator_grid.setVerticalSpacing(10)
+        calculator_grid.addWidget(_section_label("CHANGEOVER INPUTS"), 0, 0, 1, 2)
+        self.changeover_calculator_inputs = {}
+        self.changeover_input_labels = {}
+        for row, (label, key) in enumerate((("FROM Sulphur (%)", "from"), ("TO Sulphur (%)", "to"), ("Target Sulphur (%)", "target"), ("Fuel Flow (MT/h)", "flow"), ("System Quantity (MT)", "mass")), 1):
+            input_label = QLabel(label)
+            input_widget = _spinbox("", 0, 999999, 1)
+            input_widget.setDecimals(5)
+            input_widget.setSingleStep(.01)
+            input_widget.setMinimumHeight(32)
+            calculator_grid.addWidget(input_label, row, 0)
+            calculator_grid.addWidget(input_widget, row, 1)
+            self.changeover_input_labels[key] = input_label
+            self.changeover_calculator_inputs[key] = input_widget
+        self.changeover_calculate_button = QPushButton("Calculate Changeover")
+        self.changeover_calculate_button.setObjectName("primaryButton")
+        self.changeover_calculate_button.setMinimumHeight(32)
+        self.changeover_calculate_button.clicked.connect(self._calculate_changeover)
+        self.changeover_reset_button = QPushButton("Reset")
+        self.changeover_reset_button.setMinimumHeight(32)
+        self.changeover_reset_button.clicked.connect(self._reset_changeover)
+        calculator_grid.addWidget(self.changeover_calculate_button, 6, 0)
+        calculator_grid.addWidget(self.changeover_reset_button, 6, 1)
+        calculator_grid.setColumnStretch(0, 1)
+        calculator_grid.setColumnStretch(1, 1)
+        input_row.addWidget(self.changeover_inputs_panel, 3)
+
+        self.changeover_temperature_panel = QFrame()
+        self.changeover_temperature_panel.setObjectName("panel")
+        temp_grid = QGridLayout(self.changeover_temperature_panel)
+        temp_grid.setContentsMargins(18, 16, 18, 16)
+        temp_grid.setHorizontalSpacing(16)
+        temp_grid.setVerticalSpacing(10)
+        temp_grid.addWidget(_section_label("TEMPERATURE ADVISORY"), 0, 0, 1, 2)
+        self.changeover_from_temperature = QLineEdit()
+        self.changeover_to_temperature = QLineEdit()
+        self.changeover_from_temperature.setMinimumHeight(32)
+        self.changeover_to_temperature.setMinimumHeight(32)
+        self.changeover_from_temperature_label = QLabel("FROM Temperature (C)")
+        self.changeover_to_temperature_label = QLabel("TO Temperature (C)")
+        temp_grid.addWidget(self.changeover_from_temperature_label, 1, 0)
+        temp_grid.addWidget(self.changeover_from_temperature, 1, 1)
+        temp_grid.addWidget(self.changeover_to_temperature_label, 2, 0)
+        temp_grid.addWidget(self.changeover_to_temperature, 2, 1)
+        temp_grid.addWidget(_help_label("Advisory only - does not affect changeover time."), 3, 0, 1, 2)
+        temp_grid.setColumnStretch(0, 1)
+        temp_grid.setColumnStretch(1, 1)
+        input_row.addWidget(self.changeover_temperature_panel, 2, Qt.AlignmentFlag.AlignTop)
+        calculator_layout.addLayout(input_row)
+
+        self.changeover_result_panel = QFrame()
+        self.changeover_result_panel.setObjectName("panel")
+        result_grid = QGridLayout(self.changeover_result_panel)
+        result_grid.setContentsMargins(18, 16, 18, 16)
+        result_grid.setHorizontalSpacing(28)
+        result_grid.setVerticalSpacing(6)
+        result_grid.addWidget(_section_label("RESULT"), 0, 0, 1, 3)
+        self.changeover_time_heading = QLabel("CHANGEOVER TIME")
+        result_grid.addWidget(self.changeover_time_heading, 1, 0)
+        self.changeover_result_label = QLabel("-- h")
+        self.changeover_result_label.setStyleSheet("font-size: 22pt; font-weight: 700;")
+        result_grid.addWidget(self.changeover_result_label, 2, 0)
+        self.changeover_minutes_label = QLabel("-- min")
+        result_grid.addWidget(self.changeover_minutes_label, 3, 0)
+        self.changeover_final_label = QLabel("Final Sulphur")
+        self.changeover_steps_label = QLabel("Calculation Steps")
+        self.changeover_timestep_label = QLabel("Time Step")
+        self.changeover_temperature_rate_label = QLabel("Temperature Rate")
+        self.changeover_final_value = QLabel("--")
+        self.changeover_steps_value = QLabel("--")
+        self.changeover_timestep_value = QLabel("--")
+        self.changeover_temperature_advisory = QLabel("--")
+        for row, (label, value) in enumerate(((self.changeover_final_label, self.changeover_final_value), (self.changeover_steps_label, self.changeover_steps_value), (self.changeover_timestep_label, self.changeover_timestep_value), (self.changeover_temperature_rate_label, self.changeover_temperature_advisory)), 1):
+            result_grid.addWidget(label, row, 1)
+            result_grid.addWidget(value, row, 2)
+        result_grid.setColumnStretch(0, 2)
+        result_grid.setColumnStretch(1, 2)
+        result_grid.setColumnStretch(2, 1)
+        calculator_layout.addWidget(self.changeover_result_panel)
+        calculator_layout.addWidget(_section_label("SULPHUR PROGRESSION"))
+        self.changeover_trace_table = QTableWidget(0, 2)
+        self.changeover_trace_table.setHorizontalHeaderLabels(("Time (h)", "Sulphur (%)"))
+        self.changeover_trace_table.verticalHeader().setVisible(False)
+        self.changeover_trace_table.horizontalHeader().setStretchLastSection(True)
+        self.changeover_trace_table.setMinimumHeight(190)
+        calculator_layout.addWidget(self.changeover_trace_table)
+        calculator_layout.addStretch()
+        self.changeover_calculator_scroll.setWidget(calculator_content)
+        calculator_root.addWidget(self.changeover_calculator_scroll)
+        self.tabs.addTab(calculator_tab, "Changeover Calculator")
 
         projection_tab = QWidget()
         projection_tab_layout = QVBoxLayout(projection_tab)
@@ -525,6 +635,34 @@ class ConsumptionPage(QWidget):
             return
         self._refresh_projection(vessel.id)
         self.status_label.setText("Performance settings saved.")
+
+    def _calculate_changeover(self) -> None:
+        try:
+            result = calculate_fuel_changeover(
+                self.changeover_calculator_inputs["flow"].value(), self.changeover_calculator_inputs["mass"].value(),
+                self.changeover_calculator_inputs["from"].value(), self.changeover_calculator_inputs["to"].value(), self.changeover_calculator_inputs["target"].value(),
+            )
+        except FuelChangeoverCalculationError as error:
+            QMessageBox.warning(self, "Changeover calculation", str(error)); return
+        self._changeover_result = result
+        self.changeover_result_label.setText(f"{result.changeover_time_hours:.1f} h")
+        self.changeover_minutes_label.setText(f"{result.changeover_time_hours * 60:.0f} min")
+        self.changeover_final_value.setText(f"{result.final_sulfur_percent:.5f} %"); self.changeover_steps_value.setText(str(result.steps)); self.changeover_timestep_value.setText(f"{result.time_step_hours:.1f} h")
+        self.changeover_trace_table.setRowCount(0)
+        trace = result.trace if len(result.trace) <= 200 else (*result.trace[:100], *result.trace[-100:])
+        for row, point in enumerate(trace):
+            self.changeover_trace_table.insertRow(row); self.changeover_trace_table.setItem(row, 0, QTableWidgetItem(f"{point.time_hours:.1f}")); self.changeover_trace_table.setItem(row, 1, QTableWidgetItem(f"{point.sulfur_percent:.5f}"))
+        try:
+            from_temp, to_temp = float(self.changeover_from_temperature.text()), float(self.changeover_to_temperature.text())
+            if result.changeover_time_hours == 0: self.changeover_temperature_advisory.setText("Not applicable")
+            else:
+                rate=abs(from_temp-to_temp)/(result.changeover_time_hours*60); self.changeover_temperature_advisory.setText(f"{rate:.3f} C/min" + ("  ⚠ exceeds 2 C/min" if rate > 2 else ""))
+        except ValueError:
+            self.changeover_temperature_advisory.setText("--")
+
+    def _reset_changeover(self) -> None:
+        for widget in self.changeover_calculator_inputs.values(): widget.setValue(0)
+        self.changeover_from_temperature.clear(); self.changeover_to_temperature.clear(); self.changeover_result_label.setText("-- h"); self.changeover_minutes_label.setText("-- min"); self.changeover_final_value.setText("--"); self.changeover_steps_value.setText("--"); self.changeover_timestep_value.setText("--"); self.changeover_temperature_advisory.setText("--"); self.changeover_trace_table.setRowCount(0)
 
 
 def _format_mt(value: float | None) -> str:
