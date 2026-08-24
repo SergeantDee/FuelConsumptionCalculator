@@ -5,11 +5,14 @@ from fuel_consumption_calculator.calculations.bunker_projection_engine import (
     project_schedule_rob_with_bunkers,
 )
 from fuel_consumption_calculator.calculations.consumption_engine import ScheduleFuelConsumption
+from fuel_consumption_calculator.calculations.tank_max_lift import SelectedReceivingTank, TankMaxLiftResult, calculate_tank_max_lift
 from fuel_consumption_calculator.domain.bunker import (
     BunkerCapacity,
     BunkerCapacityProfile,
     BunkerLiftLimit,
     BunkerPlanStatus,
+    BunkerIncomingFuelSnapshot,
+    BunkerReceivingTankPlan,
     PlannedBunker,
     complete_bunker_plan,
 )
@@ -118,6 +121,51 @@ class BunkerService:
         arrival_snapshot: str | None = None,
     ) -> None:
         self._repository.clear_plan(vessel_id, sequence_number, port_snapshot, arrival_snapshot)
+
+    def list_eligible_receiving_tanks(self, vessel_id: int):
+        return self._repository.list_eligible_receiving_tanks(vessel_id)
+
+    def list_fuel_batches(self, vessel_id: int):
+        return self._repository.list_fuel_batches(vessel_id)
+
+    def save_receiving_tank_plan(self, plan: PlannedBunker, rows: list[BunkerReceivingTankPlan], incoming_batch_id: int | None, manual_vcf: float | None) -> None:
+        batches = {batch.id: batch for batch in self.list_fuel_batches(plan.vessel_id)}
+        if incoming_batch_id is not None and incoming_batch_id not in batches:
+            raise ValueError("Incoming fuel batch must belong to the bunker-plan vessel.")
+        tank_ids = [row.tank_id for row in rows]
+        if len(tank_ids) != len(set(tank_ids)):
+            raise ValueError("A receiving tank can only be selected once per bunker plan.")
+        eligible = {tank.id: tank for tank, _latest in self.list_eligible_receiving_tanks(plan.vessel_id)}
+        for row in rows:
+            if row.tank_id not in eligible:
+                raise ValueError("Selected receiving tanks must be active eligible bunker tanks.")
+            if row.projected_arrival_volume_m3 is not None and row.projected_arrival_volume_m3 < 0:
+                raise ValueError("Projected arrival volume must be at least 0.")
+            if not 0 < row.target_fill_percent <= 100:
+                raise ValueError("Target fill percent must be greater than 0 and at most 100.")
+        if manual_vcf is not None and manual_vcf <= 0:
+            raise ValueError("Incoming Manual VCF must be greater than 0.")
+        density = batches[incoming_batch_id].density_15_kg_m3 if incoming_batch_id is not None else None
+        self._repository.save_receiving_tank_plan(plan, rows, BunkerIncomingFuelSnapshot(incoming_batch_id, density, manual_vcf))
+
+    def list_receiving_tank_plan(self, plan: PlannedBunker) -> list[BunkerReceivingTankPlan]:
+        return self._repository.list_receiving_tank_plan(plan)
+
+    def load_incoming_fuel_snapshot(self, plan: PlannedBunker) -> BunkerIncomingFuelSnapshot:
+        return self._repository.load_incoming_fuel_snapshot(plan)
+
+    def clear_receiving_tank_plan(self, plan: PlannedBunker) -> None:
+        self._repository.save_receiving_tank_plan(plan, [], BunkerIncomingFuelSnapshot(None, None, None))
+
+    def tank_based_max_lift(self, plan: PlannedBunker) -> TankMaxLiftResult | None:
+        rows = self._repository.list_receiving_tank_plan(plan)
+        if not rows:
+            return None
+        tanks = {tank.id: tank for tank, _latest in self._repository.list_eligible_receiving_tanks(plan.vessel_id)}
+        if any(row.tank_id not in tanks or row.projected_arrival_volume_m3 is None for row in rows):
+            return None
+        incoming = self._repository.load_incoming_fuel_snapshot(plan)
+        return calculate_tank_max_lift([SelectedReceivingTank(row.tank_id, tanks[row.tank_id].capacity_m3, row.projected_arrival_volume_m3, row.target_fill_percent) for row in rows], incoming_density_15_kg_m3=incoming.density_15_kg_m3, incoming_manual_vcf=incoming.manual_vcf)
 
     def list_plan_statuses(self, vessel_id: int, current_events: list[ScheduleEvent]) -> list[BunkerPlanStatus]:
         current_by_sequence = {

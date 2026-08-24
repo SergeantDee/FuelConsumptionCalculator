@@ -80,6 +80,8 @@ class Database:
                 self._migrate_to_v12(connection)
             if current_version < 13:
                 self._migrate_to_v13(connection)
+            if current_version < 14:
+                self._migrate_to_v14(connection)
             if current_version >= 9:
                 self._ensure_default_port_timezones(connection)
                 self._resolve_existing_schedule_timezones(connection)
@@ -622,6 +624,43 @@ class Database:
         if "standard_volume_15_m3" not in columns:
             connection.execute("ALTER TABLE tank_soundings ADD COLUMN standard_volume_15_m3 REAL")
         LOGGER.info("Database migrated to schema version 13.")
+
+    def _migrate_to_v14(self, connection: sqlite3.Connection) -> None:
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS bunker_receiving_tank_plans (
+                vessel_id INTEGER NOT NULL,
+                sequence_number INTEGER NOT NULL,
+                port_snapshot TEXT NOT NULL,
+                arrival_snapshot TEXT NOT NULL,
+                tank_id INTEGER NOT NULL,
+                projected_arrival_volume_m3 REAL,
+                target_fill_percent REAL NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (vessel_id, sequence_number, port_snapshot, arrival_snapshot, tank_id),
+                FOREIGN KEY (tank_id) REFERENCES fuel_tanks(id) ON DELETE CASCADE,
+                CHECK (projected_arrival_volume_m3 IS NULL OR projected_arrival_volume_m3 >= 0),
+                CHECK (target_fill_percent > 0 AND target_fill_percent <= 100)
+            );
+            CREATE TABLE IF NOT EXISTS bunker_incoming_fuel_snapshots (
+                vessel_id INTEGER NOT NULL,
+                sequence_number INTEGER NOT NULL,
+                port_snapshot TEXT NOT NULL,
+                arrival_snapshot TEXT NOT NULL,
+                fuel_batch_id INTEGER,
+                density_15_kg_m3 REAL,
+                manual_vcf REAL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (vessel_id, sequence_number, port_snapshot, arrival_snapshot),
+                FOREIGN KEY (fuel_batch_id) REFERENCES fuel_batches(id) ON DELETE SET NULL,
+                CHECK (density_15_kg_m3 IS NULL OR density_15_kg_m3 > 0),
+                CHECK (manual_vcf IS NULL OR manual_vcf > 0)
+            );
+            """
+        )
+        LOGGER.info("Database migrated to schema version 14.")
 
     def _ensure_default_port_timezones(self, connection: sqlite3.Connection) -> None:
         timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")

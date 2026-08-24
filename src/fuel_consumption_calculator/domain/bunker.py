@@ -66,6 +66,20 @@ class BunkerLiftLimit:
     max_lift_mt: float | None
 
 
+@dataclass(frozen=True, slots=True)
+class BunkerReceivingTankPlan:
+    tank_id: int
+    projected_arrival_volume_m3: float | None
+    target_fill_percent: float
+
+
+@dataclass(frozen=True, slots=True)
+class BunkerIncomingFuelSnapshot:
+    fuel_batch_id: int | None
+    density_15_kg_m3: float | None
+    manual_vcf: float | None
+
+
 def complete_bunker_plan(
     *,
     vessel_id: int,

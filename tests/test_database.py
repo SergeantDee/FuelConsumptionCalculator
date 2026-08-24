@@ -80,8 +80,8 @@ def test_schema_migration_v10_to_v11_preserves_energy_config_and_leaves_maneuver
     assert user_version == SCHEMA_VERSION
 
 
-def test_schema_version_remains_13():
-    assert SCHEMA_VERSION == 13
+def test_schema_version_remains_14():
+    assert SCHEMA_VERSION == 14
 
 
 def test_schema_migration_v12_to_v13_adds_nullable_manual_vcf_snapshots_and_preserves_data(tmp_path):
@@ -108,4 +108,4 @@ def test_schema_migration_v12_to_v13_adds_nullable_manual_vcf_snapshots_and_pres
     assert {"manual_vcf", "standard_volume_15_m3"}.issubset(columns)
     assert row == (12.5, 950.0, 11.875, None, None, "existing")
     assert vessel == ("Existing Vessel",)
-    assert version == 13
+    assert version == 14
