@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
+import pytest
+
 from fuel_consumption_calculator.calculations.bunker_projection_engine import project_schedule_rob_with_bunkers
 from fuel_consumption_calculator.calculations.voyage_engine import calculate_consumption_with_voyage, calculate_voyage_consumption, calculate_voyage_plan
 from fuel_consumption_calculator.domain.consumption import FUEL_TYPES, ConsumptionProfile, ConsumptionRate
@@ -177,6 +179,9 @@ def test_actual_changeover_timestamp_overrides_planned_and_changes_rob_allocatio
     assert round(rob.rows[1].arrival_rob_mt["ULSFO"], 6) == round(
         100 - plan.legs[0].total_pre_arrival_consumed_mt["ULSFO"],
         6,
+    )
+    assert sum(100 - rob.rows[1].arrival_rob_mt[fuel] for fuel in FUEL_TYPES) == pytest.approx(
+        sum(plan.legs[0].total_pre_arrival_consumed_mt.values())
     )
 
 
