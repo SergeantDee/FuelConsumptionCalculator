@@ -15,6 +15,7 @@ from fuel_consumption_calculator.services.scraper_service import ScraperService
 from fuel_consumption_calculator.services.settings_service import SettingsService
 from fuel_consumption_calculator.services.vessel_service import VesselService
 from fuel_consumption_calculator.services.voyage_service import VoyageService
+from fuel_consumption_calculator.services.tank_forecast_service import TankForecastService
 from fuel_consumption_calculator.ui.pages.bunker_page import BunkerPage
 from fuel_consumption_calculator.ui.pages.consumption_page import ConsumptionPage
 from fuel_consumption_calculator.ui.pages.dashboard_page import DashboardPage
@@ -45,6 +46,7 @@ class MainWindow(QMainWindow):
         fuel_tank_service: FuelTankService,
         voyage_service: VoyageService,
         settings_service: SettingsService,
+        tank_forecast_service: TankForecastService | None = None,
     ) -> None:
         super().__init__()
         self.setWindowTitle(f"{APPLICATION_NAME} {APPLICATION_VERSION}")
@@ -83,7 +85,7 @@ class MainWindow(QMainWindow):
         self.schedule_page = SchedulePage(vessel_service, schedule_service, scraper_service, settings_service)
         self.voyage_page = VoyagePage(vessel_service, schedule_service, consumption_service, voyage_service, rob_service, settings_service)
         self.consumption_page = ConsumptionPage(vessel_service, consumption_service, schedule_service, voyage_service)
-        self.fuel_tanks_page = FuelTanksPage(vessel_service, fuel_tank_service)
+        self.fuel_tanks_page = FuelTanksPage(vessel_service, fuel_tank_service, tank_forecast_service)
         self.bunker_page = BunkerPage(vessel_service, bunker_service, schedule_service, consumption_service, rob_service, voyage_service)
         self.settings_page = SettingsPage(vessel_service, schedule_service, settings_service, voyage_service, rob_service)
         pages = (

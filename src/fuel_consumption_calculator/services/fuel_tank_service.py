@@ -10,6 +10,7 @@ from fuel_consumption_calculator.calculations.manual_vcf_mass import (
     calculate_manual_vcf_mass as calculate_pure_manual_vcf_mass,
 )
 from fuel_consumption_calculator.calculations.tank_calibration_engine import calculate_calibrated_volume_m3
+from fuel_consumption_calculator.calculations.tank_depletion_engine import allocate_tank_depletion
 from fuel_consumption_calculator.domain.fuel_tank import (
     FUEL_BATCH_TYPES,
     FUEL_TANK_TYPES,
@@ -19,6 +20,7 @@ from fuel_consumption_calculator.domain.fuel_tank import (
     TankCalibrationPoint,
     TankSounding,
 )
+from fuel_consumption_calculator.domain.tank_forecast import FuelDepletionInterval, TankConsumptionAllocationEvent, TankForecast
 from fuel_consumption_calculator.repositories.fuel_tank_repository import FuelTankRepository
 
 
@@ -184,6 +186,53 @@ class FuelTankService:
             raise FuelTankValidationError("Fuel tank does not exist.")
         return tank, self.get_latest_sounding(tank_id)
 
+    def list_consumption_allocation_events(self, vessel_id: int) -> list[TankConsumptionAllocationEvent]:
+        return self._repository.list_consumption_allocation_events(vessel_id)
+
+    def apply_consumption_tanks(
+        self, vessel_id: int, tank_ids: list[int] | tuple[int, ...], effective_at_utc: datetime | None = None,
+    ) -> TankConsumptionAllocationEvent:
+        selected = tuple(sorted(set(tank_ids)))
+        tanks = {tank.id: tank for tank in self.list_tanks(vessel_id, include_inactive=True)}
+        for tank_id in selected:
+            tank = tanks.get(tank_id)
+            if tank is None or tank.tank_type != "BUNKER" or not tank.is_active:
+                raise FuelTankValidationError("Only active bunker/storage tanks may be selected for consumption.")
+        effective = effective_at_utc or datetime.now(timezone.utc)
+        if effective.tzinfo is None:
+            effective = effective.replace(tzinfo=timezone.utc)
+        return self._repository.save_consumption_allocation_event(
+            TankConsumptionAllocationEvent(None, vessel_id, effective, selected)
+        )
+
+    def predict_tank_rob_at(
+        self, vessel_id: int, target_utc: datetime, intervals: list[FuelDepletionInterval],
+    ) -> list[TankForecast]:
+        if target_utc.tzinfo is None:
+            target_utc = target_utc.replace(tzinfo=timezone.utc)
+        tanks = self.list_tanks(vessel_id)
+        batches = {batch.id: batch for batch in self.list_fuel_batches(vessel_id)}
+        tank_fuels = {tank.id: (batches[tank.current_fuel_batch_id].fuel_type if tank.current_fuel_batch_id in batches else None) for tank in tanks}
+        events = self.list_consumption_allocation_events(vessel_id)
+        forecasts: list[TankForecast] = []
+        for tank in tanks:
+            anchor = self._repository.get_latest_sounding_at_or_before(tank.id, target_utc.astimezone(timezone.utc).isoformat(timespec="seconds"))
+            fuel = tank_fuels[tank.id]
+            if anchor is None:
+                forecasts.append(TankForecast(tank.id, fuel, None, None, None, None, "No actual tank sounding available."))
+                continue
+            if anchor.calculated_mass_mt is None:
+                forecasts.append(TankForecast(tank.id, fuel, _parse_utc(anchor.effective_at_utc), None, None, None, "Latest actual tank sounding has no mass snapshot."))
+                continue
+            if fuel is None:
+                forecasts.append(TankForecast(tank.id, None, _parse_utc(anchor.effective_at_utc), anchor.calculated_mass_mt, None, None, "Tank fuel is unknown."))
+                continue
+            allocations, issues = allocate_tank_depletion(intervals, events, tank_fuels, _parse_utc(anchor.effective_at_utc), target_utc)
+            depletion = allocations.get(tank.id)
+            issue = issues.get(tank.id)
+            forecasts.append(TankForecast(tank.id, fuel, _parse_utc(anchor.effective_at_utc), anchor.calculated_mass_mt, depletion, None if depletion is None else anchor.calculated_mass_mt - depletion, issue))
+        return forecasts
+
     def _validate_tank(self, tank: FuelTank) -> None:
         if tank.vessel_id <= 0:
             raise FuelTankValidationError("Vessel id must be positive.")
@@ -307,3 +356,8 @@ def _utc_timestamp(value: datetime | str | None) -> str:
     if parsed.tzinfo is None:
         raise FuelTankValidationError("Effective timestamp must include a UTC offset.")
     return parsed.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
+def _parse_utc(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    return parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)

@@ -84,6 +84,8 @@ class Database:
                 self._migrate_to_v14(connection)
             if current_version < 15:
                 self._migrate_to_v15(connection)
+            if current_version < 16:
+                self._migrate_to_v16(connection)
             if current_version >= 9:
                 self._ensure_default_port_timezones(connection)
                 self._resolve_existing_schedule_timezones(connection)
@@ -675,6 +677,30 @@ class Database:
         if columns and "auxiliary_engine_loss_allowance_mt_per_day" not in columns:
             connection.execute("ALTER TABLE vessel_energy_config ADD COLUMN auxiliary_engine_loss_allowance_mt_per_day REAL NOT NULL DEFAULT 0")
         LOGGER.info("Database migrated to schema version 15.")
+
+    def _migrate_to_v16(self, connection: sqlite3.Connection) -> None:
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS tank_consumption_allocation_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vessel_id INTEGER NOT NULL,
+                effective_at_utc TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (vessel_id) REFERENCES vessels(id) ON DELETE CASCADE,
+                UNIQUE (vessel_id, effective_at_utc)
+            );
+            CREATE TABLE IF NOT EXISTS tank_consumption_allocation_event_tanks (
+                event_id INTEGER NOT NULL,
+                tank_id INTEGER NOT NULL,
+                PRIMARY KEY (event_id, tank_id),
+                FOREIGN KEY (event_id) REFERENCES tank_consumption_allocation_events(id) ON DELETE CASCADE,
+                FOREIGN KEY (tank_id) REFERENCES fuel_tanks(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_tank_consumption_allocation_events_vessel_time
+                ON tank_consumption_allocation_events (vessel_id, effective_at_utc);
+            """
+        )
+        LOGGER.info("Database migrated to schema version 16.")
 
     def _ensure_default_port_timezones(self, connection: sqlite3.Connection) -> None:
         timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")

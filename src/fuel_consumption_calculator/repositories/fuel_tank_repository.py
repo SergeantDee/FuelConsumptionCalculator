@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from fuel_consumption_calculator.domain.fuel_tank import FuelBatch, FuelTank, TankCalibrationPoint, TankSounding
+from fuel_consumption_calculator.domain.tank_forecast import TankConsumptionAllocationEvent
 from fuel_consumption_calculator.repositories.database import Database
 
 
@@ -131,6 +132,47 @@ class FuelTankRepository:
         with self._database.connect() as connection:
             row = connection.execute("SELECT * FROM tank_soundings WHERE tank_id = ? ORDER BY effective_at_utc DESC, id DESC LIMIT 1", (tank_id,)).fetchone()
         return _sounding_from_row(row) if row else None
+
+    def get_latest_sounding_at_or_before(self, tank_id: int, effective_at_utc: str) -> TankSounding | None:
+        with self._database.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM tank_soundings WHERE tank_id = ? AND effective_at_utc <= ? ORDER BY effective_at_utc DESC, id DESC LIMIT 1",
+                (tank_id, effective_at_utc),
+            ).fetchone()
+        return _sounding_from_row(row) if row else None
+
+    def list_consumption_allocation_events(self, vessel_id: int) -> list[TankConsumptionAllocationEvent]:
+        with self._database.connect() as connection:
+            rows = connection.execute(
+                "SELECT id, vessel_id, effective_at_utc FROM tank_consumption_allocation_events WHERE vessel_id = ? ORDER BY effective_at_utc, id",
+                (vessel_id,),
+            ).fetchall()
+            return [
+                TankConsumptionAllocationEvent(
+                    row["id"], row["vessel_id"], datetime.fromisoformat(row["effective_at_utc"]),
+                    tuple(item["tank_id"] for item in connection.execute(
+                        "SELECT tank_id FROM tank_consumption_allocation_event_tanks WHERE event_id = ? ORDER BY tank_id", (row["id"],)
+                    ).fetchall()),
+                )
+                for row in rows
+            ]
+
+    def save_consumption_allocation_event(self, event: TankConsumptionAllocationEvent) -> TankConsumptionAllocationEvent:
+        timestamp = _timestamp()
+        effective = event.effective_at_utc.astimezone(timezone.utc).isoformat(timespec="seconds")
+        with self._database.connect() as connection:
+            connection.execute(
+                "INSERT INTO tank_consumption_allocation_events (vessel_id, effective_at_utc, created_at) VALUES (?, ?, ?) ON CONFLICT(vessel_id, effective_at_utc) DO UPDATE SET created_at = excluded.created_at",
+                (event.vessel_id, effective, timestamp),
+            )
+            row = connection.execute("SELECT id FROM tank_consumption_allocation_events WHERE vessel_id = ? AND effective_at_utc = ?", (event.vessel_id, effective)).fetchone()
+            event_id = row["id"]
+            connection.execute("DELETE FROM tank_consumption_allocation_event_tanks WHERE event_id = ?", (event_id,))
+            connection.executemany(
+                "INSERT INTO tank_consumption_allocation_event_tanks (event_id, tank_id) VALUES (?, ?)",
+                [(event_id, tank_id) for tank_id in sorted(set(event.tank_ids))],
+            )
+        return next(item for item in self.list_consumption_allocation_events(event.vessel_id) if item.id == event_id)
 
     def _get_sounding(self, sounding_id: int) -> TankSounding:
         with self._database.connect() as connection:
