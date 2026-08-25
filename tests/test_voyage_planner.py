@@ -200,7 +200,9 @@ def test_configured_maneuvering_restores_predicted_rob_and_max_lift(tmp_path):
         _sfoc_points(),
         _fuel_state(),
     )
-    consumption = calculate_consumption_with_voyage(build_schedule_timeline(_events()), _events(), plan, _profile())
+    events = _events()
+    events[1] = replace(events[1], departure_at=datetime(2026, 1, 3, 0))
+    consumption = calculate_consumption_with_voyage(build_schedule_timeline(events), events, plan, _profile())
     rob = project_schedule_rob(StartingROB(1, tuple(ROBQuantity(fuel, 100) for fuel in FUEL_TYPES)), consumption)
     limits = BunkerService(BunkerRepository(Database(tmp_path / "unused.db"))).calculate_lift_limits(
         BunkerCapacityProfile(1, tuple(BunkerCapacity(fuel, 1000, 90) for fuel in FUEL_TYPES)),
@@ -462,4 +464,3 @@ def test_missing_main_engine_fuel_state_does_not_default_to_vlsfo():
     assert row.sea_consumed_mt["VLSFO"] is None
     assert row.sea_consumed_mt["MDO"] is None
     assert row.departure_maneuvering_consumed_mt["VLSFO"] is None
-

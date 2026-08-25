@@ -229,18 +229,16 @@ def calculate_voyage_consumption(
             sea_consumed = {fuel_type: None for fuel_type in FUEL_TYPES}
         sea_hours = leg_hours_by_destination.get(event.id, timeline_row.interval_from_previous_hours if timeline_row and timeline_row.interval_from_previous_hours else 0.0)
         port_hours = _port_hours(event, actual_arrivals.get(event.id), actual_departures.get(event.id), timeline_row.port_stay_hours if timeline_row else None)
-        breakdown = _port_consumption(
-            event,
-            port_hours,
-            outgoing_leg_by_origin.get(event.id),
-            profile,
-            _config_for_port(plan.energy_config or VesselEnergyConfig(vessel_id=event.vessel_id), outgoing_leg_by_origin.get(event.id)),
-            list(plan.generator_sfoc_points),
-            plan.initial_fuel_state,
-            list(plan.fuel_changeovers),
-            (actual_arrivals.get(event.id) or event.effective_arrival_at),
-            (actual_departures.get(event.id) or event.effective_departure_at),
-        )
+        if port_hours is None:
+            breakdown = _unknown_port_consumption(event)
+        else:
+            breakdown = _port_consumption(
+                event, port_hours, outgoing_leg_by_origin.get(event.id), profile,
+                _config_for_port(plan.energy_config or VesselEnergyConfig(vessel_id=event.vessel_id), outgoing_leg_by_origin.get(event.id)),
+                list(plan.generator_sfoc_points), plan.initial_fuel_state, list(plan.fuel_changeovers),
+                (actual_arrivals.get(event.id) or event.effective_arrival_at),
+                (actual_departures.get(event.id) or event.effective_departure_at),
+            )
         port_breakdowns[event.id] = breakdown
         port_consumed = breakdown.total_consumed_mt
         consumed = {fuel_type: _add_optional(sea_consumed[fuel_type], port_consumed[fuel_type]) for fuel_type in FUEL_TYPES}
@@ -252,7 +250,7 @@ def calculate_voyage_consumption(
                 sequence_number=event.sequence_number,
                 port=event.port,
                 sea_hours=max(0.0, sea_hours or 0.0),
-                port_hours=max(0.0, port_hours),
+                port_hours=max(0.0, port_hours or 0.0),
                 consumed_mt=consumed,
                 sea_consumed_mt=sea_consumed,
                 port_consumed_mt=port_consumed,
@@ -450,14 +448,23 @@ def _port_consumption(
     generator_sfoc = interpolate_generator_sfoc(generator_load_percent, sfoc_points)
     generator = empty_fuel_totals()
     boiler = empty_fuel_totals()
+    if start_utc and end_utc:
+        boiler = _split_quantity_consumption(
+            "AUX_BOILER",
+            start_utc,
+            end_utc,
+            initial_fuel_state,
+            fuel_changeovers or [],
+            lambda hours: hours * config.aux_boiler_mt_per_hour,
+        )
+    else:
+        boiler[config.boiler_fuel_type] += port_hours * config.aux_boiler_mt_per_hour
     detailed_ready = _energy_config_ready(config, config.port_running_generators) and generator_load_percent is not None and generator_sfoc is not None
     if detailed_ready:
         if start_utc and end_utc:
             generator = _split_quantity_consumption("GENERATORS", start_utc, end_utc, initial_fuel_state, fuel_changeovers or [], lambda hours: _generator_fuel(total_load_kw, generator_sfoc, hours))
-            boiler = _split_quantity_consumption("AUX_BOILER", start_utc, end_utc, initial_fuel_state, fuel_changeovers or [], lambda hours: hours * config.aux_boiler_mt_per_hour)
         else:
             generator[config.generator_fuel_type] += _generator_fuel(total_load_kw, generator_sfoc, port_hours)
-            boiler[config.boiler_fuel_type] += port_hours * config.aux_boiler_mt_per_hour
         mode = "DETAILED SFOC"
     else:
         mode = "INCOMPLETE"
@@ -483,6 +490,18 @@ def _port_consumption(
         total_consumed_mt=total,
         calculation_mode=mode,
         warnings=tuple(local_warnings),
+    )
+
+
+def _unknown_port_consumption(event: ScheduleEvent) -> PortEnergyBreakdown:
+    unknown = {fuel_type: None for fuel_type in FUEL_TYPES}
+    return PortEnergyBreakdown(
+        event_id=event.id, port=event.port, port_hours=0.0, reefers=0.0,
+        reefer_kw_per_unit=None, total_electrical_load_kw=0.0,
+        generator_load_percent=None, generator_sfoc_g_per_kwh=None,
+        generator_consumed_mt=dict(unknown), boiler_consumed_mt=dict(unknown),
+        total_consumed_mt=dict(unknown), calculation_mode="INCOMPLETE",
+        warnings=("Calculation incomplete: Port stay duration missing.",),
     )
 
 
@@ -517,11 +536,11 @@ def _generator_fuel(total_load_kw: float, sfoc_g_per_kwh: float, hours: float) -
     return total_load_kw * sfoc_g_per_kwh / 1_000_000 * max(0.0, hours)
 
 
-def _port_hours(event: ScheduleEvent, actual_arrival, actual_departure, fallback: float | None) -> float:
+def _port_hours(event: ScheduleEvent, actual_arrival, actual_departure, fallback: float | None) -> float | None:
     arrival = actual_arrival or event.effective_arrival_at
     departure = actual_departure or event.effective_departure_at
     if departure is None:
-        return max(0.0, fallback or 0.0)
+        return None if fallback is None else max(0.0, fallback)
     return max(0.0, (departure - arrival).total_seconds() / 3600)
 
 
