@@ -44,6 +44,37 @@ def _save_dialog(dialog: UpdateTankROBDialog, vcf: str = ""):
     dialog.update_preview(); dialog.save()
 
 
+def test_update_rob_blank_inputs_keep_preview_neutral(configured_tank, qapp):
+    _vessel_service, service, _vessel, tank = configured_tank
+    dialog = UpdateTankROBDialog(service, tank)
+
+    assert dialog.preview.text() == "Enter reading and trim to calculate volume."
+    assert "could not convert string to float" not in dialog.preview.text()
+    dialog.temperature.setText("")
+    dialog.manual_vcf.setText("")
+    dialog.update_preview()
+    assert "could not convert string to float" not in dialog.preview.text()
+
+
+def test_update_rob_save_requires_reading_with_operator_message(configured_tank, qapp, monkeypatch):
+    _vessel_service, service, _vessel, tank = configured_tank
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *_args: warnings.append(_args[2]))
+    dialog = UpdateTankROBDialog(service, tank)
+    dialog.save()
+
+    assert warnings == ["Reading is required."]
+
+
+def test_update_rob_invalid_nonempty_value_uses_clean_validation_message(configured_tank, qapp):
+    _vessel_service, service, _vessel, tank = configured_tank
+    dialog = UpdateTankROBDialog(service, tank)
+    dialog.reading.setText("not-a-number")
+    dialog.update_preview()
+
+    assert dialog.preview.text() == "Reading must be numeric."
+
+
 def test_density_editor_rejects_kg_per_litre_style_entry(configured_tank, qapp, monkeypatch):
     _vessel_service, service, vessel, _tank = configured_tank
     warnings = []

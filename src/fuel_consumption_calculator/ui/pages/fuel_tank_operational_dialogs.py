@@ -194,34 +194,51 @@ class UpdateTankROBDialog(QDialog):
 
     def update_preview(self) -> None:
         self._snapshot = None
+        reading_text = self.reading.text().strip()
+        trim_text = self.trim.text().strip()
+        if not reading_text or not trim_text:
+            self.preview.setText("Enter reading and trim to calculate volume.")
+            self._valid = False
+            return
         try:
-            volume = self._service.calculate_calibrated_volume(self._tank.id, self.type.currentText(), float(self.reading.text()), float(self.trim.text()))
+            reading = _finite(reading_text, "Reading")
+            trim = _finite(trim_text, "Trim")
+            volume = self._service.calculate_calibrated_volume(self._tank.id, self.type.currentText(), reading, trim)
             lines = [f"Observed Volume: {volume:.3f} m3", f"Fill: {volume / self._tank.capacity_m3 * 100:.1f}%"]
             vcf_text = self.manual_vcf.text().strip()
             if not vcf_text:
                 lines.append("Mass snapshot: not recorded (Manual VCF not entered).")
-            elif self._batch is None:
-                lines.append("Mass snapshot: not recorded (no fuel batch assigned).")
-            elif self._batch.density_15_kg_m3 < 100:
-                lines.append("Mass snapshot unavailable: batch density must be entered in kg/m3 (for example 978, not 0.978).")
             else:
                 vcf = _finite(vcf_text, "Manual VCF")
-                result = self._service.calculate_manual_vcf_mass(volume, vcf, self._batch.density_15_kg_m3)
-                self._snapshot = (vcf, result.standard_volume_15_m3, self._batch.density_15_kg_m3, result.mass_mt)
-                lines.extend((f"Manual VCF: {vcf:.5f}", f"Volume @15 C: {result.standard_volume_15_m3:.3f} m3", f"Density @15 C: {self._batch.density_15_kg_m3:.3f} kg/m3", f"Calculated Mass: {result.mass_mt:.3f} MT"))
+                if self._batch is None:
+                    lines.append("Mass snapshot: not recorded (no fuel batch assigned).")
+                elif self._batch.density_15_kg_m3 < 100:
+                    lines.append("Mass snapshot unavailable: batch density must be entered in kg/m3 (for example 978, not 0.978).")
+                else:
+                    result = self._service.calculate_manual_vcf_mass(volume, vcf, self._batch.density_15_kg_m3)
+                    self._snapshot = (vcf, result.standard_volume_15_m3, self._batch.density_15_kg_m3, result.mass_mt)
+                    lines.extend((f"Manual VCF: {vcf:.5f}", f"Volume @15 C: {result.standard_volume_15_m3:.3f} m3", f"Density @15 C: {self._batch.density_15_kg_m3:.3f} kg/m3", f"Calculated Mass: {result.mass_mt:.3f} MT"))
             self.preview.setText("\n".join(lines)); self._valid = True
-        except Exception as error:
+        except ValueError as error:
             self.preview.setText(str(error)); self._valid = False
 
     def save(self) -> None:
         self.update_preview()
         if not self._valid:
+            reading_text = self.reading.text().strip()
+            trim_text = self.trim.text().strip()
+            if not reading_text:
+                QMessageBox.warning(self, "ROB not saved", "Reading is required.")
+            elif not trim_text:
+                QMessageBox.warning(self, "ROB not saved", "Trim is required.")
+            else:
+                QMessageBox.warning(self, "ROB not saved", self.preview.text())
             return
         try:
             temp = _finite_optional(self.temperature.text(), "Temperature") if self.temperature.text().strip() else None
             snapshot = self._snapshot
             self._service.save_sounding_observation(
-                tank_id=self._tank.id, reading_type=self.type.currentText(), reading_cm=float(self.reading.text()), trim_m=float(self.trim.text()),
+                tank_id=self._tank.id, reading_type=self.type.currentText(), reading_cm=_finite(self.reading.text(), "Reading"), trim_m=_finite(self.trim.text(), "Trim"),
                 temperature_c=temp, fuel_batch_id=self._tank.current_fuel_batch_id, remarks=self.remarks.toPlainText().strip() or None,
                 effective_at_utc=self.time.dateTime().toPython().replace(tzinfo=timezone.utc),
                 manual_vcf=snapshot[0] if snapshot else None, standard_volume_15_m3=snapshot[1] if snapshot else None,
