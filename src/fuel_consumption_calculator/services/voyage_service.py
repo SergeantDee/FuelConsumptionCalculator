@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from math import isfinite
 
 from fuel_consumption_calculator.calculations.consumption_engine import ScheduleFuelConsumption
 from fuel_consumption_calculator.calculations.voyage_engine import VoyageConsumptionResult, calculate_consumption_with_voyage, calculate_voyage_consumption, calculate_voyage_plan
@@ -384,6 +385,8 @@ class VoyageService:
             config.port_running_generators,
             config.sea_running_generators,
             config.aux_boiler_mt_per_hour,
+            config.main_engine_loss_allowance_mt_per_day,
+            config.auxiliary_engine_loss_allowance_mt_per_day,
             config.main_engine_slip_percent,
             config.speed_rpm_factor,
             config.power_coefficient,
@@ -394,8 +397,8 @@ class VoyageService:
                 config.maneuvering_aux_boiler_mt_per_hour,
             ) if value is not None),
         ):
-            if value < 0:
-                raise ValueError("Energy configuration values cannot be negative.")
+            if not isfinite(value) or value < 0:
+                raise ValueError("Energy configuration values must be finite and non-negative.")
         if config.generator_fuel_type not in FUEL_TYPES or config.boiler_fuel_type not in FUEL_TYPES:
             raise ValueError("Generator and boiler fuel types must be ULSFO, VLSFO, or MDO.")
 

@@ -74,7 +74,7 @@ def _machinery_rates(stage: OperationalStage, energy_config: VesselEnergyConfig 
             return None
         return {
             "MAIN_ENGINE": 0.0,
-            "GENERATORS": _divide(_total(stage.port_breakdown.generator_consumed_mt), hours),
+            "GENERATORS": _divide(_sum(_total(stage.port_breakdown.generator_consumed_mt), _total(stage.port_breakdown.auxiliary_engine_operational_loss_mt)), hours),
             "AUX_BOILER": _divide(_total(stage.port_breakdown.boiler_consumed_mt), hours),
         }
     if stage.stage_type == STAGE_SEA_PASSAGE:
@@ -82,15 +82,24 @@ def _machinery_rates(stage: OperationalStage, energy_config: VesselEnergyConfig 
             return None
         generators = _total(stage.leg.sea_generator_consumed_mt)
         boiler = _total(stage.leg.sea_boiler_consumed_mt)
+        main_engine_loss = _total(stage.leg.sea_main_engine_loss_mt)
+        auxiliary_engine_loss = _total(stage.leg.sea_auxiliary_engine_loss_mt)
         total = _total(stage.consumption_mt)
-        if generators is None or boiler is None or total is None:
+        if generators is None or boiler is None or main_engine_loss is None or auxiliary_engine_loss is None or total is None:
             return None
-        return {"MAIN_ENGINE": (total - generators - boiler) / hours, "GENERATORS": generators / hours, "AUX_BOILER": boiler / hours}
+        return {
+            "MAIN_ENGINE": (total - generators - boiler - auxiliary_engine_loss) / hours,
+            "GENERATORS": (generators + auxiliary_engine_loss) / hours,
+            "AUX_BOILER": boiler / hours,
+        }
     if energy_config is None:
         return None
     return {
-        "MAIN_ENGINE": energy_config.maneuvering_main_engine_mt_per_hour,
-        "GENERATORS": energy_config.maneuvering_generators_mt_per_hour,
+        "MAIN_ENGINE": _sum(energy_config.maneuvering_main_engine_mt_per_hour, energy_config.main_engine_loss_allowance_mt_per_day / 24),
+        "GENERATORS": _sum(
+            energy_config.maneuvering_generators_mt_per_hour,
+            energy_config.auxiliary_engine_loss_allowance_mt_per_day / 24 if energy_config.maneuvering_generators_mt_per_hour and energy_config.maneuvering_generators_mt_per_hour > 0 else 0.0,
+        ),
         "AUX_BOILER": energy_config.maneuvering_aux_boiler_mt_per_hour,
     }
 
@@ -131,6 +140,10 @@ def _total(values: dict[str, float | None] | None) -> float | None:
 
 def _divide(value: float | None, hours: float) -> float | None:
     return None if value is None else value / hours
+
+
+def _sum(*values: float | None) -> float | None:
+    return None if any(value is None for value in values) else sum(float(value) for value in values)
 
 
 def _unknown() -> dict[str, None]:

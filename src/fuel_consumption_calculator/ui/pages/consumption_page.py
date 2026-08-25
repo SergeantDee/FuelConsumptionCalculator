@@ -200,6 +200,14 @@ class ConsumptionPage(QWidget):
             input_widget.setPlaceholderText("Not configured")
             electrical_grid.addWidget(input_widget, 8, column)
             self._maneuvering_rate_inputs[key] = input_widget
+        for label, key, column in (
+            ("ME Loss Allowance MT/day", "main_engine_loss_allowance_mt_per_day", 0),
+            ("AE Loss Allowance MT/day", "auxiliary_engine_loss_allowance_mt_per_day", 1),
+        ):
+            electrical_grid.addWidget(QLabel(label), 9, column)
+            spinbox = _spinbox("", 0, 999999, 3)
+            electrical_grid.addWidget(spinbox, 10, column)
+            self._energy_inputs[key] = spinbox
         self.generator_fuel_combo = QComboBox()
         self.generator_fuel_combo.addItems(FUEL_TYPES)
         self.boiler_fuel_combo = QComboBox()
@@ -634,6 +642,8 @@ class ConsumptionPage(QWidget):
                     maneuvering_main_engine_mt_per_hour=_optional_float(self._maneuvering_rate_inputs["maneuvering_main_engine_mt_per_hour"]),
                     maneuvering_generators_mt_per_hour=_optional_float(self._maneuvering_rate_inputs["maneuvering_generators_mt_per_hour"]),
                     maneuvering_aux_boiler_mt_per_hour=_optional_float(self._maneuvering_rate_inputs["maneuvering_aux_boiler_mt_per_hour"]),
+                    main_engine_loss_allowance_mt_per_day=self._energy_inputs["main_engine_loss_allowance_mt_per_day"].value(),
+                    auxiliary_engine_loss_allowance_mt_per_day=self._energy_inputs["auxiliary_engine_loss_allowance_mt_per_day"].value(),
                 )
             )
             me_sfoc_points = [

@@ -43,6 +43,19 @@ def test_partial_maneuvering_uses_me_ae_and_ab_rates_on_their_own_fuels():
     assert estimated == {"ULSFO": 98.0, "VLSFO": 96.0, "MDO": 99.0}
 
 
+def test_partial_maneuvering_rob_includes_each_operational_loss_once():
+    config = VesselEnergyConfig(
+        1, maneuvering_main_engine_mt_per_hour=2.0, maneuvering_generators_mt_per_hour=1.0,
+        maneuvering_aux_boiler_mt_per_hour=0.0, main_engine_loss_allowance_mt_per_day=1.0,
+        auxiliary_engine_loss_allowance_mt_per_day=0.5,
+    )
+    estimated = estimate_current_rob(
+        anchor_quantities_mt=_rob(100), anchor_at_utc=_dt(0), current_utc=_dt(12),
+        stages=[_stage(0, 12, 0.0)], initial_fuel_state=_state(), fuel_changeovers=(), energy_config=config,
+    )
+    assert estimated["VLSFO"] == 100.0 - (2.0 * 12 + 1.0 * 12 / 24 + 1.0 * 12 + 0.5 * 12 / 24)
+
+
 def test_unknown_nonzero_machinery_fuel_fails_closed_but_zero_rate_does_not_need_fuel():
     config = VesselEnergyConfig(1, maneuvering_main_engine_mt_per_hour=2.0, maneuvering_generators_mt_per_hour=0.0, maneuvering_aux_boiler_mt_per_hour=0.0)
     state = MachineryFuelState(1, "VLSFO", None, None)  # type: ignore[arg-type]

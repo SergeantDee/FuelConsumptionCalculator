@@ -76,31 +76,38 @@ def calculate_voyage_plan(
             required_speed = sea_distance_nm / sea_hours
 
         if detailed_me_enabled:
-            departure_maneuvering = _maneuvering_consumption(
+            departure_combustion = _maneuvering_consumption(
                 config,
                 active_fuel_state,
                 changeovers,
                 berth_departure,
                 pilot_off,
             )
-            arrival_maneuvering = _maneuvering_consumption(
+            arrival_combustion = _maneuvering_consumption(
                 config,
                 active_fuel_state,
                 changeovers,
                 pilot_on,
                 berth_arrival,
             )
+            departure_me_loss, departure_ae_loss = _maneuvering_operational_losses(config, active_fuel_state, changeovers, berth_departure, pilot_off)
+            arrival_me_loss, arrival_ae_loss = _maneuvering_operational_losses(config, active_fuel_state, changeovers, pilot_on, berth_arrival)
+            departure_maneuvering = _sum_fuel_totals(departure_combustion, departure_me_loss, departure_ae_loss)
+            arrival_maneuvering = _sum_fuel_totals(arrival_combustion, arrival_me_loss, arrival_ae_loss)
             if any(value is None for value in departure_maneuvering.values()) or any(value is None for value in arrival_maneuvering.values()):
                 leg_warnings.append("Detailed maneuvering configuration or fuel allocation unavailable.")
         else:
-            departure_maneuvering = {
+            departure_combustion = {
                 fuel_type: _consume(dep_pilotage_hours, profile.rate_for("MANEUVERING", fuel_type))
                 for fuel_type in FUEL_TYPES
             }
-            arrival_maneuvering = {
+            arrival_combustion = {
                 fuel_type: _consume(arr_pilotage_hours, profile.rate_for("MANEUVERING", fuel_type))
                 for fuel_type in FUEL_TYPES
             }
+            departure_me_loss = departure_ae_loss = arrival_me_loss = arrival_ae_loss = empty_fuel_totals()
+            departure_maneuvering = departure_combustion
+            arrival_maneuvering = arrival_combustion
         me_perf = calculate_main_engine_performance(
             required_speed,
             slip_percent=config.main_engine_slip_percent,
@@ -165,6 +172,14 @@ def calculate_voyage_plan(
                 sea_generator_sfoc_g_per_kwh=sea_breakdown["generator_sfoc"],
                 sea_calculation_mode=sea_breakdown["mode"],
                 warnings=tuple(leg_warnings),
+                departure_maneuvering_combustion_mt=departure_combustion,
+                arrival_maneuvering_combustion_mt=arrival_combustion,
+                departure_maneuvering_main_engine_loss_mt=departure_me_loss,
+                departure_maneuvering_auxiliary_engine_loss_mt=departure_ae_loss,
+                sea_main_engine_loss_mt=sea_breakdown["main_engine_loss"],
+                sea_auxiliary_engine_loss_mt=sea_breakdown["auxiliary_engine_loss"],
+                arrival_maneuvering_main_engine_loss_mt=arrival_me_loss,
+                arrival_maneuvering_auxiliary_engine_loss_mt=arrival_ae_loss,
             )
         )
 
@@ -414,11 +429,27 @@ def _sea_consumption(
                 boiler[config.boiler_fuel_type] += sea_hours * config.aux_boiler_mt_per_hour
     elif missing:
         warnings.append("Calculation incomplete: " + "; ".join(dict.fromkeys(missing)) + ".")
-    total = {fuel_type: _add_optional(main_engine[fuel_type], generator[fuel_type], boiler[fuel_type]) for fuel_type in FUEL_TYPES}
+    main_engine_loss = _operational_loss(
+        "MAIN_ENGINE", config.main_engine_loss_allowance_mt_per_day, sea_hours > 0,
+        start_utc, end_utc, initial_fuel_state, fuel_changeovers or [],
+    )
+    auxiliary_engine_loss = _operational_loss(
+        "GENERATORS", config.auxiliary_engine_loss_allowance_mt_per_day, config.sea_running_generators > 0 and sea_hours > 0,
+        start_utc, end_utc, initial_fuel_state, fuel_changeovers or [],
+    )
+    total = {
+        fuel_type: _add_optional(
+            main_engine[fuel_type], generator[fuel_type], boiler[fuel_type],
+            main_engine_loss[fuel_type], auxiliary_engine_loss[fuel_type],
+        )
+        for fuel_type in FUEL_TYPES
+    }
     return {
         "total": total,
         "generator": generator,
         "boiler": boiler,
+        "main_engine_loss": main_engine_loss,
+        "auxiliary_engine_loss": auxiliary_engine_loss,
         "total_load_kw": total_load_kw,
         "generator_load_percent": generator_load_percent,
         "generator_sfoc": generator_sfoc,
@@ -475,7 +506,15 @@ def _port_consumption(
             local_warnings.append("Calculation incomplete: Port DG count missing.")
         elif generator_sfoc is None:
             local_warnings.append("Calculation incomplete: DG SFOC points missing/out of range.")
-    total = {fuel_type: _add_optional(generator[fuel_type], boiler[fuel_type]) for fuel_type in FUEL_TYPES}
+    auxiliary_engine_loss = _operational_loss(
+        "GENERATORS", config.auxiliary_engine_loss_allowance_mt_per_day, config.port_running_generators > 0 and port_hours > 0,
+        start_utc, end_utc, initial_fuel_state, fuel_changeovers or [],
+    )
+    main_engine_loss = empty_fuel_totals()
+    total = {
+        fuel_type: _add_optional(generator[fuel_type], boiler[fuel_type], auxiliary_engine_loss[fuel_type])
+        for fuel_type in FUEL_TYPES
+    }
     return PortEnergyBreakdown(
         event_id=event.id,
         port=event.port,
@@ -490,6 +529,8 @@ def _port_consumption(
         total_consumed_mt=total,
         calculation_mode=mode,
         warnings=tuple(local_warnings),
+        main_engine_operational_loss_mt=main_engine_loss,
+        auxiliary_engine_operational_loss_mt=auxiliary_engine_loss,
     )
 
 
@@ -589,6 +630,50 @@ def _maneuvering_consumption(
             )
         )
 
+    return {
+        fuel_type: _add_optional(*(allocation[fuel_type] for allocation in allocations))
+        for fuel_type in FUEL_TYPES
+    }
+
+
+def _maneuvering_operational_losses(
+    config: VesselEnergyConfig,
+    initial_fuel_state: MachineryFuelState | None,
+    changeovers: list[FuelChangeoverEvent],
+    start_utc,
+    end_utc,
+) -> tuple[dict[str, float | None], dict[str, float | None]]:
+    hours = max(0.0, (_utc_instant(end_utc) - _utc_instant(start_utc)).total_seconds() / 3600)
+    return (
+        _operational_loss("MAIN_ENGINE", config.main_engine_loss_allowance_mt_per_day, hours > 0, start_utc, end_utc, initial_fuel_state, changeovers),
+        _operational_loss(
+            "GENERATORS", config.auxiliary_engine_loss_allowance_mt_per_day,
+            config.maneuvering_generators_mt_per_hour is not None and config.maneuvering_generators_mt_per_hour > 0 and hours > 0,
+            start_utc, end_utc, initial_fuel_state, changeovers,
+        ),
+    )
+
+
+def _operational_loss(
+    machinery: str,
+    rate_mt_per_day: float,
+    is_operating: bool,
+    start_utc,
+    end_utc,
+    initial_fuel_state: MachineryFuelState | None,
+    changeovers: list[FuelChangeoverEvent],
+) -> dict[str, float | None]:
+    if not is_operating or rate_mt_per_day == 0:
+        return empty_fuel_totals()
+    if start_utc is None or end_utc is None:
+        return {fuel_type: None for fuel_type in FUEL_TYPES}
+    return _split_quantity_consumption(
+        machinery, start_utc, end_utc, initial_fuel_state, changeovers,
+        lambda hours: _consume(hours, rate_mt_per_day),
+    )
+
+
+def _sum_fuel_totals(*allocations: dict[str, float | None]) -> dict[str, float | None]:
     return {
         fuel_type: _add_optional(*(allocation[fuel_type] for allocation in allocations))
         for fuel_type in FUEL_TYPES
@@ -699,6 +784,11 @@ def _config_for_port(config: VesselEnergyConfig, outgoing_leg: CalculatedVoyageL
         mcr_power_kw=config.mcr_power_kw,
         port_ambient_c=float(outgoing_leg.leg.override.port_ambient_c),
         sea_ambient_c=config.sea_ambient_c,
+        maneuvering_main_engine_mt_per_hour=config.maneuvering_main_engine_mt_per_hour,
+        maneuvering_generators_mt_per_hour=config.maneuvering_generators_mt_per_hour,
+        maneuvering_aux_boiler_mt_per_hour=config.maneuvering_aux_boiler_mt_per_hour,
+        main_engine_loss_allowance_mt_per_day=config.main_engine_loss_allowance_mt_per_day,
+        auxiliary_engine_loss_allowance_mt_per_day=config.auxiliary_engine_loss_allowance_mt_per_day,
     )
 
 
@@ -722,4 +812,9 @@ def _config_for_sea(config: VesselEnergyConfig, leg: VoyageLeg) -> VesselEnergyC
         mcr_power_kw=config.mcr_power_kw,
         port_ambient_c=config.port_ambient_c,
         sea_ambient_c=float(leg.override.sea_ambient_c),
+        maneuvering_main_engine_mt_per_hour=config.maneuvering_main_engine_mt_per_hour,
+        maneuvering_generators_mt_per_hour=config.maneuvering_generators_mt_per_hour,
+        maneuvering_aux_boiler_mt_per_hour=config.maneuvering_aux_boiler_mt_per_hour,
+        main_engine_loss_allowance_mt_per_day=config.main_engine_loss_allowance_mt_per_day,
+        auxiliary_engine_loss_allowance_mt_per_day=config.auxiliary_engine_loss_allowance_mt_per_day,
     )

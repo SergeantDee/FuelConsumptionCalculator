@@ -82,6 +82,8 @@ class Database:
                 self._migrate_to_v13(connection)
             if current_version < 14:
                 self._migrate_to_v14(connection)
+            if current_version < 15:
+                self._migrate_to_v15(connection)
             if current_version >= 9:
                 self._ensure_default_port_timezones(connection)
                 self._resolve_existing_schedule_timezones(connection)
@@ -329,6 +331,8 @@ class Database:
                 port_running_generators REAL NOT NULL DEFAULT 0,
                 sea_running_generators REAL NOT NULL DEFAULT 0,
                 aux_boiler_mt_per_hour REAL NOT NULL DEFAULT 0,
+                main_engine_loss_allowance_mt_per_day REAL NOT NULL DEFAULT 0,
+                auxiliary_engine_loss_allowance_mt_per_day REAL NOT NULL DEFAULT 0,
                 generator_fuel_type TEXT NOT NULL DEFAULT 'MDO',
                 boiler_fuel_type TEXT NOT NULL DEFAULT 'MDO',
                 created_at TEXT NOT NULL,
@@ -341,6 +345,8 @@ class Database:
                 CHECK (port_running_generators >= 0),
                 CHECK (sea_running_generators >= 0),
                 CHECK (aux_boiler_mt_per_hour >= 0),
+                CHECK (main_engine_loss_allowance_mt_per_day >= 0),
+                CHECK (auxiliary_engine_loss_allowance_mt_per_day >= 0),
                 CHECK (generator_fuel_type IN ('ULSFO', 'VLSFO', 'MDO')),
                 CHECK (boiler_fuel_type IN ('ULSFO', 'VLSFO', 'MDO'))
             );
@@ -661,6 +667,14 @@ class Database:
             """
         )
         LOGGER.info("Database migrated to schema version 14.")
+
+    def _migrate_to_v15(self, connection: sqlite3.Connection) -> None:
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(vessel_energy_config)").fetchall()}
+        if columns and "main_engine_loss_allowance_mt_per_day" not in columns:
+            connection.execute("ALTER TABLE vessel_energy_config ADD COLUMN main_engine_loss_allowance_mt_per_day REAL NOT NULL DEFAULT 0")
+        if columns and "auxiliary_engine_loss_allowance_mt_per_day" not in columns:
+            connection.execute("ALTER TABLE vessel_energy_config ADD COLUMN auxiliary_engine_loss_allowance_mt_per_day REAL NOT NULL DEFAULT 0")
+        LOGGER.info("Database migrated to schema version 15.")
 
     def _ensure_default_port_timezones(self, connection: sqlite3.Connection) -> None:
         timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")

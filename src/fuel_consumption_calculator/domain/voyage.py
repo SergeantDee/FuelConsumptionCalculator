@@ -80,6 +80,8 @@ class VesselEnergyConfig:
     maneuvering_main_engine_mt_per_hour: float | None = None
     maneuvering_generators_mt_per_hour: float | None = None
     maneuvering_aux_boiler_mt_per_hour: float | None = None
+    main_engine_loss_allowance_mt_per_day: float = 0.0
+    auxiliary_engine_loss_allowance_mt_per_day: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,6 +201,14 @@ class CalculatedVoyageLeg:
     sea_generator_sfoc_g_per_kwh: float | None = None
     sea_calculation_mode: str = "INCOMPLETE"
     warnings: tuple[str, ...] = ()
+    departure_maneuvering_combustion_mt: dict[str, float | None] | None = None
+    arrival_maneuvering_combustion_mt: dict[str, float | None] | None = None
+    departure_maneuvering_main_engine_loss_mt: dict[str, float | None] | None = None
+    departure_maneuvering_auxiliary_engine_loss_mt: dict[str, float | None] | None = None
+    sea_main_engine_loss_mt: dict[str, float | None] | None = None
+    sea_auxiliary_engine_loss_mt: dict[str, float | None] | None = None
+    arrival_maneuvering_main_engine_loss_mt: dict[str, float | None] | None = None
+    arrival_maneuvering_auxiliary_engine_loss_mt: dict[str, float | None] | None = None
 
     @property
     def sea_distance_nm(self) -> float:
@@ -220,6 +230,8 @@ class PortEnergyBreakdown:
     total_consumed_mt: dict[str, float]
     calculation_mode: str
     warnings: tuple[str, ...] = ()
+    main_engine_operational_loss_mt: dict[str, float | None] | None = None
+    auxiliary_engine_operational_loss_mt: dict[str, float | None] | None = None
 
 
 @dataclass(frozen=True, slots=True)

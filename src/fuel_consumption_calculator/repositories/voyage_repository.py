@@ -301,7 +301,8 @@ class VoyageRepository:
                        main_engine_slip_percent, speed_rpm_factor, power_coefficient,
                        mcr_power_kw, port_ambient_c, sea_ambient_c,
                        maneuvering_main_engine_mt_per_hour, maneuvering_generators_mt_per_hour,
-                       maneuvering_aux_boiler_mt_per_hour
+                       maneuvering_aux_boiler_mt_per_hour, main_engine_loss_allowance_mt_per_day,
+                       auxiliary_engine_loss_allowance_mt_per_day
                 FROM vessel_energy_config
                 WHERE vessel_id = ?
                 """,
@@ -329,6 +330,8 @@ class VoyageRepository:
             maneuvering_main_engine_mt_per_hour=row["maneuvering_main_engine_mt_per_hour"],
             maneuvering_generators_mt_per_hour=row["maneuvering_generators_mt_per_hour"],
             maneuvering_aux_boiler_mt_per_hour=row["maneuvering_aux_boiler_mt_per_hour"],
+            main_engine_loss_allowance_mt_per_day=float(row["main_engine_loss_allowance_mt_per_day"]),
+            auxiliary_engine_loss_allowance_mt_per_day=float(row["auxiliary_engine_loss_allowance_mt_per_day"]),
         )
 
     def save_energy_config(self, config: VesselEnergyConfig) -> VesselEnergyConfig:
@@ -343,10 +346,11 @@ class VoyageRepository:
                     main_engine_slip_percent, speed_rpm_factor, power_coefficient,
                     mcr_power_kw, port_ambient_c, sea_ambient_c,
                     maneuvering_main_engine_mt_per_hour, maneuvering_generators_mt_per_hour,
-                    maneuvering_aux_boiler_mt_per_hour,
+                    maneuvering_aux_boiler_mt_per_hour, main_engine_loss_allowance_mt_per_day,
+                    auxiliary_engine_loss_allowance_mt_per_day,
                     created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(vessel_id)
                 DO UPDATE SET
                     port_base_load_kw = excluded.port_base_load_kw,
@@ -367,6 +371,8 @@ class VoyageRepository:
                     maneuvering_main_engine_mt_per_hour = excluded.maneuvering_main_engine_mt_per_hour,
                     maneuvering_generators_mt_per_hour = excluded.maneuvering_generators_mt_per_hour,
                     maneuvering_aux_boiler_mt_per_hour = excluded.maneuvering_aux_boiler_mt_per_hour,
+                    main_engine_loss_allowance_mt_per_day = excluded.main_engine_loss_allowance_mt_per_day,
+                    auxiliary_engine_loss_allowance_mt_per_day = excluded.auxiliary_engine_loss_allowance_mt_per_day,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -389,6 +395,8 @@ class VoyageRepository:
                     config.maneuvering_main_engine_mt_per_hour,
                     config.maneuvering_generators_mt_per_hour,
                     config.maneuvering_aux_boiler_mt_per_hour,
+                    config.main_engine_loss_allowance_mt_per_day,
+                    config.auxiliary_engine_loss_allowance_mt_per_day,
                     timestamp,
                     timestamp,
                 ),
