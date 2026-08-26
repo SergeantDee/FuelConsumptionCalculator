@@ -85,7 +85,7 @@ class MainWindow(QMainWindow):
         self.schedule_page = SchedulePage(vessel_service, schedule_service, scraper_service, settings_service)
         self.voyage_page = VoyagePage(vessel_service, schedule_service, consumption_service, voyage_service, rob_service, settings_service)
         self.consumption_page = ConsumptionPage(vessel_service, consumption_service, schedule_service, voyage_service)
-        self.fuel_tanks_page = FuelTanksPage(vessel_service, fuel_tank_service, tank_forecast_service)
+        self.fuel_tanks_page = FuelTanksPage(vessel_service, fuel_tank_service, tank_forecast_service, voyage_service)
         self.bunker_page = BunkerPage(vessel_service, bunker_service, schedule_service, consumption_service, rob_service, voyage_service)
         self.settings_page = SettingsPage(vessel_service, schedule_service, settings_service, voyage_service, rob_service)
         pages = (

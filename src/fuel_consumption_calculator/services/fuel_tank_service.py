@@ -19,6 +19,7 @@ from fuel_consumption_calculator.domain.fuel_tank import (
     FuelTank,
     TankCalibrationPoint,
     TankSounding,
+    TankSoundingSurvey,
 )
 from fuel_consumption_calculator.domain.tank_forecast import FuelDepletionInterval, TankConsumptionAllocationEvent, TankForecast
 from fuel_consumption_calculator.repositories.fuel_tank_repository import FuelTankRepository
@@ -176,6 +177,52 @@ class FuelTankService:
 
     def get_latest_sounding(self, tank_id: int) -> TankSounding | None:
         return self._repository.get_latest_sounding(tank_id)
+
+    def save_sounding_survey(self, vessel_id: int, effective_at_utc: datetime, trim_m: float, remarks: str | None, rows: list[dict]) -> list[TankSounding]:
+        """Validate every included row before atomically persisting one survey."""
+        self._validate_number(trim_m, "Trim")
+        timestamp = _utc_timestamp(effective_at_utc)
+        soundings: list[TankSounding] = []
+        for row in rows:
+            if not row.get("include"):
+                continue
+            tank = self.get_tank(row["tank_id"])
+            if tank is None or tank.vessel_id != vessel_id:
+                raise FuelTankValidationError("Survey tank does not belong to the vessel.")
+            reading = row.get("reading_cm")
+            if reading is None or str(reading).strip() == "":
+                raise FuelTankValidationError(f"Reading is required for {tank.name}.")
+            self._validate_number(reading, "Reading", minimum=0)
+            reading_type = row.get("reading_type", tank.preferred_measurement_type)
+            volume = self.calculate_calibrated_volume(tank.id, reading_type, float(reading), float(trim_m))
+            batch_id = tank.current_fuel_batch_id
+            batch = self.get_fuel_batch(batch_id) if batch_id else None
+            vcf = row.get("manual_vcf")
+            if vcf is not None and str(vcf).strip() != "":
+                self._validate_number(vcf, "Manual VCF", minimum=0, strictly_positive=True)
+                vcf = float(vcf)
+            else:
+                vcf = None
+            snapshot = None
+            if vcf is not None:
+                if batch is None:
+                    raise FuelTankValidationError(f"No fuel batch assigned to {tank.name} for Manual VCF mass.")
+                snapshot = self.calculate_manual_vcf_mass(volume, vcf, batch.density_15_kg_m3)
+            temperature = row.get("temperature_c")
+            if temperature is not None and str(temperature).strip() != "":
+                self._validate_number(temperature, "Temperature")
+                temperature = float(temperature)
+            else:
+                temperature = None
+            soundings.append(TankSounding(
+                None, tank.id, timestamp, reading_type, float(reading), float(trim_m), temperature, volume,
+                batch.density_15_kg_m3 if snapshot else None, snapshot.mass_mt if snapshot else None, batch_id,
+                row.get("remarks") or None, manual_vcf=vcf,
+                standard_volume_15_m3=snapshot.standard_volume_15_m3 if snapshot else None,
+            ))
+        if not soundings:
+            raise FuelTankValidationError("Include at least one tank observation in the survey.")
+        return self._repository.save_survey(TankSoundingSurvey(None, vessel_id, timestamp, remarks), soundings)
 
     def list_sounding_history(self, tank_id: int) -> list[TankSounding]:
         return self._repository.list_sounding_history(tank_id)

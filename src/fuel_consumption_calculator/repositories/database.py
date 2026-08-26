@@ -86,6 +86,8 @@ class Database:
                 self._migrate_to_v15(connection)
             if current_version < 16:
                 self._migrate_to_v16(connection)
+            if current_version < 17:
+                self._migrate_to_v17(connection)
             if current_version >= 9:
                 self._ensure_default_port_timezones(connection)
                 self._resolve_existing_schedule_timezones(connection)
@@ -701,6 +703,24 @@ class Database:
             """
         )
         LOGGER.info("Database migrated to schema version 16.")
+
+    def _migrate_to_v17(self, connection: sqlite3.Connection) -> None:
+        connection.executescript("""
+            CREATE TABLE IF NOT EXISTS tank_sounding_surveys (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vessel_id INTEGER NOT NULL,
+                effective_at_utc TEXT NOT NULL,
+                remarks TEXT,
+                created_at_utc TEXT NOT NULL,
+                FOREIGN KEY (vessel_id) REFERENCES vessels(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_tank_sounding_surveys_vessel_time
+                ON tank_sounding_surveys (vessel_id, effective_at_utc DESC);
+        """)
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(tank_soundings)").fetchall()}
+        if columns and "survey_id" not in columns:
+            connection.execute("ALTER TABLE tank_soundings ADD COLUMN survey_id INTEGER REFERENCES tank_sounding_surveys(id) ON DELETE SET NULL")
+        LOGGER.info("Database migrated to schema version 17.")
 
     def _ensure_default_port_timezones(self, connection: sqlite3.Connection) -> None:
         timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")

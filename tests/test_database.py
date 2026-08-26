@@ -80,8 +80,8 @@ def test_schema_migration_v10_to_v11_preserves_energy_config_and_leaves_maneuver
     assert user_version == SCHEMA_VERSION
 
 
-def test_schema_version_is_16():
-    assert SCHEMA_VERSION == 16
+def test_schema_version_is_17():
+    assert SCHEMA_VERSION == 17
 
 
 def test_schema_migration_v12_to_v13_adds_nullable_manual_vcf_snapshots_and_preserves_data(tmp_path):
@@ -108,7 +108,7 @@ def test_schema_migration_v12_to_v13_adds_nullable_manual_vcf_snapshots_and_pres
     assert {"manual_vcf", "standard_volume_15_m3"}.issubset(columns)
     assert row == (12.5, 950.0, 11.875, None, None, "existing")
     assert vessel == ("Existing Vessel",)
-    assert version == 16
+    assert version == 17
 
 
 def test_schema_migration_v14_to_v15_adds_zero_loss_allowances_and_preserves_energy_config(tmp_path):
@@ -137,7 +137,7 @@ def test_schema_migration_v14_to_v15_adds_zero_loss_allowances_and_preserves_ene
         version = connection.execute("PRAGMA user_version").fetchone()[0]
     assert {"main_engine_loss_allowance_mt_per_day", "auxiliary_engine_loss_allowance_mt_per_day"}.issubset(columns)
     assert row == (123.0, 0.0, 0.0)
-    assert version == 16
+    assert version == 17
 
 
 def test_schema_migration_v15_to_v16_adds_effective_dated_tank_allocation_tables(tmp_path):
@@ -161,4 +161,4 @@ def test_schema_migration_v15_to_v16_adds_effective_dated_tank_allocation_tables
         tank = connection.execute("SELECT name FROM fuel_tanks WHERE id = 1").fetchone()
     assert {"tank_consumption_allocation_events", "tank_consumption_allocation_event_tanks"}.issubset(tables)
     assert tank == ("Existing tank",)
-    assert version == 16
+    assert version == 17
