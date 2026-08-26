@@ -9,7 +9,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QScrollArea
 
 from fuel_consumption_calculator.app import build_main_window
-from fuel_consumption_calculator.domain.fuel_tank import FuelTank
+from fuel_consumption_calculator.domain.fuel_tank import FuelTank, TankCalibrationPoint
 from fuel_consumption_calculator.paths import AppPaths
 from fuel_consumption_calculator.repositories.database import Database
 from fuel_consumption_calculator.repositories.fuel_tank_repository import FuelTankRepository
@@ -19,6 +19,7 @@ from fuel_consumption_calculator.services.vessel_service import VesselService
 from fuel_consumption_calculator.ui.pages.fuel_tanks_page import (
     VESSEL_TANK_SET,
     FuelTanksPage,
+    TankSoundingSurveyDialog,
     TankDialog,
     VesselTankSetDialog,
     _position_for_tank,
@@ -31,6 +32,17 @@ from fuel_consumption_calculator.ui.pages.fuel_tank_operational_dialogs import (
     generate_calibration_points,
     import_calibration_xlsx,
 )
+
+
+def test_tank_sounding_survey_dialog_constructs_with_measurement_types(tmp_path, qapp):
+    vessel_service, service = _services(tmp_path)
+    vessel = vessel_service.configure_active_vessel("Vessel", "1234567")
+    tank = service.create_tank(FuelTank(None, vessel.id, "Survey Tank", "BUNKER", 100, "ULLAGE"))
+    service.replace_calibration_points(tank.id, [TankCalibrationPoint(None, tank.id, 0, 0, 0, 0)])
+    dialog = TankSoundingSurveyDialog(service, vessel.id)
+    kind = dialog._rows[0][2]
+    assert [kind.itemText(index) for index in range(kind.count())] == ["SOUNDING", "ULLAGE"]
+    assert kind.currentText() == "ULLAGE"
 
 
 @pytest.fixture(scope="module")

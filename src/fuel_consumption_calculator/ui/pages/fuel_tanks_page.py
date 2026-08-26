@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 from fuel_consumption_calculator.domain.fuel_tank import (
     FUEL_BATCH_TYPES,
     FUEL_TANK_TYPES,
+    MEASUREMENT_TYPES,
     FuelBatch,
     FuelTank,
     TankSounding,
@@ -564,17 +565,23 @@ class FuelTanksPage(QWidget):
         self.arrangement_layout.setSpacing(12)
         self.tank_strip.setWidget(self.strip_content)
         panel_layout.addWidget(self.tank_strip)
-        layout.addWidget(self.arrangement_panel)
-        actions = QHBoxLayout()
         self.add_tank_button = QPushButton("Add Tank"); self.add_tank_button.setObjectName("primaryButton"); self.add_tank_button.clicked.connect(self._add_tank)
         self.load_tank_set_button = QPushButton("Load Vessel Tank Set"); self.load_tank_set_button.clicked.connect(self._load_vessel_tank_set)
         self.survey_button = QPushButton("Update Tank ROBs"); self.survey_button.setObjectName("primaryButton"); self.survey_button.clicked.connect(self._open_survey)
-        self.consumption_tanks_button = QPushButton("Apply Consumption Tanks"); self.consumption_tanks_button.clicked.connect(self._configure_consumption_tanks)
+        self.consumption_tanks_button = QPushButton("Consumption Tanks"); self.consumption_tanks_button.clicked.connect(self._configure_consumption_tanks)
         self.update_rob_button = QPushButton("Update ROB"); self.update_rob_button.setEnabled(False); self.update_rob_button.clicked.connect(self._update_rob)
         self.calibration_button = QPushButton("Calibration"); self.calibration_button.setEnabled(False); self.calibration_button.clicked.connect(self._open_calibration)
         self.fuel_batch_button = QPushButton("Fuel / Batch"); self.fuel_batch_button.setEnabled(False); self.fuel_batch_button.clicked.connect(self._open_fuel_batch)
         self.edit_tank_button = QPushButton("Edit Selected Tank"); self.edit_tank_button.setEnabled(False); self.edit_tank_button.clicked.connect(self._edit_selected_tank)
-        actions.addWidget(self.survey_button); actions.addWidget(self.add_tank_button); actions.addWidget(self.load_tank_set_button); actions.addWidget(self.consumption_tanks_button); actions.addWidget(self.edit_tank_button); actions.addWidget(self.update_rob_button); actions.addWidget(self.calibration_button); actions.addWidget(self.fuel_batch_button); actions.addStretch(); layout.addLayout(actions)
+        self.primary_actions_layout = QGridLayout(); self.primary_actions_layout.setHorizontalSpacing(10); self.primary_actions_layout.setVerticalSpacing(8)
+        for column, button in enumerate((self.survey_button, self.consumption_tanks_button, self.add_tank_button, self.load_tank_set_button)):
+            self.primary_actions_layout.addWidget(button, 0, column)
+        layout.addLayout(self.primary_actions_layout)
+        layout.addWidget(self.arrangement_panel)
+        self.selected_actions_layout = QGridLayout(); self.selected_actions_layout.setHorizontalSpacing(10); self.selected_actions_layout.setVerticalSpacing(8)
+        for column, button in enumerate((self.edit_tank_button, self.update_rob_button, self.calibration_button, self.fuel_batch_button)):
+            self.selected_actions_layout.addWidget(button, 0, column)
+        layout.addLayout(self.selected_actions_layout)
         recent_title = QLabel("RECENT SOUNDINGS / ROB HISTORY"); recent_title.setObjectName("sectionTitle"); layout.addWidget(recent_title)
         self.history_table = QTableWidget(0, 11); self.history_table.setHorizontalHeaderLabels(("UTC", "Tank", "Type", "Reading", "Trim", "Temperature", "Observed Volume m3", "VCF", "Volume @15 m3", "MT", "Fuel"))
         self.history_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers); self.history_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection); self.history_table.setAlternatingRowColors(True)
