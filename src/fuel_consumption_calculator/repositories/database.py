@@ -88,6 +88,8 @@ class Database:
                 self._migrate_to_v16(connection)
             if current_version < 17:
                 self._migrate_to_v17(connection)
+            if current_version < 18:
+                self._migrate_to_v18(connection)
             if current_version >= 9:
                 self._ensure_default_port_timezones(connection)
                 self._resolve_existing_schedule_timezones(connection)
@@ -721,6 +723,34 @@ class Database:
         if columns and "survey_id" not in columns:
             connection.execute("ALTER TABLE tank_soundings ADD COLUMN survey_id INTEGER REFERENCES tank_sounding_surveys(id) ON DELETE SET NULL")
         LOGGER.info("Database migrated to schema version 17.")
+
+    def _migrate_to_v18(self, connection: sqlite3.Connection) -> None:
+        connection.executescript("""
+            CREATE TABLE IF NOT EXISTS internal_fuel_transfers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vessel_id INTEGER NOT NULL,
+                from_tank_id INTEGER NOT NULL,
+                to_tank_id INTEGER NOT NULL,
+                fuel_type TEXT NOT NULL,
+                quantity_mt REAL NOT NULL,
+                status TEXT NOT NULL,
+                planned_at_utc TEXT NOT NULL,
+                actual_at_utc TEXT,
+                remarks TEXT,
+                created_at_utc TEXT NOT NULL,
+                updated_at_utc TEXT NOT NULL,
+                FOREIGN KEY (vessel_id) REFERENCES vessels(id) ON DELETE CASCADE,
+                FOREIGN KEY (from_tank_id) REFERENCES fuel_tanks(id) ON DELETE RESTRICT,
+                FOREIGN KEY (to_tank_id) REFERENCES fuel_tanks(id) ON DELETE RESTRICT,
+                CHECK (from_tank_id <> to_tank_id),
+                CHECK (fuel_type IN ('ULSFO', 'VLSFO', 'MDO')),
+                CHECK (quantity_mt > 0),
+                CHECK (status IN ('PLANNED', 'COMPLETED'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_internal_fuel_transfers_vessel_time
+                ON internal_fuel_transfers (vessel_id, planned_at_utc);
+        """)
+        LOGGER.info("Database migrated to schema version 18.")
 
     def _ensure_default_port_timezones(self, connection: sqlite3.Connection) -> None:
         timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")

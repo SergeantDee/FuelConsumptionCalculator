@@ -17,6 +17,7 @@ from fuel_consumption_calculator.domain.fuel_tank import (
     MEASUREMENT_TYPES,
     FuelBatch,
     FuelTank,
+    InternalFuelTransfer,
     TankSounding,
 )
 from fuel_consumption_calculator.services.fuel_tank_service import FuelTankService, FuelTankValidationError
@@ -405,7 +406,7 @@ class TankDetailsDialog(QDialog):
         layout = QVBoxLayout(self); layout.addWidget(QLabel(tank.name, objectName="pageTitle")); form = QFormLayout()
         self.current_fuel_value = QLabel(fuel_type or "UNKNOWN"); self.current_batch_value = QLabel(batch_name or "No batch assigned"); self.density_value = QLabel()
         self._refresh_batch_details(notify=False)
-        values = (("Tank Type", tank.tank_type), ("Capacity", f"{tank.capacity_m3:.2f} m3"), ("Actual ROB", f"{latest.calculated_mass_mt:.2f} MT" if latest and latest.calculated_mass_mt is not None else "--"), ("Estimated ROB", f"{predicted_mass_mt:.2f} MT" if predicted_mass_mt is not None else "--"), ("Estimated Empty", estimated_empty), ("Current Fuel", self.current_fuel_value), ("Current Batch", self.current_batch_value))
+        values = (("Tank Type", tank.tank_type), ("Capacity", f"{tank.capacity_m3:.2f} m3"), ("Actual ROB", f"{latest.calculated_mass_mt:.2f} MT" if latest and latest.calculated_mass_mt is not None else "--"), ("Manual VCF", f"{latest.manual_vcf:.5f}" if latest and latest.manual_vcf is not None else "--"), ("Estimated ROB", f"{predicted_mass_mt:.2f} MT" if predicted_mass_mt is not None else "--"), ("Estimated Empty", estimated_empty), ("Current Fuel", self.current_fuel_value), ("Current Batch", self.current_batch_value))
         for label, value in values: form.addRow(label, value if isinstance(value, QWidget) else QLabel(value))
         layout.addLayout(form); actions = QHBoxLayout()
         update = QPushButton("Update ROB"); update.clicked.connect(lambda: UpdateTankROBDialog(service, tank, self).exec())
@@ -462,6 +463,58 @@ class ConsumptionTanksDialog(QDialog):
             QMessageBox.warning(self, "Consumption tanks not applied", str(error))
             return
         self.accept()
+
+
+class InternalTransferDialog(QDialog):
+    """Small vessel-wide editor; transfers are tank-ledger events, not ROB changes."""
+    def __init__(self, service: FuelTankService, vessel_id: int, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._service, self._vessel_id = service, vessel_id
+        self.setWindowTitle("Internal Transfer"); self.setMinimumWidth(560)
+        layout = QVBoxLayout(self); layout.addWidget(_muted("Move an assigned fuel quantity between two compatible tanks."))
+        form = QFormLayout()
+        self.from_input = QComboBox(); self.to_input = QComboBox()
+        for tank in service.list_tanks(vessel_id):
+            label = f"{tank.name} ({self._fuel_for(tank)})"
+            self.from_input.addItem(label, tank.id); self.to_input.addItem(label, tank.id)
+        self.quantity_input = QLineEdit(); self.quantity_input.setPlaceholderText("MT")
+        self.status_input = QComboBox(); self.status_input.addItems(("PLANNED", "COMPLETED"))
+        self.time_input = QLineEdit(datetime.now(timezone.utc).isoformat(timespec="seconds"))
+        self.remarks_input = QLineEdit(); self.fuel_value = QLabel("--")
+        form.addRow("FROM Tank", self.from_input); form.addRow("TO Tank", self.to_input); form.addRow("Fuel", self.fuel_value)
+        form.addRow("Quantity MT", self.quantity_input); form.addRow("Status", self.status_input); form.addRow("Effective Time UTC", self.time_input); form.addRow("Remarks", self.remarks_input)
+        layout.addLayout(form)
+        self.history_table = QTableWidget(0, 7); self.history_table.setHorizontalHeaderLabels(("Time UTC", "Status", "From", "To", "Fuel", "Quantity MT", "Remarks")); self.history_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers); self.history_table.horizontalHeader().setStretchLastSection(True); self.history_table.setMaximumHeight(180); layout.addWidget(self.history_table)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Close)
+        buttons.accepted.connect(self._save); buttons.rejected.connect(self.reject); layout.addWidget(buttons)
+        self.from_input.currentIndexChanged.connect(self._refresh_fuel); self._refresh_fuel(); self._refresh_history()
+
+    def _fuel_for(self, tank: FuelTank) -> str:
+        batch = self._service.get_fuel_batch(tank.current_fuel_batch_id) if tank.current_fuel_batch_id else None
+        return batch.fuel_type if batch else "UNKNOWN"
+
+    def _refresh_fuel(self) -> None:
+        tank_id = self.from_input.currentData(); tank = self._service.get_tank(tank_id) if tank_id else None
+        self.fuel_value.setText(self._fuel_for(tank) if tank else "UNKNOWN")
+
+    def _refresh_history(self) -> None:
+        tanks = {tank.id: tank.name for tank in self._service.list_tanks(self._vessel_id, include_inactive=True)}
+        history = self._service.list_internal_fuel_transfers(self._vessel_id); self.history_table.setRowCount(0)
+        for row, item in enumerate(history[:20]):
+            self.history_table.insertRow(row)
+            values = (_format_utc(item.effective_at_utc()), item.status, tanks.get(item.from_tank_id, "--"), tanks.get(item.to_tank_id, "--"), item.fuel_type, f"{item.quantity_mt:.2f}", item.remarks or "")
+            for column, value in enumerate(values): self.history_table.setItem(row, column, QTableWidgetItem(value))
+
+    def _save(self) -> None:
+        try:
+            timestamp = datetime.fromisoformat(self.time_input.text().strip())
+            if timestamp.tzinfo is None: raise ValueError("Effective Time UTC must include +00:00.")
+            status = self.status_input.currentText()
+            transfer = InternalFuelTransfer(None, self._vessel_id, self.from_input.currentData(), self.to_input.currentData(), self.fuel_value.text(), float(self.quantity_input.text()), status, timestamp.isoformat(), timestamp.isoformat() if status == "COMPLETED" else None, self.remarks_input.text().strip() or None)
+            self._service.create_internal_fuel_transfer(transfer)
+        except (ValueError, FuelTankValidationError) as error:
+            QMessageBox.warning(self, "Internal transfer not saved", str(error)); return
+        self._refresh_history(); self.accept()
 
 
 class TankSoundingSurveyDialog(QDialog):
@@ -569,12 +622,13 @@ class FuelTanksPage(QWidget):
         self.load_tank_set_button = QPushButton("Load Vessel Tank Set"); self.load_tank_set_button.clicked.connect(self._load_vessel_tank_set)
         self.survey_button = QPushButton("Update Tank ROBs"); self.survey_button.setObjectName("primaryButton"); self.survey_button.clicked.connect(self._open_survey)
         self.consumption_tanks_button = QPushButton("Consumption Tanks"); self.consumption_tanks_button.clicked.connect(self._configure_consumption_tanks)
+        self.internal_transfer_button = QPushButton("Internal Transfer"); self.internal_transfer_button.clicked.connect(self._open_internal_transfer)
         self.update_rob_button = QPushButton("Update ROB"); self.update_rob_button.setEnabled(False); self.update_rob_button.clicked.connect(self._update_rob)
         self.calibration_button = QPushButton("Calibration"); self.calibration_button.setEnabled(False); self.calibration_button.clicked.connect(self._open_calibration)
         self.fuel_batch_button = QPushButton("Fuel / Batch"); self.fuel_batch_button.setEnabled(False); self.fuel_batch_button.clicked.connect(self._open_fuel_batch)
         self.edit_tank_button = QPushButton("Edit Selected Tank"); self.edit_tank_button.setEnabled(False); self.edit_tank_button.clicked.connect(self._edit_selected_tank)
         self.primary_actions_layout = QGridLayout(); self.primary_actions_layout.setHorizontalSpacing(10); self.primary_actions_layout.setVerticalSpacing(8)
-        for column, button in enumerate((self.survey_button, self.consumption_tanks_button, self.add_tank_button, self.load_tank_set_button)):
+        for column, button in enumerate((self.survey_button, self.consumption_tanks_button, self.internal_transfer_button, self.add_tank_button, self.load_tank_set_button)):
             self.primary_actions_layout.addWidget(button, 0, column)
         layout.addLayout(self.primary_actions_layout)
         layout.addWidget(self.arrangement_panel)
@@ -594,8 +648,8 @@ class FuelTanksPage(QWidget):
         self._selected_tank_id = None; self.tank_cards = []; self.edit_tank_button.setEnabled(False); self.update_rob_button.setEnabled(False); self.calibration_button.setEnabled(False); self.fuel_batch_button.setEnabled(False); self._clear_layout(self.arrangement_layout); self.history_table.setRowCount(0)
         if vessel is None:
             self.vessel_label.setText("Vessel: Not configured"); self.empty_label.setText("Configure a vessel before adding fuel oil tanks.")
-            self.empty_label.show(); self.arrangement_panel.hide(); self.add_tank_button.setEnabled(False); self.load_tank_set_button.setEnabled(False); self.consumption_tanks_button.setEnabled(False); self.survey_button.setEnabled(False); self.history_empty_label.show(); return
-        self.vessel_label.setText(f"Vessel: {vessel.name}"); self.add_tank_button.setEnabled(True); self.load_tank_set_button.setEnabled(True); self.consumption_tanks_button.setEnabled(True); self.survey_button.setEnabled(True)
+            self.empty_label.show(); self.arrangement_panel.hide(); self.add_tank_button.setEnabled(False); self.load_tank_set_button.setEnabled(False); self.consumption_tanks_button.setEnabled(False); self.internal_transfer_button.setEnabled(False); self.survey_button.setEnabled(False); self.history_empty_label.show(); return
+        self.vessel_label.setText(f"Vessel: {vessel.name}"); self.add_tank_button.setEnabled(True); self.load_tank_set_button.setEnabled(True); self.consumption_tanks_button.setEnabled(True); self.internal_transfer_button.setEnabled(True); self.survey_button.setEnabled(True)
         tanks = self._fuel_tank_service.list_tanks(vessel.id)
         if not tanks:
             self.empty_label.setText("No fuel oil tanks configured."); self.empty_label.show(); self.arrangement_panel.hide(); self.history_empty_label.show(); return
@@ -730,6 +784,11 @@ class FuelTanksPage(QWidget):
     def _configure_consumption_tanks(self) -> None:
         vessel = self._vessel_service.get_active_vessel()
         if vessel and ConsumptionTanksDialog(self._fuel_tank_service, vessel.id, self).exec() == QDialog.DialogCode.Accepted:
+            self.refresh()
+
+    def _open_internal_transfer(self) -> None:
+        vessel = self._vessel_service.get_active_vessel()
+        if vessel and InternalTransferDialog(self._fuel_tank_service, vessel.id, self).exec() == QDialog.DialogCode.Accepted:
             self.refresh()
 
     def _open_survey(self) -> None:

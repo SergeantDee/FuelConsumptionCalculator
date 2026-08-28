@@ -10,13 +10,15 @@ from fuel_consumption_calculator.calculations.manual_vcf_mass import (
     calculate_manual_vcf_mass as calculate_pure_manual_vcf_mass,
 )
 from fuel_consumption_calculator.calculations.tank_calibration_engine import calculate_calibrated_volume_m3
-from fuel_consumption_calculator.calculations.tank_depletion_engine import allocate_tank_depletion
+from fuel_consumption_calculator.calculations.tank_depletion_engine import allocate_tank_depletion, transfer_net_mt
 from fuel_consumption_calculator.domain.fuel_tank import (
     FUEL_BATCH_TYPES,
     FUEL_TANK_TYPES,
     MEASUREMENT_TYPES,
     FuelBatch,
     FuelTank,
+    InternalFuelTransfer,
+    INTERNAL_TRANSFER_STATUSES,
     TankCalibrationPoint,
     TankSounding,
     TankSoundingSurvey,
@@ -236,6 +238,71 @@ class FuelTankService:
     def list_consumption_allocation_events(self, vessel_id: int) -> list[TankConsumptionAllocationEvent]:
         return self._repository.list_consumption_allocation_events(vessel_id)
 
+    def get_internal_fuel_transfer(self, transfer_id: int) -> InternalFuelTransfer | None:
+        return self._repository.get_internal_fuel_transfer(transfer_id)
+
+    def list_internal_fuel_transfers(self, vessel_id: int) -> list[InternalFuelTransfer]:
+        return self._repository.list_internal_fuel_transfers(vessel_id)
+
+    def create_internal_fuel_transfer(self, transfer: InternalFuelTransfer) -> InternalFuelTransfer:
+        if transfer.id is not None:
+            raise FuelTankValidationError("New internal transfers must not already have an id.")
+        return self._save_internal_fuel_transfer(transfer)
+
+    def update_internal_fuel_transfer(self, transfer: InternalFuelTransfer) -> InternalFuelTransfer:
+        existing = self.get_internal_fuel_transfer(transfer.id) if transfer.id is not None else None
+        if existing is None:
+            raise FuelTankValidationError("Internal transfer does not exist.")
+        if existing.status == "COMPLETED":
+            raise FuelTankValidationError("Completed internal transfers cannot be edited.")
+        if transfer.vessel_id != existing.vessel_id:
+            raise FuelTankValidationError("Internal transfer vessel ownership cannot be changed.")
+        return self._save_internal_fuel_transfer(transfer)
+
+    def complete_internal_fuel_transfer(self, transfer_id: int, actual_at_utc: datetime | str) -> InternalFuelTransfer:
+        transfer = self.get_internal_fuel_transfer(transfer_id)
+        if transfer is None:
+            raise FuelTankValidationError("Internal transfer does not exist.")
+        return self._save_internal_fuel_transfer(replace(
+            transfer, status="COMPLETED", actual_at_utc=_utc_timestamp(actual_at_utc),
+        ))
+
+    def delete_internal_fuel_transfer(self, transfer_id: int) -> None:
+        transfer = self.get_internal_fuel_transfer(transfer_id)
+        if transfer is None:
+            raise FuelTankValidationError("Internal transfer does not exist.")
+        if transfer.status == "COMPLETED":
+            raise FuelTankValidationError("Completed internal transfers cannot be deleted.")
+        self._repository.delete_internal_fuel_transfer(transfer_id)
+
+    def _save_internal_fuel_transfer(self, transfer: InternalFuelTransfer) -> InternalFuelTransfer:
+        if transfer.status not in INTERNAL_TRANSFER_STATUSES:
+            raise FuelTankValidationError("Transfer status must be Planned or Completed.")
+        self._validate_number(transfer.quantity_mt, "Transfer quantity", minimum=0, strictly_positive=True)
+        if transfer.from_tank_id == transfer.to_tank_id:
+            raise FuelTankValidationError("From Tank and To Tank must be different.")
+        from_tank = self.get_tank(transfer.from_tank_id)
+        to_tank = self.get_tank(transfer.to_tank_id)
+        if from_tank is None or to_tank is None or from_tank.vessel_id != transfer.vessel_id or to_tank.vessel_id != transfer.vessel_id:
+            raise FuelTankValidationError("Both transfer tanks must belong to the selected vessel.")
+        source_batch = self.get_fuel_batch(from_tank.current_fuel_batch_id) if from_tank.current_fuel_batch_id else None
+        destination_batch = self.get_fuel_batch(to_tank.current_fuel_batch_id) if to_tank.current_fuel_batch_id else None
+        if source_batch is None:
+            raise FuelTankValidationError("From Tank must have an assigned fuel batch.")
+        if transfer.fuel_type != source_batch.fuel_type:
+            raise FuelTankValidationError("Transfer fuel must match the From Tank fuel.")
+        if destination_batch is None:
+            raise FuelTankValidationError("To Tank must have an assigned compatible fuel batch.")
+        if destination_batch.fuel_type != source_batch.fuel_type:
+            raise FuelTankValidationError("From Tank and To Tank must contain the same fuel type.")
+        planned = _utc_timestamp(transfer.planned_at_utc)
+        actual = _utc_timestamp(transfer.actual_at_utc) if transfer.actual_at_utc else None
+        if transfer.status == "COMPLETED" and actual is None:
+            raise FuelTankValidationError("Completed transfers require an Actual Time UTC.")
+        return self._repository.save_internal_fuel_transfer(replace(
+            transfer, planned_at_utc=planned, actual_at_utc=actual, quantity_mt=float(transfer.quantity_mt),
+        ))
+
     def apply_consumption_tanks(
         self, vessel_id: int, tank_ids: list[int] | tuple[int, ...], effective_at_utc: datetime | None = None,
     ) -> TankConsumptionAllocationEvent:
@@ -261,6 +328,7 @@ class FuelTankService:
         batches = {batch.id: batch for batch in self.list_fuel_batches(vessel_id)}
         tank_fuels = {tank.id: (batches[tank.current_fuel_batch_id].fuel_type if tank.current_fuel_batch_id in batches else None) for tank in tanks}
         events = self.list_consumption_allocation_events(vessel_id)
+        transfers = self.list_internal_fuel_transfers(vessel_id)
         forecasts: list[TankForecast] = []
         for tank in tanks:
             anchor = self._repository.get_latest_sounding_at_or_before(tank.id, target_utc.astimezone(timezone.utc).isoformat(timespec="seconds"))
@@ -277,7 +345,8 @@ class FuelTankService:
             allocations, issues = allocate_tank_depletion(intervals, events, tank_fuels, _parse_utc(anchor.effective_at_utc), target_utc)
             depletion = allocations.get(tank.id)
             issue = issues.get(tank.id)
-            forecasts.append(TankForecast(tank.id, fuel, _parse_utc(anchor.effective_at_utc), anchor.calculated_mass_mt, depletion, None if depletion is None else anchor.calculated_mass_mt - depletion, issue))
+            transfer_net = transfer_net_mt(tank.id, transfers, _parse_utc(anchor.effective_at_utc), target_utc)
+            forecasts.append(TankForecast(tank.id, fuel, _parse_utc(anchor.effective_at_utc), anchor.calculated_mass_mt, depletion, None if depletion is None else anchor.calculated_mass_mt - depletion + transfer_net, issue))
         return forecasts
 
     def _validate_tank(self, tank: FuelTank) -> None:

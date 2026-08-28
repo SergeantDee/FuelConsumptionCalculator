@@ -20,6 +20,7 @@ from fuel_consumption_calculator.ui.pages.fuel_tanks_page import (
     VESSEL_TANK_SET,
     FuelTanksPage,
     TankSoundingSurveyDialog,
+    InternalTransferDialog,
     TankDialog,
     VesselTankSetDialog,
     _position_for_tank,
@@ -43,6 +44,18 @@ def test_tank_sounding_survey_dialog_constructs_with_measurement_types(tmp_path,
     kind = dialog._rows[0][2]
     assert [kind.itemText(index) for index in range(kind.count())] == ["SOUNDING", "ULLAGE"]
     assert kind.currentText() == "ULLAGE"
+
+
+def test_internal_transfer_action_and_dialog_construct(tmp_path, qapp):
+    vessel_service, service = _services(tmp_path)
+    vessel = vessel_service.configure_active_vessel("Vessel", "1234567")
+    page = FuelTanksPage(vessel_service, service)
+    page.refresh()
+    assert page.internal_transfer_button.text() == "Internal Transfer"
+    assert page.internal_transfer_button.isEnabled()
+    dialog = InternalTransferDialog(service, vessel.id)
+    assert dialog.windowTitle() == "Internal Transfer"
+    assert dialog.history_table.columnCount() == 7
 
 
 @pytest.fixture(scope="module")

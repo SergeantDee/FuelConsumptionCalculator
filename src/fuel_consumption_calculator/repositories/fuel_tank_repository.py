@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fuel_consumption_calculator.domain.fuel_tank import FuelBatch, FuelTank, TankCalibrationPoint, TankSounding, TankSoundingSurvey
+from fuel_consumption_calculator.domain.fuel_tank import FuelBatch, FuelTank, InternalFuelTransfer, TankCalibrationPoint, TankSounding, TankSoundingSurvey
 from fuel_consumption_calculator.domain.tank_forecast import TankConsumptionAllocationEvent
 from fuel_consumption_calculator.repositories.database import Database
 
@@ -195,6 +195,49 @@ class FuelTankRepository:
             )
         return next(item for item in self.list_consumption_allocation_events(event.vessel_id) if item.id == event_id)
 
+    def get_internal_fuel_transfer(self, transfer_id: int) -> InternalFuelTransfer | None:
+        with self._database.connect() as connection:
+            row = connection.execute("SELECT * FROM internal_fuel_transfers WHERE id = ?", (transfer_id,)).fetchone()
+        return _transfer_from_row(row) if row else None
+
+    def list_internal_fuel_transfers(self, vessel_id: int) -> list[InternalFuelTransfer]:
+        with self._database.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM internal_fuel_transfers WHERE vessel_id = ? ORDER BY COALESCE(actual_at_utc, planned_at_utc) DESC, id DESC",
+                (vessel_id,),
+            ).fetchall()
+        return [_transfer_from_row(row) for row in rows]
+
+    def save_internal_fuel_transfer(self, transfer: InternalFuelTransfer) -> InternalFuelTransfer:
+        timestamp = _timestamp()
+        values = (transfer.vessel_id, transfer.from_tank_id, transfer.to_tank_id, transfer.fuel_type,
+                  transfer.quantity_mt, transfer.status, transfer.planned_at_utc, transfer.actual_at_utc, transfer.remarks)
+        with self._database.connect() as connection:
+            if transfer.id is None:
+                cursor = connection.execute(
+                    """INSERT INTO internal_fuel_transfers
+                    (vessel_id, from_tank_id, to_tank_id, fuel_type, quantity_mt, status, planned_at_utc, actual_at_utc, remarks, created_at_utc, updated_at_utc)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (*values, timestamp, timestamp),
+                )
+                transfer_id = cursor.lastrowid
+            else:
+                connection.execute(
+                    """UPDATE internal_fuel_transfers SET from_tank_id = ?, to_tank_id = ?, fuel_type = ?, quantity_mt = ?,
+                    status = ?, planned_at_utc = ?, actual_at_utc = ?, remarks = ?, updated_at_utc = ? WHERE id = ?""",
+                    (transfer.from_tank_id, transfer.to_tank_id, transfer.fuel_type, transfer.quantity_mt,
+                     transfer.status, transfer.planned_at_utc, transfer.actual_at_utc, transfer.remarks, timestamp, transfer.id),
+                )
+                transfer_id = transfer.id
+        saved = self.get_internal_fuel_transfer(transfer_id)
+        if saved is None:
+            raise RuntimeError("Internal fuel transfer could not be read after saving.")
+        return saved
+
+    def delete_internal_fuel_transfer(self, transfer_id: int) -> None:
+        with self._database.connect() as connection:
+            connection.execute("DELETE FROM internal_fuel_transfers WHERE id = ?", (transfer_id,))
+
     def _get_sounding(self, sounding_id: int) -> TankSounding:
         with self._database.connect() as connection:
             row = connection.execute("SELECT * FROM tank_soundings WHERE id = ?", (sounding_id,)).fetchone()
@@ -239,3 +282,11 @@ def _sounding_from_row(row) -> TankSounding:
                          float(row["trim_m"]), row["temperature_c"], float(row["calculated_volume_m3"]), row["calculated_density_kg_m3"],
                          row["calculated_mass_mt"], row["fuel_batch_id"], row["remarks"], row["created_at"], row["updated_at"],
                          row["manual_vcf"], row["standard_volume_15_m3"], row["survey_id"])
+
+
+def _transfer_from_row(row) -> InternalFuelTransfer:
+    return InternalFuelTransfer(
+        row["id"], row["vessel_id"], row["from_tank_id"], row["to_tank_id"], row["fuel_type"],
+        float(row["quantity_mt"]), row["status"], row["planned_at_utc"], row["actual_at_utc"], row["remarks"],
+        row["created_at_utc"], row["updated_at_utc"],
+    )

@@ -8,10 +8,12 @@ from typing import Literal
 FuelTankType = Literal["BUNKER", "SETTLING", "SERVICE", "OTHER"]
 MeasurementType = Literal["SOUNDING", "ULLAGE"]
 FuelType = Literal["ULSFO", "VLSFO", "MDO"]
+TransferStatus = Literal["PLANNED", "COMPLETED"]
 
 FUEL_TANK_TYPES = ("BUNKER", "SETTLING", "SERVICE", "OTHER")
 MEASUREMENT_TYPES = ("SOUNDING", "ULLAGE")
 FUEL_BATCH_TYPES = ("ULSFO", "VLSFO", "MDO")
+INTERNAL_TRANSFER_STATUSES = ("PLANNED", "COMPLETED")
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,3 +96,22 @@ class TankSoundingSurvey:
     effective_at_utc: str
     remarks: str | None = None
     created_at_utc: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class InternalFuelTransfer:
+    id: int | None
+    vessel_id: int
+    from_tank_id: int
+    to_tank_id: int
+    fuel_type: FuelType
+    quantity_mt: float
+    status: TransferStatus
+    planned_at_utc: str
+    actual_at_utc: str | None = None
+    remarks: str | None = None
+    created_at_utc: str | None = None
+    updated_at_utc: str | None = None
+
+    def effective_at_utc(self) -> str:
+        return self.actual_at_utc if self.status == "COMPLETED" and self.actual_at_utc else self.planned_at_utc
