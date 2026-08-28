@@ -51,6 +51,48 @@ def allocate_tank_depletion(
     return allocations, issues
 
 
+def estimate_tank_empty_time(
+    tank_id: int, fuel_type: str | None, anchor_mass_mt: float | None, forecast_start_utc: datetime,
+    intervals: list[FuelDepletionInterval], allocation_events: list[TankConsumptionAllocationEvent],
+    tank_fuels: dict[int, str | None],
+) -> tuple[datetime | None, str, str | None]:
+    if anchor_mass_mt is None:
+        return None, "UNAVAILABLE", "No mass-bearing sounding available"
+    if fuel_type is None:
+        return None, "UNAVAILABLE", "Fuel type unknown"
+    mass = anchor_mass_mt
+    if mass <= 0:
+        return forecast_start_utc, "ALREADY_DEPLETED", "Tank is already depleted"
+    events = sorted(allocation_events, key=lambda item: _utc(item.effective_at_utc))
+    saw_active = False
+    for interval in sorted(intervals, key=lambda item: _utc(item.start_utc)):
+        start, end = max(_utc(interval.start_utc), _utc(forecast_start_utc)), _utc(interval.end_utc)
+        if end <= start:
+            continue
+        deduction = interval.deductions_mt.get(fuel_type)
+        if deduction is None:
+            return None, "UNAVAILABLE", f"Authoritative {fuel_type} depletion is unavailable"
+        duration = (_utc(interval.end_utc) - _utc(interval.start_utc)).total_seconds()
+        if duration <= 0:
+            continue
+        boundaries = [start, *(_utc(event.effective_at_utc) for event in events if start < _utc(event.effective_at_utc) < end), end]
+        for segment_start, segment_end in zip(boundaries, boundaries[1:]):
+            active = [item for item in _state_at(events, segment_start) if tank_fuels.get(item) == fuel_type]
+            if tank_id not in active:
+                continue
+            saw_active = True
+            amount = float(deduction) * (segment_end - segment_start).total_seconds() / duration / len(active)
+            if amount <= 0:
+                continue
+            if mass <= amount:
+                fraction = mass / amount
+                return segment_start + (segment_end - segment_start) * fraction, "ESTIMATED", None
+            mass -= amount
+    if not saw_active:
+        return None, "UNAVAILABLE", f"No active {fuel_type} consumption tank selected"
+    return None, "BEYOND_PLAN", "Beyond current voyage plan"
+
+
 def _state_at(events: list[TankConsumptionAllocationEvent], instant: datetime) -> tuple[int, ...]:
     state: tuple[int, ...] = ()
     for event in events:

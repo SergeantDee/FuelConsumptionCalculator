@@ -28,3 +28,17 @@ class TankForecast:
     allocated_depletion_mt: float | None
     predicted_mass_mt: float | None
     issue: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TankEmptyForecast:
+    tank_id: int
+    fuel_type: str | None
+    forecast_start_utc: datetime
+    anchor_effective_at_utc: datetime | None
+    anchor_mass_mt: float | None
+    estimated_current_mass_mt: float | None
+    estimated_empty_at_utc: datetime | None
+    state: str
+    issue: str | None = None
+    stage_context: str | None = None

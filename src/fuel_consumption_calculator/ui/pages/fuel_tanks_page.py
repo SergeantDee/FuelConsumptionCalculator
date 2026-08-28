@@ -398,14 +398,14 @@ class TankFuelBatchDialog(QDialog):
 
 
 class TankDetailsDialog(QDialog):
-    def __init__(self, service: FuelTankService, tank: FuelTank, fuel_type: str | None, batch_name: str | None, latest: TankSounding | None, parent: QWidget | None = None, on_changed=None, predicted_mass_mt: float | None = None) -> None:
+    def __init__(self, service: FuelTankService, tank: FuelTank, fuel_type: str | None, batch_name: str | None, latest: TankSounding | None, parent: QWidget | None = None, on_changed=None, predicted_mass_mt: float | None = None, estimated_empty: str = "--") -> None:
         super().__init__(parent)
         self._service, self._tank_id, self._on_changed = service, tank.id, on_changed
         self.setWindowTitle("Tank Details"); self.setMinimumWidth(380)
         layout = QVBoxLayout(self); layout.addWidget(QLabel(tank.name, objectName="pageTitle")); form = QFormLayout()
         self.current_fuel_value = QLabel(fuel_type or "UNKNOWN"); self.current_batch_value = QLabel(batch_name or "No batch assigned"); self.density_value = QLabel()
         self._refresh_batch_details(notify=False)
-        values = (("Tank Type", tank.tank_type), ("Capacity", f"{tank.capacity_m3:.2f} m3"), ("Active", "Yes" if tank.is_active else "No"), ("Bunker Receiving", "Yes" if tank.bunker_receiving_eligible else "No"), ("Current Fuel", self.current_fuel_value), ("Current Batch", self.current_batch_value), ("Density @15 C", self.density_value), ("Latest Observed Volume", f"{latest.calculated_volume_m3:.2f} m3" if latest else "No sounding"), ("Latest Manual VCF", f"{latest.manual_vcf:.5f}" if latest and latest.manual_vcf is not None else "--"), ("Latest Volume @15 C", f"{latest.standard_volume_15_m3:.2f} m3" if latest and latest.standard_volume_15_m3 is not None else "--"), ("Actual ROB", f"{latest.calculated_mass_mt:.2f} MT" if latest and latest.calculated_mass_mt is not None else "--"), ("Estimated ROB", f"{predicted_mass_mt:.2f} MT" if predicted_mass_mt is not None else "--"), ("Fill", f"{max(0.0, min(100.0, latest.calculated_volume_m3 / tank.capacity_m3 * 100)):.1f}%" if latest else "--"), ("Latest Sounding", _format_utc(latest.effective_at_utc) if latest else "No sounding"))
+        values = (("Tank Type", tank.tank_type), ("Capacity", f"{tank.capacity_m3:.2f} m3"), ("Actual ROB", f"{latest.calculated_mass_mt:.2f} MT" if latest and latest.calculated_mass_mt is not None else "--"), ("Estimated ROB", f"{predicted_mass_mt:.2f} MT" if predicted_mass_mt is not None else "--"), ("Estimated Empty", estimated_empty), ("Current Fuel", self.current_fuel_value), ("Current Batch", self.current_batch_value))
         for label, value in values: form.addRow(label, value if isinstance(value, QWidget) else QLabel(value))
         layout.addLayout(form); actions = QHBoxLayout()
         update = QPushButton("Update ROB"); update.clicked.connect(lambda: UpdateTankROBDialog(service, tank, self).exec())
@@ -762,13 +762,17 @@ class FuelTanksPage(QWidget):
         if tank is None: return
         batch = self._fuel_tank_service.get_fuel_batch(tank.current_fuel_batch_id) if tank.current_fuel_batch_id else None
         predicted = None
+        empty_text = "--"
         if self._tank_forecast_service is not None:
             try:
                 forecast = next((item for item in self._tank_forecast_service.predict_tank_rob_at(tank.vessel_id, datetime.now(timezone.utc)) if item.tank_id == tank_id), None)
                 predicted = forecast.predicted_mass_mt if forecast else None
+                empty = next((item for item in self._tank_forecast_service.predict_tank_empty_times(tank.vessel_id, datetime.now(timezone.utc)) if item.tank_id == tank_id), None)
+                if empty is not None:
+                    empty_text = _format_utc(empty.estimated_empty_at_utc.isoformat()) if empty.estimated_empty_at_utc else (empty.issue or empty.state)
             except Exception:
                 predicted = None
-        TankDetailsDialog(self._fuel_tank_service, tank, batch.fuel_type if batch else None, batch.batch_name if batch else None, self._fuel_tank_service.get_latest_sounding(tank_id), self, self.refresh, predicted).exec()
+        TankDetailsDialog(self._fuel_tank_service, tank, batch.fuel_type if batch else None, batch.batch_name if batch else None, self._fuel_tank_service.get_latest_sounding(tank_id), self, self.refresh, predicted, empty_text).exec()
 
 
 def _normalized_name(name: str) -> str:
