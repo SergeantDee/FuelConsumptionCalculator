@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 
 from fuel_consumption_calculator.calculations.bunker_projection_engine import EventBunkerROBProjection
 from fuel_consumption_calculator.calculations.port_bunker_projection import PortBunkerProjectionRow, build_port_bunker_projection
-from fuel_consumption_calculator.domain.bunker import BunkerLiftLimit, BunkerPlanStatus, BunkerReceivingTankPlan
+from fuel_consumption_calculator.domain.bunker import BunkerLiftLimit, BunkerPlanStatus, BunkerReceivingTankPlan, BunkerTankReceipt
 from fuel_consumption_calculator.domain.consumption import FUEL_TYPES
 from fuel_consumption_calculator.domain.schedule import ScheduleEvent
 from fuel_consumption_calculator.domain.voyage import ActualROBObservation
@@ -228,6 +228,33 @@ class ReceivingTanksDialog(QDialog):
         self.accept()
 
 
+class BunkerDistributionDialog(QDialog):
+    def __init__(self, service: BunkerService, plan, parent=None):
+        super().__init__(parent); self._service, self._plan = service, plan; self.setWindowTitle("Bunker Distribution"); self.resize(620, 360)
+        layout = QVBoxLayout(self); self.table = QTableWidget(0, 3); self.table.setHorizontalHeaderLabels(("Tank", "Available Capacity MT", "Receipt MT")); layout.addWidget(self.table)
+        incoming = service.load_incoming_fuel_snapshot(plan); batch = next((item for item in service.list_fuel_batches(plan.vessel_id) if item.id == incoming.fuel_batch_id), None)
+        self._fuel = batch.fuel_type if batch else None; self._total = plan.quantity_for(self._fuel) if self._fuel else 0.0
+        rows = service.list_receiving_tank_plan(plan); tanks = {tank.id: tank for tank, _ in service.list_eligible_receiving_tanks(plan.vessel_id)}; projections = service.resolve_receiving_tank_arrivals(plan); saved = {item.tank_id: item for item in service.list_tank_receipts(plan)}
+        for index, row in enumerate(rows):
+            tank = tanks.get(row.tank_id); projection = projections.get(row.tank_id)
+            if tank is None or projection is None or projection.projected_arrival_volume_m3 is None or incoming.density_15_kg_m3 is None or incoming.manual_vcf is None: capacity = None
+            else:
+                from fuel_consumption_calculator.calculations.tank_max_lift import SelectedReceivingTank, calculate_tank_max_lift
+                capacity = calculate_tank_max_lift([SelectedReceivingTank(tank.id, tank.capacity_m3, projection.projected_arrival_volume_m3, row.target_fill_percent)], incoming_density_15_kg_m3=incoming.density_15_kg_m3, incoming_manual_vcf=incoming.manual_vcf).total_max_lift_mt
+            self.table.insertRow(index); item=QTableWidgetItem(tank.name if tank else str(row.tank_id)); item.setData(Qt.ItemDataRole.UserRole, row.tank_id); self.table.setItem(index,0,item); self.table.setItem(index,1,QTableWidgetItem("--" if capacity is None else f"{capacity:.3f}")); value=QDoubleSpinBox(); value.setRange(0, capacity if capacity is not None else 999999.99); value.setDecimals(3); value.setValue(saved[row.tank_id].quantity_mt if row.tank_id in saved else 0); value.valueChanged.connect(self._update); self.table.setCellWidget(index,2,value)
+        self.summary=QLabel(); layout.addWidget(self.summary); buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Save|QDialogButtonBox.StandardButton.Cancel); buttons.accepted.connect(self._save); buttons.rejected.connect(self.reject); layout.addWidget(buttons); self._update()
+
+    def _update(self):
+        allocated=sum(self.table.cellWidget(row,2).value() for row in range(self.table.rowCount())); self.summary.setText(f"Aggregate Bunker: {self._total:.3f} MT   Allocated: {allocated:.3f} MT   Remaining: {self._total-allocated:.3f} MT")
+
+    def _save(self):
+        if self._fuel is None: QMessageBox.warning(self,"Incoming fuel required","Select an incoming fuel batch before distributing bunker."); return
+        rows=[BunkerTankReceipt(self.table.item(row,0).data(Qt.ItemDataRole.UserRole),self._fuel,self.table.cellWidget(row,2).value(),"") for row in range(self.table.rowCount())]
+        try: self._service.save_tank_receipts(self._plan,rows)
+        except ValueError as error: QMessageBox.warning(self,"Distribution not saved",str(error)); return
+        self.accept()
+
+
 class BunkerPage(QWidget):
     actual_sounding_saved = Signal()
     def __init__(
@@ -385,6 +412,8 @@ class BunkerPage(QWidget):
         self.use_max_button.clicked.connect(self._use_max_lift)
         self.receiving_tanks_button = QPushButton("Receiving Tanks...")
         self.receiving_tanks_button.clicked.connect(self._open_receiving_tanks)
+        self.bunker_distribution_button = QPushButton("Bunker Distribution...")
+        self.bunker_distribution_button.clicked.connect(self._open_bunker_distribution)
         self.clear_plan_button = QPushButton("Clear Bunker Plan")
         self.clear_plan_button.setObjectName("dangerButton")
         self.clear_plan_button.clicked.connect(self._clear_plan)
@@ -392,6 +421,7 @@ class BunkerPage(QWidget):
         actions.addWidget(self.confirm_plan_button)
         actions.addWidget(self.use_max_button)
         actions.addWidget(self.receiving_tanks_button)
+        actions.addWidget(self.bunker_distribution_button)
         self.receiving_summary_label = QLabel("Receiving tanks not configured")
         self.receiving_summary_label.setObjectName("mutedText")
         actions.addWidget(self.receiving_summary_label)
@@ -623,6 +653,14 @@ class BunkerPage(QWidget):
         default_target=next(iter(self._target_inputs.values())).value() if self._target_inputs else 90
         if ReceivingTanksDialog(self._bunker_service,plan,default_target,self).exec() == QDialog.DialogCode.Accepted:
             self._refresh_projection(vessel.id); self._selection_changed(); self.status_label.setText("Receiving tank plan saved as DRAFT.")
+
+    def _open_bunker_distribution(self) -> None:
+        plan = self._current_event_plan()
+        if plan is None or not self._bunker_service.has_receiving_tank_plan(plan):
+            QMessageBox.warning(self, "Receiving plan required", "Configure selected receiving tanks before distributing bunker.")
+            return
+        if BunkerDistributionDialog(self._bunker_service, plan, self).exec() == QDialog.DialogCode.Accepted:
+            self.status_label.setText("Bunker tank distribution saved.")
 
     def _refresh_projection(self, vessel_id: int) -> None:
         plan_statuses = self._bunker_service.list_plan_statuses(vessel_id, self._events)

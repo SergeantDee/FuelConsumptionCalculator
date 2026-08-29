@@ -83,6 +83,14 @@ class ReceivingTankArrivalProjection:
 
 
 @dataclass(frozen=True, slots=True)
+class BunkerTankReceipt:
+    tank_id: int
+    fuel_type: str
+    quantity_mt: float
+    effective_at_utc: str
+
+
+@dataclass(frozen=True, slots=True)
 class BunkerIncomingFuelSnapshot:
     fuel_batch_id: int | None
     density_15_kg_m3: float | None

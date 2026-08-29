@@ -90,6 +90,8 @@ class Database:
                 self._migrate_to_v17(connection)
             if current_version < 18:
                 self._migrate_to_v18(connection)
+            if current_version < 19:
+                self._migrate_to_v19(connection)
             if current_version >= 9:
                 self._ensure_default_port_timezones(connection)
                 self._resolve_existing_schedule_timezones(connection)
@@ -751,6 +753,31 @@ class Database:
                 ON internal_fuel_transfers (vessel_id, planned_at_utc);
         """)
         LOGGER.info("Database migrated to schema version 18.")
+
+    def _migrate_to_v19(self, connection: sqlite3.Connection) -> None:
+        connection.executescript("""
+            CREATE TABLE IF NOT EXISTS bunker_tank_receipts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vessel_id INTEGER NOT NULL,
+                sequence_number INTEGER NOT NULL,
+                port_snapshot TEXT NOT NULL,
+                arrival_snapshot TEXT,
+                tank_id INTEGER NOT NULL,
+                fuel_type TEXT NOT NULL,
+                quantity_mt REAL NOT NULL,
+                effective_at_utc TEXT NOT NULL,
+                created_at_utc TEXT NOT NULL,
+                updated_at_utc TEXT NOT NULL,
+                FOREIGN KEY (vessel_id) REFERENCES vessels(id) ON DELETE CASCADE,
+                FOREIGN KEY (tank_id) REFERENCES fuel_tanks(id) ON DELETE RESTRICT,
+                UNIQUE(vessel_id, sequence_number, port_snapshot, arrival_snapshot, tank_id, fuel_type),
+                CHECK (fuel_type IN ('ULSFO', 'VLSFO', 'MDO')),
+                CHECK (quantity_mt >= 0)
+            );
+            CREATE INDEX IF NOT EXISTS idx_bunker_tank_receipts_vessel_time
+                ON bunker_tank_receipts (vessel_id, effective_at_utc);
+        """)
+        LOGGER.info("Database migrated to schema version 19.")
 
     def _ensure_default_port_timezones(self, connection: sqlite3.Connection) -> None:
         timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")

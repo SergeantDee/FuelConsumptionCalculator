@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from fuel_consumption_calculator.domain.fuel_tank import FuelBatch, FuelTank, InternalFuelTransfer, TankCalibrationPoint, TankSounding, TankSoundingSurvey
+from fuel_consumption_calculator.domain.bunker import BunkerTankReceipt
 from fuel_consumption_calculator.domain.tank_forecast import TankConsumptionAllocationEvent
 from fuel_consumption_calculator.repositories.database import Database
 
@@ -207,6 +208,24 @@ class FuelTankRepository:
                 (vessel_id,),
             ).fetchall()
         return [_transfer_from_row(row) for row in rows]
+
+    def list_confirmed_complete_bunker_receipts(self, vessel_id: int) -> list[BunkerTankReceipt]:
+        """Only complete allocations of confirmed aggregate bunker plans enter tank forecasts."""
+        with self._database.connect() as connection:
+            rows = connection.execute("""
+                SELECT r.tank_id, r.fuel_type, r.quantity_mt, r.effective_at_utc
+                FROM bunker_tank_receipts r
+                JOIN planned_bunker_quantities p ON p.vessel_id=r.vessel_id
+                  AND p.sequence_number=r.sequence_number AND p.port_snapshot=r.port_snapshot
+                  AND p.arrival_snapshot=r.arrival_snapshot AND p.fuel_type=r.fuel_type
+                WHERE r.vessel_id=? AND p.status='CONFIRMED'
+                  AND (SELECT COALESCE(SUM(r2.quantity_mt), 0) FROM bunker_tank_receipts r2
+                       WHERE r2.vessel_id=r.vessel_id AND r2.sequence_number=r.sequence_number
+                         AND r2.port_snapshot=r.port_snapshot AND r2.arrival_snapshot=r.arrival_snapshot
+                         AND r2.fuel_type=r.fuel_type) = p.quantity_mt
+                ORDER BY r.effective_at_utc, r.id
+            """, (vessel_id,)).fetchall()
+        return [BunkerTankReceipt(row["tank_id"], row["fuel_type"], float(row["quantity_mt"]), row["effective_at_utc"]) for row in rows]
 
     def save_internal_fuel_transfer(self, transfer: InternalFuelTransfer) -> InternalFuelTransfer:
         timestamp = _timestamp()

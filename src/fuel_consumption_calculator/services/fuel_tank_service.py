@@ -10,7 +10,7 @@ from fuel_consumption_calculator.calculations.manual_vcf_mass import (
     calculate_manual_vcf_mass as calculate_pure_manual_vcf_mass,
 )
 from fuel_consumption_calculator.calculations.tank_calibration_engine import calculate_calibrated_volume_m3
-from fuel_consumption_calculator.calculations.tank_depletion_engine import allocate_tank_depletion, transfer_net_mt
+from fuel_consumption_calculator.calculations.tank_depletion_engine import allocate_tank_depletion, bunker_receipt_net_mt, transfer_net_mt
 from fuel_consumption_calculator.domain.fuel_tank import (
     FUEL_BATCH_TYPES,
     FUEL_TANK_TYPES,
@@ -251,6 +251,9 @@ class FuelTankService:
     def list_internal_fuel_transfers(self, vessel_id: int) -> list[InternalFuelTransfer]:
         return self._repository.list_internal_fuel_transfers(vessel_id)
 
+    def list_confirmed_complete_bunker_receipts(self, vessel_id: int):
+        return self._repository.list_confirmed_complete_bunker_receipts(vessel_id)
+
     def create_internal_fuel_transfer(self, transfer: InternalFuelTransfer) -> InternalFuelTransfer:
         if transfer.id is not None:
             raise FuelTankValidationError("New internal transfers must not already have an id.")
@@ -336,6 +339,7 @@ class FuelTankService:
         tank_fuels = {tank.id: (batches[tank.current_fuel_batch_id].fuel_type if tank.current_fuel_batch_id in batches else None) for tank in tanks}
         events = self.list_consumption_allocation_events(vessel_id)
         transfers = self.list_internal_fuel_transfers(vessel_id)
+        receipts = self._repository.list_confirmed_complete_bunker_receipts(vessel_id)
         forecasts: list[TankForecast] = []
         for tank in tanks:
             anchor = self.get_latest_sounding_at_or_before(tank.id, target_utc)
@@ -353,7 +357,8 @@ class FuelTankService:
             depletion = allocations.get(tank.id)
             issue = issues.get(tank.id)
             transfer_net = transfer_net_mt(tank.id, transfers, _parse_utc(anchor.effective_at_utc), target_utc)
-            forecasts.append(TankForecast(tank.id, fuel, _parse_utc(anchor.effective_at_utc), anchor.calculated_mass_mt, depletion, None if depletion is None else anchor.calculated_mass_mt - depletion + transfer_net, issue))
+            receipt_net = bunker_receipt_net_mt(tank.id, receipts, _parse_utc(anchor.effective_at_utc), target_utc)
+            forecasts.append(TankForecast(tank.id, fuel, _parse_utc(anchor.effective_at_utc), anchor.calculated_mass_mt, depletion, None if depletion is None else anchor.calculated_mass_mt - depletion + transfer_net + receipt_net, issue))
         return forecasts
 
     def _validate_tank(self, tank: FuelTank) -> None:

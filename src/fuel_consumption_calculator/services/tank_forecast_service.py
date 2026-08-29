@@ -33,12 +33,13 @@ class TankForecastService:
         fuels = {tank.id: (batches[tank.current_fuel_batch_id].fuel_type if tank.current_fuel_batch_id in batches else None) for tank in tanks}
         events = self._tanks.list_consumption_allocation_events(vessel_id)
         transfers = self._tanks.list_internal_fuel_transfers(vessel_id)
+        receipts = self._tanks.list_confirmed_complete_bunker_receipts(vessel_id)
         results = []
         for tank in tanks:
             anchor = self._tanks.get_latest_sounding(tank.id)
             anchor_time = _as_utc(anchor.effective_at_utc) if anchor else forecast_start_utc
             relevant_transfers = [item for item in transfers if _as_utc(item.effective_at_utc()) > anchor_time]
-            empty_at, state, issue = estimate_tank_empty_time(tank.id, fuels[tank.id], anchor.calculated_mass_mt if anchor else None, forecast_start_utc, intervals, events, fuels, relevant_transfers)
+            empty_at, state, issue = estimate_tank_empty_time(tank.id, fuels[tank.id], anchor.calculated_mass_mt if anchor else None, forecast_start_utc, intervals, events, fuels, relevant_transfers, [item for item in receipts if _as_utc(item.effective_at_utc) > anchor_time])
             results.append(TankEmptyForecast(tank.id, fuels[tank.id], forecast_start_utc, _as_utc(anchor.effective_at_utc) if anchor else None, anchor.calculated_mass_mt if anchor else None, None, empty_at, state, issue))
         return results
 

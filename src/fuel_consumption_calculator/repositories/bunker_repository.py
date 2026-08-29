@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import datetime, timezone
 
-from fuel_consumption_calculator.domain.bunker import BunkerCapacity, BunkerCapacityProfile, BunkerIncomingFuelSnapshot, BunkerQuantity, BunkerReceivingTankPlan, PlannedBunker
+from fuel_consumption_calculator.domain.bunker import BunkerCapacity, BunkerCapacityProfile, BunkerIncomingFuelSnapshot, BunkerQuantity, BunkerReceivingTankPlan, BunkerTankReceipt, PlannedBunker
 from fuel_consumption_calculator.domain.fuel_tank import FuelBatch, FuelTank
 from fuel_consumption_calculator.domain.consumption import FUEL_TYPES
 from fuel_consumption_calculator.repositories.database import Database
@@ -120,6 +120,7 @@ class BunkerRepository:
     ) -> None:
         with self._database.connect() as connection:
             if arrival_snapshot is None:
+                connection.execute("DELETE FROM bunker_tank_receipts WHERE vessel_id = ? AND sequence_number = ? AND port_snapshot = ?", (vessel_id, sequence_number, port_snapshot))
                 connection.execute("DELETE FROM bunker_receiving_tank_plans WHERE vessel_id = ? AND sequence_number = ? AND port_snapshot = ?", (vessel_id, sequence_number, port_snapshot))
                 connection.execute("DELETE FROM bunker_incoming_fuel_snapshots WHERE vessel_id = ? AND sequence_number = ? AND port_snapshot = ?", (vessel_id, sequence_number, port_snapshot))
                 connection.execute(
@@ -130,6 +131,7 @@ class BunkerRepository:
                     (vessel_id, sequence_number, port_snapshot),
                 )
             else:
+                connection.execute("DELETE FROM bunker_tank_receipts WHERE vessel_id = ? AND sequence_number = ? AND port_snapshot = ? AND arrival_snapshot = ?", (vessel_id, sequence_number, port_snapshot, arrival_snapshot))
                 connection.execute("DELETE FROM bunker_receiving_tank_plans WHERE vessel_id = ? AND sequence_number = ? AND port_snapshot = ? AND arrival_snapshot = ?", (vessel_id, sequence_number, port_snapshot, arrival_snapshot))
                 connection.execute("DELETE FROM bunker_incoming_fuel_snapshots WHERE vessel_id = ? AND sequence_number = ? AND port_snapshot = ? AND arrival_snapshot = ?", (vessel_id, sequence_number, port_snapshot, arrival_snapshot))
                 connection.execute(
@@ -171,6 +173,18 @@ class BunkerRepository:
         with self._database.connect() as connection:
             row = connection.execute("SELECT 1 FROM bunker_receiving_tank_plans WHERE vessel_id=? AND sequence_number=? AND port_snapshot=? AND arrival_snapshot=? UNION SELECT 1 FROM bunker_incoming_fuel_snapshots WHERE vessel_id=? AND sequence_number=? AND port_snapshot=? AND arrival_snapshot=? LIMIT 1", (plan.vessel_id, plan.sequence_number, plan.port_snapshot, plan.arrival_snapshot, plan.vessel_id, plan.sequence_number, plan.port_snapshot, plan.arrival_snapshot)).fetchone()
         return row is not None
+
+    def list_tank_receipts(self, plan: PlannedBunker) -> list[BunkerTankReceipt]:
+        with self._database.connect() as connection:
+            rows = connection.execute("SELECT tank_id, fuel_type, quantity_mt, effective_at_utc FROM bunker_tank_receipts WHERE vessel_id=? AND sequence_number=? AND port_snapshot=? AND arrival_snapshot=? ORDER BY tank_id", (plan.vessel_id, plan.sequence_number, plan.port_snapshot, plan.arrival_snapshot)).fetchall()
+        return [BunkerTankReceipt(row["tank_id"], row["fuel_type"], float(row["quantity_mt"]), row["effective_at_utc"]) for row in rows]
+
+    def save_tank_receipts(self, plan: PlannedBunker, receipts: list[BunkerTankReceipt]) -> None:
+        timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        key = (plan.vessel_id, plan.sequence_number, plan.port_snapshot, plan.arrival_snapshot)
+        with self._database.connect() as connection:
+            connection.execute("DELETE FROM bunker_tank_receipts WHERE vessel_id=? AND sequence_number=? AND port_snapshot=? AND arrival_snapshot=?", key)
+            connection.executemany("INSERT INTO bunker_tank_receipts (vessel_id,sequence_number,port_snapshot,arrival_snapshot,tank_id,fuel_type,quantity_mt,effective_at_utc,created_at_utc,updated_at_utc) VALUES (?,?,?,?,?,?,?,?,?,?)", [(*key, item.tank_id, item.fuel_type, item.quantity_mt, item.effective_at_utc, timestamp, timestamp) for item in receipts])
 
     def list_fuel_batches(self, vessel_id: int) -> list[FuelBatch]:
         with self._database.connect() as connection:

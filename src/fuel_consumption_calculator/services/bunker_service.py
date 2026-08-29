@@ -15,6 +15,7 @@ from fuel_consumption_calculator.domain.bunker import (
     BunkerPlanStatus,
     BunkerIncomingFuelSnapshot,
     BunkerReceivingTankPlan,
+    BunkerTankReceipt,
     ReceivingTankArrivalProjection,
     PlannedBunker,
     complete_bunker_plan,
@@ -161,6 +162,48 @@ class BunkerService:
 
     def clear_receiving_tank_plan(self, plan: PlannedBunker) -> None:
         self._repository.save_receiving_tank_plan(plan, [], BunkerIncomingFuelSnapshot(None, None, None))
+
+    def list_tank_receipts(self, plan: PlannedBunker) -> list[BunkerTankReceipt]:
+        return self._repository.list_tank_receipts(plan)
+
+    def save_tank_receipts(self, plan: PlannedBunker, receipts: list[BunkerTankReceipt]) -> None:
+        """Persist a complete MT distribution; aggregate bunker remains the sole ROB authority."""
+        incoming = self.load_incoming_fuel_snapshot(plan)
+        batch = next((item for item in self.list_fuel_batches(plan.vessel_id) if item.id == incoming.fuel_batch_id), None)
+        if batch is None:
+            raise ValueError("Incoming fuel batch is required for bunker tank distribution.")
+        selected = {item.tank_id: item for item in self.list_receiving_tank_plan(plan)}
+        tanks = {tank.id: tank for tank, _latest in self.list_eligible_receiving_tanks(plan.vessel_id)}
+        if not receipts:
+            raise ValueError("Allocate the complete confirmed bunker quantity before saving.")
+        if len({item.tank_id for item in receipts}) != len(receipts):
+            raise ValueError("A receiving tank can only have one bunker receipt allocation.")
+        expected = plan.quantity_for(batch.fuel_type)
+        total = sum(item.quantity_mt for item in receipts)
+        if abs(total - expected) > 0.001:
+            raise ValueError(f"Allocated bunker quantity must equal {expected:.3f} MT.")
+        projections = self.resolve_receiving_tank_arrivals(plan)
+        for item in receipts:
+            if item.tank_id not in selected or item.tank_id not in tanks:
+                raise ValueError("Bunker receipts may only be assigned to selected eligible receiving tanks.")
+            if item.fuel_type != batch.fuel_type:
+                raise ValueError("Bunker receipt fuel must match the incoming bunker fuel.")
+            tank = tanks[item.tank_id]
+            current_batch = next((value for value in self.list_fuel_batches(plan.vessel_id) if value.id == tank.current_fuel_batch_id), None)
+            if current_batch is None or current_batch.fuel_type != batch.fuel_type:
+                raise ValueError("Receiving tank fuel is unknown or incompatible with incoming bunker fuel.")
+            if item.quantity_mt < 0:
+                raise ValueError("Bunker receipt quantity cannot be negative.")
+            projected = projections.get(item.tank_id)
+            if projected is None or projected.projected_arrival_volume_m3 is None or incoming.density_15_kg_m3 is None or incoming.manual_vcf is None:
+                raise ValueError("Tank receiving capacity in MT is unavailable.")
+            capacity = calculate_tank_max_lift([SelectedReceivingTank(item.tank_id, tank.capacity_m3, projected.projected_arrival_volume_m3, selected[item.tank_id].target_fill_percent)], incoming_density_15_kg_m3=incoming.density_15_kg_m3, incoming_manual_vcf=incoming.manual_vcf).total_max_lift_mt
+            if capacity is None or item.quantity_mt > capacity + 0.001:
+                raise ValueError("Bunker receipt exceeds the selected tank's available receiving capacity.")
+        effective = _arrival_utc(plan.arrival_snapshot)
+        if effective is None:
+            raise ValueError("Bunker arrival time is unavailable.")
+        self._repository.save_tank_receipts(plan, [BunkerTankReceipt(item.tank_id, item.fuel_type, item.quantity_mt, effective.isoformat(timespec="seconds")) for item in receipts])
 
     def tank_based_max_lift(self, plan: PlannedBunker) -> TankMaxLiftResult | None:
         rows = self._repository.list_receiving_tank_plan(plan)

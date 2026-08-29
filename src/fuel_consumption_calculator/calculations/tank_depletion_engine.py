@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from fuel_consumption_calculator.domain.consumption import FUEL_TYPES
 from fuel_consumption_calculator.domain.fuel_tank import InternalFuelTransfer
+from fuel_consumption_calculator.domain.bunker import BunkerTankReceipt
 from fuel_consumption_calculator.domain.tank_forecast import FuelDepletionInterval, TankConsumptionAllocationEvent
 
 
@@ -20,6 +21,10 @@ def transfer_net_mt(
             if transfer.to_tank_id == tank_id:
                 total += transfer.quantity_mt
     return total
+
+
+def bunker_receipt_net_mt(tank_id: int, receipts: list[BunkerTankReceipt], start_utc: datetime, target_utc: datetime) -> float:
+    return sum(receipt.quantity_mt for receipt in receipts if receipt.tank_id == tank_id and _utc(datetime.fromisoformat(receipt.effective_at_utc)) > _utc(start_utc) and _utc(datetime.fromisoformat(receipt.effective_at_utc)) <= _utc(target_utc))
 
 
 def allocate_tank_depletion(
@@ -70,7 +75,7 @@ def allocate_tank_depletion(
 def estimate_tank_empty_time(
     tank_id: int, fuel_type: str | None, anchor_mass_mt: float | None, forecast_start_utc: datetime,
     intervals: list[FuelDepletionInterval], allocation_events: list[TankConsumptionAllocationEvent],
-    tank_fuels: dict[int, str | None], transfers: list[InternalFuelTransfer] | None = None,
+    tank_fuels: dict[int, str | None], transfers: list[InternalFuelTransfer] | None = None, receipts: list[BunkerTankReceipt] | None = None,
 ) -> tuple[datetime | None, str, str | None]:
     if anchor_mass_mt is None:
         return None, "UNAVAILABLE", "No mass-bearing sounding available"
@@ -81,6 +86,7 @@ def estimate_tank_empty_time(
         return forecast_start_utc, "ALREADY_DEPLETED", "Tank is already depleted"
     events = sorted(allocation_events, key=lambda item: _utc(item.effective_at_utc))
     transfers = sorted(transfers or [], key=_transfer_time)
+    receipts = sorted(receipts or [], key=lambda item: _utc(datetime.fromisoformat(item.effective_at_utc)))
     applied_transfers: set[int | None] = set()
     saw_active = False
     for interval in sorted(intervals, key=lambda item: _utc(item.start_utc)):
@@ -93,7 +99,7 @@ def estimate_tank_empty_time(
         duration = (_utc(interval.end_utc) - _utc(interval.start_utc)).total_seconds()
         if duration <= 0:
             continue
-        boundaries = sorted({start, end, *(_utc(event.effective_at_utc) for event in events if start < _utc(event.effective_at_utc) < end), *(_transfer_time(item) for item in transfers if start <= _transfer_time(item) < end)})
+        boundaries = sorted({start, end, *(_utc(event.effective_at_utc) for event in events if start < _utc(event.effective_at_utc) < end), *(_transfer_time(item) for item in transfers if start <= _transfer_time(item) < end), *(_utc(datetime.fromisoformat(item.effective_at_utc)) for item in receipts if start <= _utc(datetime.fromisoformat(item.effective_at_utc)) < end)})
         for segment_start, segment_end in zip(boundaries, boundaries[1:]):
             for transfer in transfers:
                 if transfer.id in applied_transfers or _transfer_time(transfer) > segment_start:
@@ -103,6 +109,10 @@ def estimate_tank_empty_time(
                 elif transfer.to_tank_id == tank_id:
                     mass += transfer.quantity_mt
                 applied_transfers.add(transfer.id)
+            for receipt in receipts:
+                receipt_time = _utc(datetime.fromisoformat(receipt.effective_at_utc))
+                if receipt.tank_id == tank_id and receipt_time == segment_start:
+                    mass += receipt.quantity_mt
             if mass <= 0:
                 return segment_start, "ESTIMATED", None
             active = [item for item in _state_at(events, segment_start) if tank_fuels.get(item) == fuel_type]
