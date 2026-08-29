@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from fuel_consumption_calculator.calculations.bunker_projection_engine import (
     ScheduleBunkerROBProjection,
     project_schedule_rob_with_bunkers,
@@ -13,6 +15,7 @@ from fuel_consumption_calculator.domain.bunker import (
     BunkerPlanStatus,
     BunkerIncomingFuelSnapshot,
     BunkerReceivingTankPlan,
+    ReceivingTankArrivalProjection,
     PlannedBunker,
     complete_bunker_plan,
 )
@@ -20,11 +23,13 @@ from fuel_consumption_calculator.domain.consumption import FUEL_TYPES
 from fuel_consumption_calculator.domain.rob import StartingROB
 from fuel_consumption_calculator.domain.schedule import ScheduleEvent
 from fuel_consumption_calculator.repositories.bunker_repository import BunkerRepository
+from fuel_consumption_calculator.services.tank_forecast_service import TankForecastService
 
 
 class BunkerService:
-    def __init__(self, repository: BunkerRepository) -> None:
+    def __init__(self, repository: BunkerRepository, tank_forecast_service: TankForecastService | None = None) -> None:
         self._repository = repository
+        self._tank_forecast_service = tank_forecast_service
 
     def build_plan(
         self,
@@ -38,7 +43,7 @@ class BunkerService:
             vessel_id=vessel_id,
             sequence_number=event.sequence_number,
             port_snapshot=event.port,
-            arrival_snapshot=event.arrival_at.isoformat(timespec="minutes"),
+            arrival_snapshot=event.effective_arrival_at.isoformat(timespec="minutes"),
             quantities=quantities,
         )
         self._validate_plan(plan)
@@ -162,14 +167,50 @@ class BunkerService:
         if not rows:
             return None
         tanks = {tank.id: tank for tank, _latest in self._repository.list_eligible_receiving_tanks(plan.vessel_id)}
-        if any(row.tank_id not in tanks or row.projected_arrival_volume_m3 is None for row in rows):
+        projections = self.resolve_receiving_tank_arrivals(plan, rows)
+        if any(row.tank_id not in tanks or projections[row.tank_id].projected_arrival_volume_m3 is None for row in rows):
             return None
         incoming = self._repository.load_incoming_fuel_snapshot(plan)
-        return calculate_tank_max_lift([SelectedReceivingTank(row.tank_id, tanks[row.tank_id].capacity_m3, row.projected_arrival_volume_m3, row.target_fill_percent) for row in rows], incoming_density_15_kg_m3=incoming.density_15_kg_m3, incoming_manual_vcf=incoming.manual_vcf)
+        return calculate_tank_max_lift([SelectedReceivingTank(row.tank_id, tanks[row.tank_id].capacity_m3, projections[row.tank_id].projected_arrival_volume_m3, row.target_fill_percent) for row in rows], incoming_density_15_kg_m3=incoming.density_15_kg_m3, incoming_manual_vcf=incoming.manual_vcf)
+
+    def resolve_receiving_tank_arrivals(
+        self, plan: PlannedBunker, rows: list[BunkerReceivingTankPlan] | None = None,
+    ) -> dict[int, ReceivingTankArrivalProjection]:
+        """Resolve manual overrides before advisory forecasts at bunker arrival UTC."""
+        rows = rows if rows is not None else self.list_receiving_tank_plan(plan)
+        result: dict[int, ReceivingTankArrivalProjection] = {}
+        automatic = []
+        for row in rows:
+            if row.projected_arrival_volume_m3 is not None:
+                result[row.tank_id] = ReceivingTankArrivalProjection(row.tank_id, row.projected_arrival_volume_m3, "MANUAL")
+            else:
+                automatic.append(row)
+        if not automatic:
+            return result
+        if self._tank_forecast_service is None:
+            return {**result, **{row.tank_id: ReceivingTankArrivalProjection(row.tank_id, None, "UNAVAILABLE", "Tank forecast service is unavailable.") for row in automatic}}
+        target_utc = _arrival_utc(plan.arrival_snapshot)
+        if target_utc is None:
+            return {**result, **{row.tank_id: ReceivingTankArrivalProjection(row.tank_id, None, "UNAVAILABLE", "Bunker arrival time is unavailable.") for row in automatic}}
+        forecasts = {forecast.tank_id: forecast for forecast in self._tank_forecast_service.predict_tank_rob_at(plan.vessel_id, target_utc)}
+        for row in automatic:
+            forecast = forecasts.get(row.tank_id)
+            if forecast is None or forecast.predicted_mass_mt is None:
+                result[row.tank_id] = ReceivingTankArrivalProjection(row.tank_id, None, "UNAVAILABLE", forecast.issue if forecast else "Tank forecast could not be established.")
+                continue
+            anchor = self._tank_forecast_service.anchor_sounding_at(row.tank_id, target_utc)
+            if anchor is None or anchor.calculated_volume_m3 is None:
+                result[row.tank_id] = ReceivingTankArrivalProjection(row.tank_id, None, "UNAVAILABLE", "Forecast anchor has no observed physical volume.")
+            elif anchor.calculated_mass_mt is None or anchor.calculated_mass_mt <= 0:
+                result[row.tank_id] = ReceivingTankArrivalProjection(row.tank_id, None, "UNAVAILABLE", "Forecast anchor mass is invalid for volume conversion.")
+            elif forecast.predicted_mass_mt <= 0:
+                result[row.tank_id] = ReceivingTankArrivalProjection(row.tank_id, 0.0, "ESTIMATED", "Tank predicted depleted before arrival.")
+            else:
+                result[row.tank_id] = ReceivingTankArrivalProjection(row.tank_id, forecast.predicted_mass_mt * anchor.calculated_volume_m3 / anchor.calculated_mass_mt, "ESTIMATED", forecast.issue)
+        return result
 
     def has_receiving_tank_plan(self, plan: PlannedBunker) -> bool:
         return self._repository.has_receiving_tank_plan(plan)
-
     def list_plan_statuses(self, vessel_id: int, current_events: list[ScheduleEvent]) -> list[BunkerPlanStatus]:
         current_by_sequence = {
             event.sequence_number: event
@@ -178,7 +219,7 @@ class BunkerService:
         statuses: list[BunkerPlanStatus] = []
         for plan in self._repository.list_plans(vessel_id):
             current_event = current_by_sequence.get(plan.sequence_number)
-            current_arrival_snapshot = current_event.arrival_at.isoformat(timespec="minutes") if current_event else None
+            current_arrival_snapshot = current_event.effective_arrival_at.isoformat(timespec="minutes") if current_event else None
             if (
                 current_event is not None
                 and current_event.port == plan.port_snapshot
@@ -247,3 +288,13 @@ class BunkerService:
                 and round(quantity.quantity_mt, 2) > round(limit.max_lift_mt, 2)
             ):
                 raise ValueError(f"Planned {quantity.fuel_type} lift exceeds calculated Max Lift.")
+
+
+def _arrival_utc(arrival_snapshot: str | None) -> datetime | None:
+    if not arrival_snapshot:
+        return None
+    try:
+        value = datetime.fromisoformat(arrival_snapshot)
+    except ValueError:
+        return None
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)

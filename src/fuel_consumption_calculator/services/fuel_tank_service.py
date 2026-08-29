@@ -180,6 +180,13 @@ class FuelTankService:
     def get_latest_sounding(self, tank_id: int) -> TankSounding | None:
         return self._repository.get_latest_sounding(tank_id)
 
+    def get_latest_sounding_at_or_before(self, tank_id: int, target_utc: datetime) -> TankSounding | None:
+        if target_utc.tzinfo is None:
+            target_utc = target_utc.replace(tzinfo=timezone.utc)
+        return self._repository.get_latest_sounding_at_or_before(
+            tank_id, target_utc.astimezone(timezone.utc).isoformat(timespec="seconds")
+        )
+
     def save_sounding_survey(self, vessel_id: int, effective_at_utc: datetime, trim_m: float, remarks: str | None, rows: list[dict]) -> list[TankSounding]:
         """Validate every included row before atomically persisting one survey."""
         self._validate_number(trim_m, "Trim")
@@ -331,7 +338,7 @@ class FuelTankService:
         transfers = self.list_internal_fuel_transfers(vessel_id)
         forecasts: list[TankForecast] = []
         for tank in tanks:
-            anchor = self._repository.get_latest_sounding_at_or_before(tank.id, target_utc.astimezone(timezone.utc).isoformat(timespec="seconds"))
+            anchor = self.get_latest_sounding_at_or_before(tank.id, target_utc)
             fuel = tank_fuels[tank.id]
             if anchor is None:
                 forecasts.append(TankForecast(tank.id, fuel, None, None, None, None, "No actual tank sounding available."))

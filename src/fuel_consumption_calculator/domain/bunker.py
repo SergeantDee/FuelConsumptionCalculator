@@ -74,6 +74,15 @@ class BunkerReceivingTankPlan:
 
 
 @dataclass(frozen=True, slots=True)
+class ReceivingTankArrivalProjection:
+    """Advisory physical arrival estimate used only for receiving capacity."""
+    tank_id: int
+    projected_arrival_volume_m3: float | None
+    source: str
+    issue: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class BunkerIncomingFuelSnapshot:
     fuel_batch_id: int | None
     density_15_kg_m3: float | None

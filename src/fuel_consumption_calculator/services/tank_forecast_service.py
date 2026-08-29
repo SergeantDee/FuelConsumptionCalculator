@@ -10,6 +10,7 @@ from fuel_consumption_calculator.services.consumption_service import Consumption
 from fuel_consumption_calculator.services.fuel_tank_service import FuelTankService
 from fuel_consumption_calculator.services.schedule_service import ScheduleService
 from fuel_consumption_calculator.services.voyage_service import VoyageService
+from fuel_consumption_calculator.domain.fuel_tank import TankSounding
 
 
 class TankForecastService:
@@ -21,6 +22,10 @@ class TankForecastService:
     def predict_tank_rob_at(self, vessel_id: int, target_utc: datetime) -> list[TankForecast]:
         intervals = self._future_intervals(vessel_id)
         return self._tanks.predict_tank_rob_at(vessel_id, target_utc, intervals)
+
+    def anchor_sounding_at(self, tank_id: int, target_utc: datetime) -> TankSounding | None:
+        """Return the exact historical sounding anchor used by arrival forecasting."""
+        return self._tanks.get_latest_sounding_at_or_before(tank_id, target_utc)
 
     def predict_tank_empty_times(self, vessel_id: int, forecast_start_utc: datetime) -> list[TankEmptyForecast]:
         intervals = self._future_intervals(vessel_id)

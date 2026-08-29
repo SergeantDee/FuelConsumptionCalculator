@@ -44,9 +44,9 @@ def build_main_window(paths: AppPaths) -> MainWindow:
     voyage_service = VoyageService(VoyageRepository(database))
     consumption_service = ConsumptionService(ConsumptionRepository(database), voyage_service)
     rob_service = ROBService(ROBRepository(database))
-    bunker_service = BunkerService(BunkerRepository(database))
     fuel_tank_service = FuelTankService(FuelTankRepository(database))
     tank_forecast_service = TankForecastService(fuel_tank_service, schedule_service, consumption_service, voyage_service)
+    bunker_service = BunkerService(BunkerRepository(database), tank_forecast_service)
     scraper_service = ScraperService()
     return MainWindow(vessel_service, schedule_service, scraper_service, consumption_service, rob_service, bunker_service, fuel_tank_service, voyage_service, settings_service, tank_forecast_service)
 
