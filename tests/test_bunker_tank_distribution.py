@@ -19,8 +19,8 @@ def setup(tmp_path):
     first = tanks.save_tank(FuelTank(None, 1, "1P", "BUNKER", 500, "SOUNDING", True, current_fuel_batch_id=batch.id))
     second = tanks.save_tank(FuelTank(None, 1, "2P", "BUNKER", 500, "SOUNDING", True, current_fuel_batch_id=batch.id))
     event = ScheduleEvent(1, 1, 1, "SG", "PORT", datetime(2026, 1, 2, tzinfo=timezone.utc), None, "x", "x", None, "x", "x")
-    service = BunkerService(BunkerRepository(database)); plan = service.build_plan(vessel_id=1, event=event, quantities={"ULSFO": 0, "VLSFO": 300, "MDO": 0}); service.save_plan(plan); service.confirm_plan(plan)
-    service.save_receiving_tank_plan(plan, [BunkerReceivingTankPlan(first.id, 0, 90), BunkerReceivingTankPlan(second.id, 0, 90)], batch.id, .985)
+    service = BunkerService(BunkerRepository(database)); plan = service.build_plan(vessel_id=1, event=event, quantities={"ULSFO": 0, "VLSFO": 300, "MDO": 0}); service.save_plan(plan)
+    service.save_receiving_tank_plan(plan, [BunkerReceivingTankPlan(first.id, 0, 90), BunkerReceivingTankPlan(second.id, 0, 90)], batch.id, .985); service.confirm_plan(plan)
     return service, plan, first, second
 
 
@@ -30,6 +30,13 @@ def test_complete_distribution_conserves_confirmed_aggregate(setup):
     receipts = service.list_tank_receipts(plan)
     assert sum(item.quantity_mt for item in receipts) == pytest.approx(plan.quantity_for("VLSFO"))
     assert {item.tank_id for item in receipts} == {first.id, second.id}
+
+
+def test_confirmed_receipt_forecast_tolerates_displayed_decimal_total(setup):
+    service, plan, first, second = setup
+    service.save_tank_receipts(plan, [BunkerTankReceipt(first.id, "VLSFO", 100.1, ""), BunkerTankReceipt(second.id, "VLSFO", 199.9, "")])
+    repository = FuelTankRepository(service._repository._database)
+    assert sum(item.quantity_mt for item in repository.list_confirmed_complete_bunker_receipts(1)) == pytest.approx(300)
 
 
 @pytest.mark.parametrize("amount", [299, 301])

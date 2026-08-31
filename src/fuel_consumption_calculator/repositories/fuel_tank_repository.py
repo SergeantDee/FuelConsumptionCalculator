@@ -219,10 +219,10 @@ class FuelTankRepository:
                   AND p.sequence_number=r.sequence_number AND p.port_snapshot=r.port_snapshot
                   AND p.arrival_snapshot=r.arrival_snapshot AND p.fuel_type=r.fuel_type
                 WHERE r.vessel_id=? AND p.status='CONFIRMED'
-                  AND (SELECT COALESCE(SUM(r2.quantity_mt), 0) FROM bunker_tank_receipts r2
-                       WHERE r2.vessel_id=r.vessel_id AND r2.sequence_number=r.sequence_number
-                         AND r2.port_snapshot=r.port_snapshot AND r2.arrival_snapshot=r.arrival_snapshot
-                         AND r2.fuel_type=r.fuel_type) = p.quantity_mt
+                  AND ABS((SELECT COALESCE(SUM(r2.quantity_mt), 0) FROM bunker_tank_receipts r2
+                           WHERE r2.vessel_id=r.vessel_id AND r2.sequence_number=r.sequence_number
+                             AND r2.port_snapshot=r.port_snapshot AND r2.arrival_snapshot=r.arrival_snapshot
+                             AND r2.fuel_type=r.fuel_type) - p.quantity_mt) <= 0.001
                 ORDER BY r.effective_at_utc, r.id
             """, (vessel_id,)).fetchall()
         return [BunkerTankReceipt(row["tank_id"], row["fuel_type"], float(row["quantity_mt"]), row["effective_at_utc"]) for row in rows]
