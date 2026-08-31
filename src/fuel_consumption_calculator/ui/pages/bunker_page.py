@@ -42,6 +42,7 @@ from fuel_consumption_calculator.services.schedule_service import ScheduleServic
 from fuel_consumption_calculator.services.vessel_service import VesselService
 from fuel_consumption_calculator.services.voyage_service import VoyageService
 from fuel_consumption_calculator.ui.widgets.actual_rob_dialog import ActualROBDialog
+from fuel_consumption_calculator.ui.widgets.fuel_display import FuelBadge, FuelTextDelegate, format_fuel_html
 from fuel_consumption_calculator.ui.widgets.page_header import PageHeader
 
 
@@ -184,10 +185,10 @@ class ReceivingTanksDialog(QDialog):
     def __init__(self, service: BunkerService, plan, default_target: float, parent=None):
         super().__init__(parent); self._service, self._plan = service, plan; self.setWindowTitle("Receiving Tanks"); self.resize(900, 520)
         layout = QVBoxLayout(self); layout.addWidget(QLabel("Projected arrival uses the bunker event arrival UTC. Typing a value creates a manual override."))
-        self.table = QTableWidget(0, 8); self.table.setHorizontalHeaderLabels(("Selected", "Tank", "Capacity m3", "Latest Actual m3", "Projected Arrival m3", "Source", "Target Fill %", "Available m3")); self.table.horizontalHeader().setStretchLastSection(True); layout.addWidget(self.table)
+        self.table = QTableWidget(0, 8); self.table.setHorizontalHeaderLabels(("Select", "Tank", "Capacity m3", "Latest Actual m3", "Projected Arrival m3", "Source", "Target Fill %", "Available m3")); self.table.verticalHeader().setVisible(False); self.table.verticalHeader().setDefaultSectionSize(32); self.table.horizontalHeader().setStretchLastSection(True); layout.addWidget(self.table)
         incoming = QFormLayout(); self.batch_input = QComboBox(); self.batch_input.addItem("No incoming batch", None)
         for batch in service.list_fuel_batches(plan.vessel_id): self.batch_input.addItem(f"{batch.batch_name} ({batch.fuel_type})", batch.id)
-        self.fuel_label = QLabel("--"); self.density_label = QLabel("--"); self.vcf_input = QLineEdit(); self.vcf_input.setPlaceholderText("Manual VCF, e.g. 0.98500")
+        self.fuel_label = FuelBadge(None); self.density_label = QLabel("--"); self.vcf_input = QLineEdit(); self.vcf_input.setPlaceholderText("Manual VCF, e.g. 0.98500")
         incoming.addRow("Incoming Batch", self.batch_input); incoming.addRow("Fuel Type", self.fuel_label); incoming.addRow("Density @15 C", self.density_label); incoming.addRow("Manual VCF", self.vcf_input); layout.addLayout(incoming); layout.addWidget(QLabel("VCF is entered manually. Automatic ASTM/API calculation is not enabled."))
         self.summary_label = QLabel("Selected Tanks: 0 | Available Volume: -- | Tank-Based Max Lift: --"); layout.addWidget(self.summary_label)
         actions = QHBoxLayout(); self.use_latest_button = QPushButton("Use Latest Actual"); self.use_latest_button.clicked.connect(self._use_latest); actions.addWidget(self.use_latest_button); self.use_estimate_button = QPushButton("Use Estimate"); self.use_estimate_button.clicked.connect(self._use_estimate); actions.addWidget(self.use_estimate_button); actions.addStretch(); layout.addLayout(actions)
@@ -202,7 +203,7 @@ class ReceivingTanksDialog(QDialog):
         self.batch_input.currentIndexChanged.connect(self._batch_changed); self._batch_changed()
 
     def _batch_changed(self):
-        batch_id=self.batch_input.currentData(); batch=next((b for b in self._service.list_fuel_batches(self._plan.vessel_id) if b.id==batch_id),None); self.fuel_label.setText(batch.fuel_type if batch else "--"); self.density_label.setText(f"{batch.density_15_kg_m3:.3f} kg/m3" if batch else "--")
+        batch_id=self.batch_input.currentData(); batch=next((b for b in self._service.list_fuel_batches(self._plan.vessel_id) if b.id==batch_id),None); self.fuel_label.set_fuel_type(batch.fuel_type if batch else None); self.density_label.setText(f"{batch.density_15_kg_m3:.3f} kg/m3" if batch else "--")
 
     def _use_latest(self):
         row=self.table.currentRow()
@@ -231,7 +232,7 @@ class ReceivingTanksDialog(QDialog):
 class BunkerDistributionDialog(QDialog):
     def __init__(self, service: BunkerService, plan, parent=None):
         super().__init__(parent); self._service, self._plan = service, plan; self.setWindowTitle("Bunker Distribution"); self.resize(620, 360)
-        layout = QVBoxLayout(self); self.table = QTableWidget(0, 3); self.table.setHorizontalHeaderLabels(("Tank", "Available Capacity MT", "Receipt MT")); layout.addWidget(self.table)
+        layout = QVBoxLayout(self); self.table = QTableWidget(0, 3); self.table.setHorizontalHeaderLabels(("Tank", "Available MT", "Receipt MT")); self.table.verticalHeader().setVisible(False); self.table.horizontalHeader().setStretchLastSection(True); layout.addWidget(self.table)
         incoming = service.load_incoming_fuel_snapshot(plan); batch = next((item for item in service.list_fuel_batches(plan.vessel_id) if item.id == incoming.fuel_batch_id), None)
         self._fuel = batch.fuel_type if batch else None; self._total = plan.quantity_for(self._fuel) if self._fuel else 0.0
         rows = service.list_receiving_tank_plan(plan); tanks = {tank.id: tank for tank, _ in service.list_eligible_receiving_tanks(plan.vessel_id)}; projections = service.resolve_receiving_tank_arrivals(plan); saved = {item.tank_id: item for item in service.list_tank_receipts(plan)}
@@ -242,10 +243,10 @@ class BunkerDistributionDialog(QDialog):
                 from fuel_consumption_calculator.calculations.tank_max_lift import SelectedReceivingTank, calculate_tank_max_lift
                 capacity = calculate_tank_max_lift([SelectedReceivingTank(tank.id, tank.capacity_m3, projection.projected_arrival_volume_m3, row.target_fill_percent)], incoming_density_15_kg_m3=incoming.density_15_kg_m3, incoming_manual_vcf=incoming.manual_vcf).total_max_lift_mt
             self.table.insertRow(index); item=QTableWidgetItem(tank.name if tank else str(row.tank_id)); item.setData(Qt.ItemDataRole.UserRole, row.tank_id); self.table.setItem(index,0,item); self.table.setItem(index,1,QTableWidgetItem("--" if capacity is None else f"{capacity:.3f}")); value=QDoubleSpinBox(); value.setRange(0, capacity if capacity is not None else 999999.99); value.setDecimals(3); value.setValue(saved[row.tank_id].quantity_mt if row.tank_id in saved else 0); value.valueChanged.connect(self._update); self.table.setCellWidget(index,2,value)
-        self.summary=QLabel(); layout.addWidget(self.summary); buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Save|QDialogButtonBox.StandardButton.Cancel); buttons.accepted.connect(self._save); buttons.rejected.connect(self.reject); layout.addWidget(buttons); self._update()
+        self.summary=QLabel(); self.summary.setObjectName("fieldLabel"); layout.addWidget(self.summary); buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Save|QDialogButtonBox.StandardButton.Cancel); buttons.accepted.connect(self._save); buttons.rejected.connect(self.reject); layout.addWidget(buttons); self._update()
 
     def _update(self):
-        allocated=sum(self.table.cellWidget(row,2).value() for row in range(self.table.rowCount())); self.summary.setText(f"Aggregate Bunker: {self._total:.3f} MT   Allocated: {allocated:.3f} MT   Remaining: {self._total-allocated:.3f} MT")
+        allocated=sum(self.table.cellWidget(row,2).value() for row in range(self.table.rowCount())); remaining=self._total-allocated; self.summary.setText(f"Aggregate Bunker: {self._total:.2f} MT   |   Allocated: {allocated:.2f} MT   |   Remaining: {remaining:.2f} MT")
 
     def _save(self):
         if self._fuel is None: QMessageBox.warning(self,"Incoming fuel required","Select an incoming fuel batch before distributing bunker."); return
@@ -369,8 +370,7 @@ class BunkerPage(QWidget):
             card.setObjectName("panel")
             card_grid = QGridLayout(card)
             card_grid.setContentsMargins(14, 12, 14, 12)
-            title = QLabel(fuel_type)
-            title.setObjectName("sectionTitle")
+            title = FuelBadge(fuel_type)
             card_grid.addWidget(title, 0, 0, 1, 2)
             capacity_label = QLabel("0.00 MT")
             target_label = QLabel("90.00 %")
@@ -439,6 +439,8 @@ class BunkerPage(QWidget):
         self.projection_model = PortProjectionTableModel()
         self.projection_table = QTableView()
         self.projection_table.setModel(self.projection_model)
+        self._fuel_text_delegate = FuelTextDelegate(self.projection_table)
+        for column in (3, 5, 6, 8): self.projection_table.setItemDelegateForColumn(column, self._fuel_text_delegate)
         self.projection_table.verticalHeader().setDefaultSectionSize(32)
         self.projection_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.projection_table.horizontalHeader().setStretchLastSection(True)

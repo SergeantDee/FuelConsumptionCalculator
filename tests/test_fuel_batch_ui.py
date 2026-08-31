@@ -101,14 +101,14 @@ def test_tank_card_fuel_indicator_and_gauge_color(fuel_type, services, qapp):
     _vessel_service, _tank_service, _vessel, tank = services
     card = TankCard(tank, fuel_type, "B26-08", None, "deep")
 
-    assert card.findChild(QLabel, "fuelIndicator").text() == f"● {fuel_type}"
+    assert card.findChild(QLabel, "fuelIndicator").text() == fuel_type
     assert card.findChild(TankLevelWidget)._color.name() == FUEL_COLORS[fuel_type]
 
 
 def test_unassigned_card_and_tank_details_show_no_mass_and_batch_data(services, qapp):
     vessel_service, tank_service, vessel, tank = services
     unassigned = TankCard(tank, None, None, None, "deep")
-    assert unassigned.findChild(QLabel, "fuelIndicator").text() == "FUEL --"
+    assert unassigned.findChild(QLabel, "fuelIndicator").text() == "UNKNOWN"
     assert "MT --" in {label.text() for label in unassigned.findChildren(QLabel)}
 
     batch = _batch(tank_service, vessel.id, "VLSFO", "B26-08", 950)

@@ -5,22 +5,56 @@ from html import escape
 from PySide6.QtCore import QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QPainter, QTextDocument, QAbstractTextDocumentLayout
 from PySide6.QtWidgets import (
+    QLabel,
     QStyle,
     QStyledItemDelegate,
 )
 
 
 FUEL_COLORS = {
-    "ULSFO": "#7dd3fc",
-    "VLSFO": "#c084fc",
-    "MDO": "#facc15",
+    "ULSFO": "#8dc6de",
+    "VLSFO": "#ad9aca",
+    "MDO": "#d7a66d",
+}
+
+FUEL_BADGE_BACKGROUNDS = {
+    "ULSFO": "#294858",
+    "VLSFO": "#413753",
+    "MDO": "#513d29",
 }
 
 FUEL_ORDER = ("ULSFO", "VLSFO", "MDO")
 
 
 def fuel_color(fuel_type: str) -> str:
-    return FUEL_COLORS.get(str(fuel_type).upper(), "#eef7ff")
+    return FUEL_COLORS.get(str(fuel_type).upper(), "#aab9c3")
+
+
+def fuel_badge_html(fuel_type: str) -> str:
+    """Compact shared fuel chip suitable for labels and dense table delegates."""
+    fuel = str(fuel_type).upper()
+    background = FUEL_BADGE_BACKGROUNDS.get(fuel, "#34434d")
+    foreground = FUEL_COLORS.get(fuel, "#c2cdd3")
+    return f'<span style="background-color:{background}; color:{foreground}; font-weight:700; padding:2px 6px;">{escape(fuel)}</span>'
+
+
+class FuelBadge(QLabel):
+    """Small, readable badge for a single fuel identity."""
+    def __init__(self, fuel_type: str | None, parent=None) -> None:
+        super().__init__(parent)
+        self.set_fuel_type(fuel_type)
+
+    def set_fuel_type(self, fuel_type: str | None) -> None:
+        self.setText(str(fuel_type or "UNKNOWN").upper())
+        fuel = self.text()
+        self.setObjectName("fuelBadge")
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setStyleSheet(
+            "QLabel#fuelBadge {"
+            f" background: {FUEL_BADGE_BACKGROUNDS.get(fuel, '#34434d')};"
+            f" color: {FUEL_COLORS.get(fuel, '#c2cdd3')};"
+            " border-radius: 7px; padding: 2px 6px; font-size: 8pt; font-weight: 700; }"
+        )
 
 
 def format_fuel_plain(
@@ -75,11 +109,8 @@ def format_fuel_html(
         if show_unit and quantity != "-":
             quantity += " MT"
 
-        color = fuel_color(fuel_type)
-
         parts.append(
-            f'<span style="color:{color}; font-weight:700;">'
-            f'{escape(fuel_type)}</span>'
+            fuel_badge_html(fuel_type) +
             f'&nbsp;<span style="color:#eef7ff;">{escape(quantity)}</span>'
         )
 
@@ -129,10 +160,11 @@ class FuelTextDelegate(QStyledItemDelegate):
 
         for fuel_type in FUEL_ORDER:
             color = "#ffffff" if selected else fuel_color(fuel_type)
+            background = "transparent" if selected else FUEL_BADGE_BACKGROUNDS.get(fuel_type, "#34434d")
             html_text = html_text.replace(
                 fuel_type,
                 (
-                    f'<span style="color:{color}; font-weight:700;">'
+                    f'<span style="background-color:{background}; color:{color}; font-weight:700;">'
                     f'{fuel_type}</span>'
                 ),
             )

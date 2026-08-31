@@ -36,6 +36,7 @@ from fuel_consumption_calculator.services.schedule_service import ScheduleServic
 from fuel_consumption_calculator.services.vessel_service import VesselService
 from fuel_consumption_calculator.services.voyage_service import VoyageService
 from fuel_consumption_calculator.ui.widgets.page_header import PageHeader
+from fuel_consumption_calculator.ui.widgets.fuel_display import FuelTextDelegate, format_fuel_html
 
 
 class ConsumptionProjectionTableModel(QAbstractTableModel):
@@ -285,6 +286,9 @@ class ConsumptionPage(QWidget):
         self.changeover_table.setHorizontalHeaderLabels(["ID", "Machinery", "From", "To", "Planned UTC", "Actual UTC", "Status"])
         self.changeover_table.verticalHeader().setDefaultSectionSize(32)
         self.changeover_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self._changeover_fuel_delegate = FuelTextDelegate(self.changeover_table)
+        self.changeover_table.setItemDelegateForColumn(2, self._changeover_fuel_delegate)
+        self.changeover_table.setItemDelegateForColumn(3, self._changeover_fuel_delegate)
         changeover_layout.addWidget(self.changeover_table)
         self.tabs.addTab(changeover_tab, "Fuel Changeovers")
 
@@ -425,7 +429,8 @@ class ConsumptionPage(QWidget):
         self.projection_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         projection_layout.addWidget(self.projection_table)
 
-        self.totals_label = QLabel("ULSFO Total: 0.00 MT   |   VLSFO Total: 0.00 MT   |   MDO Total: 0.00 MT")
+        self.totals_label = QLabel(format_fuel_html({"ULSFO": 0.0, "VLSFO": 0.0, "MDO": 0.0}, show_unit=True, prefix="Projected total: "))
+        self.totals_label.setTextFormat(Qt.TextFormat.RichText)
         self.totals_label.setObjectName("fieldLabel")
         projection_layout.addWidget(self.totals_label)
         projection_tab_layout.addWidget(projection, 1)
@@ -479,21 +484,11 @@ class ConsumptionPage(QWidget):
             if any(row.consumed_mt.get(fuel) is None for fuel in FUEL_TYPES):
                 issues[row.event_id] = "Consumption incomplete"
         self.projection_table_model.set_rows(result.rows, issues)
-        self.totals_label.setText(
-            "ULSFO Total: "
-            f"{_format_mt(result.totals_mt['ULSFO'])}   |   "
-            "VLSFO Total: "
-            f"{_format_mt(result.totals_mt['VLSFO'])}   |   "
-            "MDO Total: "
-            f"{_format_mt(result.totals_mt['MDO'])}"
-        )
+        self.totals_label.setText(format_fuel_html(result.totals_mt, show_unit=True, prefix="Projected total: "))
 
     def _clear_projection(self, message: str) -> None:
         self.projection_table_model.set_rows([])
-        self.totals_label.setText(
-            "ULSFO Total: 0.00 MT   |   VLSFO Total: 0.00 MT   |   MDO Total: 0.00 MT"
-            f"   |   {message}"
-        )
+        self.totals_label.setText(format_fuel_html({"ULSFO": 0.0, "VLSFO": 0.0, "MDO": 0.0}, show_unit=True, prefix=f"{message}  "))
 
     def _set_changeover_inputs_enabled(self, enabled: bool) -> None:
         for widget in [

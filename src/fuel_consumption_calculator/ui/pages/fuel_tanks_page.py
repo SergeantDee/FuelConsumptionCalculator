@@ -25,10 +25,10 @@ from fuel_consumption_calculator.services.tank_forecast_service import TankForec
 from fuel_consumption_calculator.domain.voyage import ActualROBObservation
 from fuel_consumption_calculator.services.vessel_service import VesselService
 from fuel_consumption_calculator.ui.widgets.page_header import PageHeader
+from fuel_consumption_calculator.ui.widgets.fuel_display import FUEL_COLORS, FuelBadge, fuel_color
 from fuel_consumption_calculator.ui.pages.fuel_tank_operational_dialogs import CalibrationDialog, UpdateTankROBDialog
 
 
-FUEL_COLORS = {"ULSFO": "#7ec8f5", "VLSFO": "#b293e8", "MDO": "#f1c778"}
 NEUTRAL_LEVEL_COLOR = "#477a91"
 MDO_SLOTS = ("MDO_1_SERV", "MDO_2_SERV", "MDO_1_STOR", "MDO_2_STOR")
 SUPPORT_SLOTS = ("ULSFO_SETT", "ULSFO_SERV", "HFO_SERV", "HFO_SETT", "OVFLW_ER")
@@ -50,7 +50,7 @@ class TankLevelWidget(QWidget):
         super().__init__(parent)
         self._unknown = fill_percent is None
         self._fill_percent = 0.0 if fill_percent is None else max(0.0, min(100.0, fill_percent))
-        self._color = QColor(FUEL_COLORS.get(fuel_type, NEUTRAL_LEVEL_COLOR))
+        self._color = QColor(fuel_color(fuel_type or "UNKNOWN") if fuel_type else NEUTRAL_LEVEL_COLOR)
         self.setFixedSize(width, height)
 
     def paintEvent(self, event) -> None:
@@ -102,21 +102,15 @@ class TankCard(QFrame):
         name = QLabel(_short_display_name(tank.name))
         name.setStyleSheet("font-size: 10pt; font-weight: 700;" if kind in {"deep", "overflow"} else "font-size: 8pt; font-weight: 700;")
         details.addWidget(name)
-        marker = QLabel(f"● {fuel_type}" if fuel_type else "FUEL --")
+        marker = FuelBadge(fuel_type)
         marker.setObjectName("fuelIndicator")
-        marker.setStyleSheet(f"color: {FUEL_COLORS.get(fuel_type, '#8caabd')}; font-weight: 700; font-size: 7pt;")
         details.addWidget(marker)
-        if batch_name and (kind in {"deep", "overflow"} or len(batch_name) <= 8):
-            batch = _muted(_short_batch_name(batch_name))
-            batch.setStyleSheet("font-size: 7pt;")
-            batch.setToolTip(batch_name)
-            details.addWidget(batch)
         if latest is None:
             details.addWidget(_card_value("MT --"))
             details.addWidget(_card_value("ROB --"))
         else:
             if latest.calculated_mass_mt is not None:
-                details.addWidget(_card_value(f"{latest.calculated_mass_mt:.3f} MT"))
+                details.addWidget(_card_value(f"{latest.calculated_mass_mt:.2f} MT"))
             else:
                 details.addWidget(_card_value("MT --"))
             details.addWidget(_card_value(f"{max(0.0, min(100.0, fill_percent or 0.0)):.0f}%"))
@@ -404,9 +398,10 @@ class TankDetailsDialog(QDialog):
         self._service, self._tank_id, self._on_changed = service, tank.id, on_changed
         self.setWindowTitle("Tank Details"); self.setMinimumWidth(380)
         layout = QVBoxLayout(self); layout.addWidget(QLabel(tank.name, objectName="pageTitle")); form = QFormLayout()
-        self.current_fuel_value = QLabel(fuel_type or "UNKNOWN"); self.current_batch_value = QLabel(batch_name or "No batch assigned"); self.density_value = QLabel()
+        self.current_fuel_value = FuelBadge(fuel_type); self.current_batch_value = QLabel(batch_name or "No batch assigned"); self.density_value = QLabel()
         self._refresh_batch_details(notify=False)
-        values = (("Tank Type", tank.tank_type), ("Capacity", f"{tank.capacity_m3:.2f} m3"), ("Actual ROB", f"{latest.calculated_mass_mt:.2f} MT" if latest and latest.calculated_mass_mt is not None else "--"), ("Manual VCF", f"{latest.manual_vcf:.5f}" if latest and latest.manual_vcf is not None else "--"), ("Estimated ROB", f"{predicted_mass_mt:.2f} MT" if predicted_mass_mt is not None else "--"), ("Estimated Empty", estimated_empty), ("Current Fuel", self.current_fuel_value), ("Current Batch", self.current_batch_value))
+        fill = max(0.0, min(100.0, latest.calculated_volume_m3 / tank.capacity_m3 * 100)) if latest else None
+        values = (("Actual ROB", f"{latest.calculated_mass_mt:.2f} MT" if latest and latest.calculated_mass_mt is not None else "--"), ("Estimated ROB", f"{predicted_mass_mt:.2f} MT" if predicted_mass_mt is not None else "--"), ("Estimated Empty", estimated_empty), ("Observed Volume", f"{latest.calculated_volume_m3:.2f} m3" if latest else "--"), ("Fill", f"{fill:.1f}%" if fill is not None else "--"), ("Current Fuel", self.current_fuel_value), ("Fuel Batch", self.current_batch_value), ("Density @15", self.density_value), ("Manual VCF", f"{latest.manual_vcf:.5f}" if latest and latest.manual_vcf is not None else "--"), ("Volume @15", f"{latest.standard_volume_15_m3:.2f} m3" if latest and latest.standard_volume_15_m3 is not None else "--"), ("Measurement / UTC", f"{latest.reading_type} / {_format_utc(latest.effective_at_utc)}" if latest else "--"), ("Tank Type", tank.tank_type), ("Capacity", f"{tank.capacity_m3:.2f} m3"))
         for label, value in values: form.addRow(label, value if isinstance(value, QWidget) else QLabel(value))
         layout.addLayout(form); actions = QHBoxLayout()
         update = QPushButton("Update ROB"); update.clicked.connect(lambda: UpdateTankROBDialog(service, tank, self).exec())
@@ -422,7 +417,7 @@ class TankDetailsDialog(QDialog):
     def _refresh_batch_details(self, notify=True) -> None:
         tank = self._service.get_tank(self._tank_id)
         batch = self._service.get_fuel_batch(tank.current_fuel_batch_id) if tank and tank.current_fuel_batch_id else None
-        self.current_fuel_value.setText(batch.fuel_type if batch else "UNKNOWN"); self.current_batch_value.setText(batch.batch_name if batch else "No batch assigned"); self.density_value.setText(f"{batch.density_15_kg_m3:g} kg/m3" if batch else "--")
+        self.current_fuel_value.set_fuel_type(batch.fuel_type if batch else "UNKNOWN"); self.current_batch_value.setText(batch.batch_name if batch else "No batch assigned"); self.density_value.setText(f"{batch.density_15_kg_m3:g} kg/m3" if batch else "--")
         if notify and self._on_changed is not None: self._on_changed()
 
 
