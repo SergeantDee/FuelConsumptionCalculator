@@ -9,7 +9,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QScrollArea
 
 from fuel_consumption_calculator.app import build_main_window
-from fuel_consumption_calculator.domain.fuel_tank import FuelTank, TankCalibrationPoint
+from fuel_consumption_calculator.domain.fuel_tank import FuelBatch, FuelTank, TankCalibrationPoint
 from fuel_consumption_calculator.paths import AppPaths
 from fuel_consumption_calculator.repositories.database import Database
 from fuel_consumption_calculator.repositories.fuel_tank_repository import FuelTankRepository
@@ -44,6 +44,40 @@ def test_tank_sounding_survey_dialog_constructs_with_measurement_types(tmp_path,
     kind = dialog._rows[0][2]
     assert [kind.itemText(index) for index in range(kind.count())] == ["SOUNDING", "ULLAGE"]
     assert kind.currentText() == "ULLAGE"
+
+
+def test_survey_table_keeps_untouched_rows_neutral_and_excluded_rows_non_blocking(tmp_path, qapp):
+    vessel_service, service = _services(tmp_path)
+    vessel = vessel_service.configure_active_vessel("Vessel", "1234567")
+    tank = service.create_tank(FuelTank(None, vessel.id, "Survey Tank", "BUNKER", 100, "SOUNDING"))
+    service.replace_calibration_points(tank.id, [TankCalibrationPoint(None, tank.id, 0, 0, 0, 0)])
+    dialog = TankSoundingSurveyDialog(service, vessel.id)
+    row = dialog._rows[0]
+    assert dialog.table.columnCount() == 10
+    assert row[6].text() == "--"
+    row[1].setChecked(False)
+    assert row[6].text() == "Excluded"
+    assert not row[3].isEnabled()
+
+
+def test_survey_table_calculates_volume_mass_totals_and_completeness(tmp_path, qapp):
+    vessel_service, service = _services(tmp_path)
+    vessel = vessel_service.configure_active_vessel("Vessel", "1234567")
+    batch = service.create_fuel_batch(FuelBatch(None, vessel.id, "TEST-VLSFO", "VLSFO", 978))
+    tank = service.create_tank(FuelTank(None, vessel.id, "Survey Tank", "BUNKER", 100, "SOUNDING", current_fuel_batch_id=batch.id))
+    service.replace_calibration_points(tank.id, [TankCalibrationPoint(None, tank.id, 0, 0, 0, 0), TankCalibrationPoint(None, tank.id, 100, None, 0, 100)])
+    dialog = TankSoundingSurveyDialog(service, vessel.id)
+    row = dialog._rows[0]
+    row[3].setText("50")
+    assert row[8].text() == "50.000"
+    assert row[6].text() == "VCF needed for MT"
+    assert not dialog.use_actual.isEnabled()
+    row[5].setText("0.985")
+    assert row[9].text() != "--"
+    assert row[6].text() == "Ready"
+    assert "VLSFO" in dialog.totals.text()
+    assert dialog.use_actual.isEnabled()
+    assert dialog.save_button.text() == "Save Survey"
 
 
 def test_internal_transfer_action_and_dialog_construct(tmp_path, qapp):
