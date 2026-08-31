@@ -138,6 +138,13 @@ QLabel#sectionTitle {
     font-size: 11pt;
     font-weight: 700;
 }
+QLabel#emptyState {
+    background-color: #102535;
+    border: 1px solid #23475d;
+    border-radius: 7px;
+    color: #a8c1cf;
+    padding: 10px 12px;
+}
 QLabel#mutedText {
     color: #8caabd;
 }
@@ -201,7 +208,7 @@ QTableView::item:hover, QTableWidget::item:hover {
     background-color: #143246;
 }
 QTableView::item, QTableWidget::item {
-    padding: 5px 6px;
+    padding: 4px 6px;
     color: #eef7ff;
 }
 QTableView::item:alternate, QTableWidget::item:alternate {
@@ -220,7 +227,7 @@ QHeaderView::section {
     border: 0;
     border-right: 1px solid #31556b;
     border-bottom: 1px solid #31556b;
-    padding: 8px 7px;
+    padding: 7px;
     font-weight: 600;
 }
 QHeaderView::section:vertical {

@@ -13,6 +13,7 @@ from fuel_consumption_calculator.services.schedule_service import ScheduleServic
 from fuel_consumption_calculator.services.vessel_service import VesselService
 from fuel_consumption_calculator.services.voyage_service import VoyageService
 from fuel_consumption_calculator.ui.widgets.page_header import PageHeader
+from fuel_consumption_calculator.ui.widgets.fuel_display import FuelBadge
 
 
 LOGGER = logging.getLogger(__name__)
@@ -29,8 +30,8 @@ class DashboardPage(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(32, 28, 32, 28)
-        layout.setSpacing(18)
-        layout.addWidget(PageHeader("Fuel Consumption Calculator", "Vessel fuel planning workspace"))
+        layout.setSpacing(12)
+        layout.addWidget(PageHeader("Dashboard", "Current vessel and fuel-planning overview."))
 
         identity = QFrame()
         identity.setObjectName("card")
@@ -49,8 +50,8 @@ class DashboardPage(QWidget):
         fuel_cards = QHBoxLayout()
         fuel_cards.setSpacing(14)
         self._rob_values: dict[str, QLabel] = {}
-        estimated_title = QLabel("ESTIMATED CURRENT ROB")
-        estimated_title.setObjectName("fieldLabel")
+        estimated_title = QLabel("CURRENT ROB")
+        estimated_title.setObjectName("sectionTitle")
         layout.addWidget(estimated_title)
         for fuel in ("ULSFO", "VLSFO", "MDO"):
             fuel_cards.addWidget(self._fuel_card(fuel))
@@ -74,8 +75,8 @@ class DashboardPage(QWidget):
         card = QFrame()
         card.setObjectName("card")
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(18, 16, 18, 16)
-        card_layout.addWidget(self._label(f"{fuel} ROB"))
+        card_layout.setContentsMargins(14, 12, 14, 12)
+        card_layout.addWidget(FuelBadge(fuel))
         value = QLabel("— MT")
         value.setObjectName("cardValue")
         card_layout.addWidget(value)

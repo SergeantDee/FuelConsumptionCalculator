@@ -278,7 +278,7 @@ def test_dashboard_keeps_rob_unavailable_when_elapsed_consumption_cannot_be_calc
     assert page._rob_values["ULSFO"].text() == "- MT"
     assert "Anchor: Projection Starting ROB" in page.rob_metadata.text()
     assert not hasattr(page, "update_rob_button")
-    assert any(label.text() == "ESTIMATED CURRENT ROB" for label in page.findChildren(QLabel))
+    assert any(label.text() == "CURRENT ROB" for label in page.findChildren(QLabel))
 
 
 def test_dashboard_anchor_ignores_future_actual_sounding():
