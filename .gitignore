@@ -11,6 +11,8 @@ logs/*.log*
 dist/
 build/*
 !build/.gitkeep
+beta_build/
+beta_dist/
 .aider*
 
 backups/*
