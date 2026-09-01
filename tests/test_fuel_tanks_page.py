@@ -115,6 +115,22 @@ def test_fuel_tanks_page_handles_no_vessel_and_empty_tanks(tmp_path, qapp):
     assert page.add_tank_button.isEnabled()
 
 
+def test_selected_tank_inspector_uses_existing_tank_data(tmp_path, qapp):
+    vessel_service, tank_service = _services(tmp_path)
+    vessel = vessel_service.configure_active_vessel("Test Vessel", "1234567")
+    batch = tank_service.create_fuel_batch(FuelBatch(None, vessel.id, "VLSFO-1", "VLSFO", 978))
+    tank = tank_service.create_tank(FuelTank(None, vessel.id, "HFO Deep Tank 1 Port", "BUNKER", 100, "SOUNDING", current_fuel_batch_id=batch.id))
+    page = FuelTanksPage(vessel_service, tank_service)
+    page.refresh()
+
+    page._select_tank(tank.id)
+
+    assert page.inspector_name.text() == tank.name
+    assert page.inspector_fuel.text() == "VLSFO"
+    assert page.inspector_values["Current Batch"].text() == "VLSFO-1"
+    assert page.update_rob_button.isEnabled()
+
+
 def test_tank_dialog_add_and_edit_refreshes_cards(tmp_path, qapp):
     vessel_service, tank_service = _services(tmp_path)
     vessel = vessel_service.configure_active_vessel("Test Vessel", "1234567")

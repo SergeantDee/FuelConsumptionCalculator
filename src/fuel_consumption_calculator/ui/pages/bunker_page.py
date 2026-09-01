@@ -294,7 +294,7 @@ class BunkerPage(QWidget):
         self.content = QWidget()
         self.content.setMinimumWidth(1050)
         layout = QVBoxLayout(self.content)
-        layout.setContentsMargins(32, 28, 32, 28)
+        layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(12)
         layout.addWidget(PageHeader("Bunker Planner", "Plan bunker lifts after arrival and before port consumption."))
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QSize, QTimer, Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton, QStackedWidget, QVBoxLayout, QWidget
 
 from fuel_consumption_calculator.config import APPLICATION_NAME, APPLICATION_VERSION
@@ -30,10 +30,12 @@ from fuel_consumption_calculator.ui.widgets.vessel_clock import (
     format_gmt_offset,
     vessel_local_time,
 )
+from fuel_consumption_calculator.ui.widgets.navigation_icons import navigation_icon
 
 
 class MainWindow(QMainWindow):
     PAGE_NAMES = ("Dashboard", "Schedule", "Voyage Planner", "Consumption", "Fuel Oil Tanks", "Bunker Planner", "Settings")
+    PAGE_ICONS = ("dashboard", "schedule", "voyage", "consumption", "tanks", "bunker", "settings")
 
     def __init__(
         self,
@@ -68,17 +70,17 @@ class MainWindow(QMainWindow):
 
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(220)
+        sidebar.setFixedWidth(204)
         sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(16, 24, 16, 18)
-        sidebar_layout.setSpacing(7)
+        sidebar_layout.setContentsMargins(14, 18, 14, 14)
+        sidebar_layout.setSpacing(4)
         brand = QLabel("FUEL PLANNER")
         brand.setObjectName("brandTitle")
         sidebar_layout.addWidget(brand)
         version = QLabel(f"Desktop  •  v{APPLICATION_VERSION}")
         version.setObjectName("brandVersion")
         sidebar_layout.addWidget(version)
-        sidebar_layout.addSpacing(22)
+        sidebar_layout.addSpacing(16)
 
         self.page_stack = QStackedWidget()
         self.dashboard_page = DashboardPage(vessel_service, schedule_service, consumption_service, voyage_service, rob_service)
@@ -105,6 +107,8 @@ class MainWindow(QMainWindow):
             button = QPushButton(name)
             button.setObjectName("navigationButton")
             button.setCheckable(True)
+            button.setIcon(navigation_icon(self.PAGE_ICONS[index], "#B4BEC7"))
+            button.setIconSize(QSize(18, 18))
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.clicked.connect(lambda checked=False, page_index=index: self.select_page(page_index))
             sidebar_layout.addWidget(button)
@@ -117,6 +121,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Ready")
 
         self.settings_page.vessel_saved.connect(self._vessel_configuration_changed)
+        self.dashboard_page.open_voyage_requested.connect(lambda: self.select_page(2))
         self.bunker_page.actual_sounding_saved.connect(self._actual_sounding_saved)
         self.consumption_page.changeover_saved.connect(self._fuel_changeover_saved)
         self.settings_page.vessel_time_offset_changed.connect(self._set_vessel_time_offset)
@@ -130,20 +135,22 @@ class MainWindow(QMainWindow):
         row = QFrame()
         row.setObjectName("topClockRow")
         layout = QHBoxLayout(row)
-        layout.setContentsMargins(16, 5, 16, 5)
-        layout.setSpacing(10)
-        local_title = QLabel("VESSEL LOCAL TIME")
+        layout.setContentsMargins(16, 4, 16, 4)
+        layout.setSpacing(9)
+        local_title = QLabel("Vessel Local Time")
         local_title.setObjectName("fieldLabel")
         self.vessel_time_label = QLabel()
-        self.vessel_time_label.setObjectName("cardValue")
+        self.vessel_time_label.setObjectName("clockPrimary")
         self.gmt_offset_label = QLabel()
-        self.gmt_offset_label.setObjectName("fieldLabel")
+        self.gmt_offset_label.setObjectName("clockSecondary")
         separator_one = QLabel("|")
+        separator_one.setObjectName("clockSeparator")
         utc_title = QLabel("UTC")
         utc_title.setObjectName("fieldLabel")
         self.utc_time_label = QLabel()
-        self.utc_time_label.setObjectName("mutedText")
+        self.utc_time_label.setObjectName("clockSecondary")
         separator_two = QLabel("|")
+        separator_two.setObjectName("clockSeparator")
         self.vessel_time_minus_button = QPushButton("-1 HOUR")
         self.vessel_time_plus_button = QPushButton("+1 HOUR")
         for button in (self.vessel_time_minus_button, self.vessel_time_plus_button):
@@ -178,6 +185,7 @@ class MainWindow(QMainWindow):
         self.page_stack.setCurrentIndex(index)
         for button_index, button in enumerate(self.navigation_buttons):
             button.setChecked(button_index == index)
+            button.setIcon(navigation_icon(self.PAGE_ICONS[button_index], "#51B9DD" if button_index == index else "#B4BEC7"))
         if index == 0:
             self.dashboard_page.refresh()
         elif index == 1:

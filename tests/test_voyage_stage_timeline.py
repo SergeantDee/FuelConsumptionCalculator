@@ -5,7 +5,7 @@ from datetime import date, datetime, timezone
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QDialog, QLabel, QTabWidget
+from PySide6.QtWidgets import QApplication, QDialog, QLabel, QTableWidget, QTabWidget
 
 from fuel_consumption_calculator.calculations.voyage_engine import calculate_consumption_with_voyage, calculate_voyage_consumption, calculate_voyage_plan
 from fuel_consumption_calculator.domain.consumption import FUEL_TYPES, ConsumptionProfile, ConsumptionRate
@@ -279,6 +279,22 @@ def test_dashboard_keeps_rob_unavailable_when_elapsed_consumption_cannot_be_calc
     assert "Anchor: Projection Starting ROB" in page.rob_metadata.text()
     assert not hasattr(page, "update_rob_button")
     assert any(label.text() == "CURRENT ROB" for label in page.findChildren(QLabel))
+
+
+def test_dashboard_first_run_retains_operational_preview_structure():
+    QApplication.instance() or QApplication([])
+
+    class _NoVesselService:
+        def get_active_vessel(self):
+            return None
+
+    page = DashboardPage(_NoVesselService(), object(), object(), object(), object())
+
+    assert page.vessel_name_value.text() == "Not configured"
+    assert "No schedule available" in page.schedule_empty.text()
+    assert isinstance(page.schedule_table, QTableWidget)
+    assert page.schedule_table.rowCount() == 0
+    assert page.open_voyage_button.text() == "Open Voyage Planner"
 
 
 def test_dashboard_anchor_ignores_future_actual_sounding():

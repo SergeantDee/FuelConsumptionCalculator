@@ -28,14 +28,14 @@ from fuel_consumption_calculator.services.settings_service import SettingsServic
 from fuel_consumption_calculator.services.vessel_service import VesselService
 from fuel_consumption_calculator.services.voyage_service import VoyageService
 from fuel_consumption_calculator.services.tank_forecast_service import TankForecastService
-from fuel_consumption_calculator.ui.main_window import MainWindow
+from fuel_consumption_calculator.ui_v2.main_window import MainWindowV2
 from fuel_consumption_calculator.ui.theme import DARK_MARINE_STYLESHEET
 
 
 LOGGER = logging.getLogger(__name__)
 
 
-def build_main_window(paths: AppPaths) -> MainWindow:
+def build_main_window(paths: AppPaths) -> MainWindowV2:
     database = Database(paths.database_file)
     database.initialize()
     vessel_service = VesselService(VesselRepository(database))
@@ -48,7 +48,7 @@ def build_main_window(paths: AppPaths) -> MainWindow:
     tank_forecast_service = TankForecastService(fuel_tank_service, schedule_service, consumption_service, voyage_service)
     bunker_service = BunkerService(BunkerRepository(database), tank_forecast_service)
     scraper_service = ScraperService()
-    return MainWindow(vessel_service, schedule_service, scraper_service, consumption_service, rob_service, bunker_service, fuel_tank_service, voyage_service, settings_service, tank_forecast_service)
+    return MainWindowV2(vessel_service, schedule_service, scraper_service, consumption_service, rob_service, bunker_service, fuel_tank_service, voyage_service, settings_service, tank_forecast_service)
 
 
 def install_global_exception_handler() -> None:

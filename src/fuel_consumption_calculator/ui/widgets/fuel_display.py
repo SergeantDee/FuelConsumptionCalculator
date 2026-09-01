@@ -10,31 +10,33 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate,
 )
 
+from fuel_consumption_calculator.ui.theme import COLORS
+
 
 FUEL_COLORS = {
-    "ULSFO": "#8dc6de",
-    "VLSFO": "#ad9aca",
-    "MDO": "#d7a66d",
+    "ULSFO": "#58C5E8",
+    "VLSFO": "#9B86E6",
+    "MDO": "#F08A22",
 }
 
 FUEL_BADGE_BACKGROUNDS = {
-    "ULSFO": "#294858",
-    "VLSFO": "#413753",
-    "MDO": "#513d29",
+    "ULSFO": "#183E4A",
+    "VLSFO": "#332D4D",
+    "MDO": "#4A2D13",
 }
 
 FUEL_ORDER = ("ULSFO", "VLSFO", "MDO")
 
 
 def fuel_color(fuel_type: str) -> str:
-    return FUEL_COLORS.get(str(fuel_type).upper(), "#aab9c3")
+    return FUEL_COLORS.get(str(fuel_type).upper(), COLORS["secondary_text"])
 
 
 def fuel_badge_html(fuel_type: str) -> str:
     """Compact shared fuel chip suitable for labels and dense table delegates."""
     fuel = str(fuel_type).upper()
     background = FUEL_BADGE_BACKGROUNDS.get(fuel, "#34434d")
-    foreground = FUEL_COLORS.get(fuel, "#c2cdd3")
+    foreground = FUEL_COLORS.get(fuel, COLORS["secondary_text"])
     return f'<span style="background-color:{background}; color:{foreground}; font-weight:700; padding:2px 6px;">{escape(fuel)}</span>'
 
 
@@ -52,8 +54,8 @@ class FuelBadge(QLabel):
         self.setStyleSheet(
             "QLabel#fuelBadge {"
             f" background: {FUEL_BADGE_BACKGROUNDS.get(fuel, '#34434d')};"
-            f" color: {FUEL_COLORS.get(fuel, '#c2cdd3')};"
-            " border-radius: 7px; padding: 2px 6px; font-size: 8pt; font-weight: 700; }"
+            f" color: {FUEL_COLORS.get(fuel, COLORS['secondary_text'])};"
+            " border-radius: 4px; padding: 2px 6px; font-size: 8pt; font-weight: 700; }"
         )
 
 
@@ -111,14 +113,14 @@ def format_fuel_html(
 
         parts.append(
             fuel_badge_html(fuel_type) +
-            f'&nbsp;<span style="color:#eef7ff;">{escape(quantity)}</span>'
+            f'&nbsp;<span style="color:{COLORS["text"]};">{escape(quantity)}</span>'
         )
 
-    body = '&nbsp;&nbsp;<span style="color:#617b8c;">|</span>&nbsp;&nbsp;'.join(parts)
+    body = f'&nbsp;&nbsp;<span style="color:{COLORS["muted_text"]};">|</span>&nbsp;&nbsp;'.join(parts)
 
     if prefix:
         return (
-            f'<span style="color:#dce8f2;">{escape(prefix)}</span>'
+            f'<span style="color:{COLORS["secondary_text"]};">{escape(prefix)}</span>'
             f'{body}'
         )
 
@@ -153,14 +155,14 @@ class FuelTextDelegate(QStyledItemDelegate):
         )
 
         selected = bool(opt.state & QStyle.StateFlag.State_Selected)
-        value_color = "#ffffff" if selected else "#eef7ff"
-        separator_color = "#d9efff" if selected else "#617b8c"
+        value_color = "#ffffff" if selected else COLORS["text"]
+        separator_color = "#d9efff" if selected else COLORS["muted_text"]
 
         html_text = escape(text)
 
         for fuel_type in FUEL_ORDER:
             color = "#ffffff" if selected else fuel_color(fuel_type)
-            background = "transparent" if selected else FUEL_BADGE_BACKGROUNDS.get(fuel_type, "#34434d")
+            background = "transparent" if selected else FUEL_BADGE_BACKGROUNDS.get(fuel_type, COLORS["border"])
             html_text = html_text.replace(
                 fuel_type,
                 (

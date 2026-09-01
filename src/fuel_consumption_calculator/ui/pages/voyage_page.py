@@ -126,7 +126,7 @@ class VoyagePage(QWidget):
         self._display_rows: list[PlannerDisplayRow] = []
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(32, 28, 32, 28)
+        layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(12)
         layout.addWidget(PageHeader("Voyage Planner", "Chronological operational stages. Double-click a row for event details."))
 
@@ -941,8 +941,8 @@ class VoyagePage(QWidget):
 
         styles = {
             "ULSFO": (
-                "background-color:#0d718d; color:#ffffff; "
-                "border:1px solid #1aa0b8; border-radius:4px; font-weight:700;"
+                "background-color:#263746; color:#51b9dd; "
+                "border:1px solid #3aaed8; border-radius:4px; font-weight:700;"
             ),
             "VLSFO": (
                 "background-color:#735511; color:#fff0bf; "

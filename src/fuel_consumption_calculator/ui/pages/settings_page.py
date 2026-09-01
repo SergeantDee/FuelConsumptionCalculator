@@ -45,7 +45,7 @@ class SettingsPage(QWidget):
         self.content = QWidget()
         self.content.setMinimumWidth(900)
         layout = QVBoxLayout(self.content)
-        layout.setContentsMargins(32, 28, 32, 28)
+        layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(14)
         layout.addWidget(PageHeader("Settings", "Configure the active vessel used by this installation."))
 
@@ -245,7 +245,7 @@ class SettingsPage(QWidget):
     def _build_routes_tab(self) -> QWidget:
         tab = QWidget()
         layout = QHBoxLayout(tab)
-        layout.setContentsMargins(32, 28, 32, 28)
+        layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(14)
 
         library_panel = QFrame()

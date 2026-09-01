@@ -105,7 +105,7 @@ class ConsumptionPage(QWidget):
         self._changeover_result = None
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(32, 28, 32, 28)
+        layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(16)
         layout.addWidget(PageHeader("Consumption", "Configure vessel fuel consumption rates."))
 

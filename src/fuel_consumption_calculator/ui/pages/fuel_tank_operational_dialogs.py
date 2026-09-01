@@ -7,7 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import QDateTime, Qt
 from PySide6.QtWidgets import (
     QComboBox, QDateTimeEdit, QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout,
-    QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QTableWidget,
+    QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QTableWidget,
     QTableWidgetItem, QTextEdit, QVBoxLayout,
 )
 
@@ -165,22 +165,26 @@ class UpdateTankROBDialog(QDialog):
         self._batch = service.get_fuel_batch(tank.current_fuel_batch_id) if tank.current_fuel_batch_id else None
         self._snapshot = None
         self._valid = False
-        self.setWindowTitle("Update Tank ROB")
-        layout = QVBoxLayout(self)
+        self.setWindowTitle("Update Tank ROB"); self.setObjectName("v2UpdateRobDialog"); self.setMinimumWidth(520)
+        layout = QVBoxLayout(self); layout.setContentsMargins(18, 16, 18, 16); layout.setSpacing(10)
+        title = QLabel("Update Tank ROB"); title.setObjectName("v2DialogTitle"); layout.addWidget(title)
         points = service.list_calibration_points(tank.id)
         self.types = [kind for kind in MEASUREMENT_TYPES if any((p.sounding_cm if kind == "SOUNDING" else p.ullage_cm) is not None for p in points)]
         if not self.types:
             layout.addWidget(QLabel("No calibration table is configured for this tank."))
             button = QPushButton("Open Calibration"); button.clicked.connect(self._open_calibration); layout.addWidget(button)
             return
-        form = QFormLayout()
+        form = QFormLayout(); form.setSpacing(8)
         self.time = QDateTimeEdit(QDateTime.currentDateTimeUtc()); self.time.setTimeSpec(Qt.TimeSpec.UTC)
         self.type = QComboBox(); self.type.addItems(self.types)
         self.reading = QLineEdit(); self.trim = QLineEdit("0"); self.temperature = QLineEdit(); self.manual_vcf = QLineEdit(); self.manual_vcf.setPlaceholderText("Optional, e.g. 0.98500")
         self.remarks = QTextEdit()
         form.addRow("Observation Time UTC", self.time); form.addRow("Measurement Type", self.type); form.addRow("Reading cm", self.reading); form.addRow("Trim m", self.trim); form.addRow("Temperature C", self.temperature)
-        form.addRow("Fuel", QLabel(self._batch.fuel_type if self._batch else "UNKNOWN")); form.addRow("Batch", QLabel(self._batch.batch_name if self._batch else "No batch assigned")); form.addRow("Density @15°C", QLabel(f"{self._batch.density_15_kg_m3:.3f} kg/m³" if self._batch else "--")); form.addRow("Manual VCF", self.manual_vcf); form.addRow("Remarks", self.remarks)
         layout.addLayout(form)
+        fuel_card = QFrame(); fuel_card.setObjectName("v2FuelInfoCard"); fuel_layout = QFormLayout(fuel_card); fuel_layout.setContentsMargins(12, 10, 12, 10); fuel_layout.setSpacing(5)
+        fuel_heading = QLabel("FUEL INFORMATION"); fuel_heading.setObjectName("v2TankCaption"); fuel_layout.addRow(fuel_heading)
+        fuel_layout.addRow("Fuel", QLabel(self._batch.fuel_type if self._batch else "UNKNOWN")); fuel_layout.addRow("Batch", QLabel(self._batch.batch_name if self._batch else "No batch assigned")); fuel_layout.addRow("Density @15°C", QLabel(f"{self._batch.density_15_kg_m3:.3f} kg/m³" if self._batch else "--")); layout.addWidget(fuel_card)
+        detail_form = QFormLayout(); detail_form.setSpacing(8); detail_form.addRow("Manual VCF", self.manual_vcf); detail_form.addRow("Remarks", self.remarks); layout.addLayout(detail_form)
         layout.addWidget(_muted_label("VCF is entered manually. Automatic ASTM/API calculation is not enabled."))
         self.preview = QLabel("Enter reading and trim to calculate volume."); self.preview.setWordWrap(True); layout.addWidget(self.preview)
         layout.addWidget(_muted_label("Temperature is recorded with the observation. VCF is entered manually in the current version."))

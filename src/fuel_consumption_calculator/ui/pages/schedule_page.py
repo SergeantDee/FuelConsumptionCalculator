@@ -272,7 +272,7 @@ class SchedulePage(QWidget):
         self._cancel_event: Event | None = None
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(32, 28, 32, 28)
+        layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(16)
         layout.addWidget(PageHeader("Schedule", "Fetch, preview, and confirm vessel schedule updates."))
 
