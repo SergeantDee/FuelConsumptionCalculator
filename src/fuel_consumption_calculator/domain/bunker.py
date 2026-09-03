@@ -95,6 +95,8 @@ class BunkerIncomingFuelSnapshot:
     fuel_batch_id: int | None
     density_15_kg_m3: float | None
     manual_vcf: float | None
+    incoming_temperature_c: float | None = None
+    vcf_mode: str = "MANUAL"
 
 
 def complete_bunker_plan(

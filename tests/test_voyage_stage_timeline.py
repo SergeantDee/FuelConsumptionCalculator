@@ -23,17 +23,21 @@ from fuel_consumption_calculator.domain.voyage import (
     VoyageLegOverride,
 )
 from fuel_consumption_calculator.domain.voyage_stages import (
+    OperationalStage,
     STATUS_COMPLETED,
     STATUS_CURRENT,
+    StageROB,
     STAGE_ARRIVAL_MANEUVERING,
     STAGE_DEPARTURE_MANEUVERING,
     STAGE_PORT_STAY,
     STAGE_SEA_PASSAGE,
+    VoyageStageTimeline,
     build_voyage_stage_timeline,
 )
 from fuel_consumption_calculator.ui.pages.voyage_page import (
     StageEditDialog,
     VoyagePage,
+    _current_predicted_rob_at,
     build_planner_display_rows,
     _fmt_compact_rob,
     _stage_issue,
@@ -204,6 +208,34 @@ def test_actual_rob_observation_reanchors_after_unknown_detailed_departure_maneu
     assert sea_stage.rob.start_mt == departure_stage.rob.end_mt
 
 
+def test_current_predicted_rob_uses_latest_actual_anchor_at_now_not_current_stage_eoe():
+    start = datetime(2026, 9, 3, 14, 0, tzinfo=timezone.utc)
+    anchor_at = datetime(2026, 9, 3, 14, 12, tzinfo=timezone.utc)
+    now = datetime(2026, 9, 3, 14, 14, tzinfo=timezone.utc)
+    end = datetime(2026, 9, 3, 15, 0, tzinfo=timezone.utc)
+    stage = OperationalStage(
+        "current", STAGE_DEPARTURE_MANEUVERING, "Southampton PORT STAY", "", STATUS_CURRENT,
+        start, end, None, None, None, {"ULSFO": 0.0, "VLSFO": 0.0, "MDO": 0.0},
+        StageROB({"ULSFO": 61.15, "VLSFO": 627.27, "MDO": 300.0}, {"ULSFO": 383.0, "VLSFO": 279.43, "MDO": 366.0}),
+    )
+    timeline = VoyageStageTimeline([stage], stage, None, {"ULSFO": 61.15, "VLSFO": 627.27, "MDO": 300.0})
+    observations = [
+        ActualROBObservation(None, 1, datetime(2026, 9, 3, 13, 0), {"ULSFO": 61.15, "VLSFO": 627.27, "MDO": 300.0}),
+        ActualROBObservation(None, 1, anchor_at, {"ULSFO": 383.0, "VLSFO": 281.0, "MDO": 366.0}),
+    ]
+    starting = StartingROB(1, tuple(ROBQuantity(fuel, 10.0) for fuel in FUEL_TYPES))
+    state = MachineryFuelState(1, "VLSFO", "VLSFO", "VLSFO")
+    config = VesselEnergyConfig(1, maneuvering_main_engine_mt_per_hour=0.0, maneuvering_generators_mt_per_hour=0.5, maneuvering_aux_boiler_mt_per_hour=0.0)
+
+    result = _current_predicted_rob_at(timeline, observations, starting, state, (), config, now)
+
+    assert result["ULSFO"] == 383.0
+    assert result["VLSFO"] == 281.0 - 0.5 * 2 / 60
+    assert result["MDO"] == 366.0
+    assert result != timeline.current_predicted_rob_mt
+    assert result["VLSFO"] != stage.rob.end_mt["VLSFO"]
+
+
 def test_confirmed_port_bunker_adjustment_is_applied_by_the_existing_stage_timeline():
     events = _events()
     timeline = build_voyage_stage_timeline(
@@ -260,6 +292,16 @@ def test_actual_rob_dialog_accepts_zero_for_every_fuel():
     assert dialog.values()["VLSFO"] == 0.0
     assert dialog.values()["MDO"] == 0.0
     assert dialog.values()["effective_at_utc"].tzinfo == timezone.utc
+
+
+def test_actual_rob_dialog_handles_unknown_current_values_without_coercing_them_to_zero():
+    QApplication.instance() or QApplication([])
+
+    dialog = ActualROBDialog({"ULSFO": None, "VLSFO": 2.5, "MDO": None})
+
+    assert dialog._quantity_inputs["ULSFO"].text() == ""
+    assert dialog._quantity_inputs["VLSFO"].text() == "2.50"
+    assert dialog._quantity_inputs["MDO"].text() == ""
 
 
 def test_dashboard_keeps_rob_unavailable_when_elapsed_consumption_cannot_be_calculated():
@@ -334,6 +376,60 @@ def test_bunker_actual_sounding_uses_existing_actual_rob_persistence(monkeypatch
         "Noon sounding",
     )
     assert saved_signal == [True]
+
+
+def test_bunker_actual_sounding_handles_mixed_legacy_and_utc_timestamps_and_refreshes(monkeypatch):
+    QApplication.instance() or QApplication([])
+
+    class _SwitchableVesselService:
+        active = None
+
+        def get_active_vessel(self):
+            return self.active
+
+    class _MixedTimestampVoyageService(_ActualROBVoyageService):
+        def __init__(self):
+            super().__init__([
+                ActualROBObservation(None, 1, datetime(2026, 1, 1, 8), {"ULSFO": 1.0, "VLSFO": 2.0, "MDO": 3.0}),
+                ActualROBObservation(None, 1, datetime(2026, 1, 1, 9, tzinfo=timezone.utc), {"ULSFO": 4.0, "VLSFO": 5.0, "MDO": 6.0}),
+            ])
+            self.saved = None
+
+        def save_actual_rob_observation(self, observation):
+            self.saved = observation
+            return observation
+
+    vessel_service = _SwitchableVesselService()
+    voyage_service = _MixedTimestampVoyageService()
+    page = BunkerPage(vessel_service, object(), object(), object(), object(), voyage_service)
+    vessel_service.active = type("Vessel", (), {"id": 1, "name": "Test Vessel", "imo": "1234567"})()
+    refreshes = []
+    page.refresh = lambda: refreshes.append(True)
+
+    class _Dialog:
+        def __init__(self, quantities_mt, parent):
+            assert quantities_mt == {"ULSFO": 4.0, "VLSFO": 5.0, "MDO": 6.0}
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        @staticmethod
+        def values():
+            return {
+                "effective_at_utc": datetime(2026, 1, 1, 10, tzinfo=timezone.utc),
+                "ULSFO": 10.0,
+                "VLSFO": 20.0,
+                "MDO": 30.0,
+                "remarks": None,
+            }
+
+    monkeypatch.setattr(bunker_page_module, "ActualROBDialog", _Dialog)
+
+    page._update_actual_sounding()
+
+    assert voyage_service.saved.effective_at_utc == datetime(2026, 1, 1, 10, tzinfo=timezone.utc)
+    assert voyage_service.saved.quantities_mt == {"ULSFO": 10.0, "VLSFO": 20.0, "MDO": 30.0}
+    assert refreshes == [True]
 
 
 def test_planner_display_groups_simultaneous_changeovers_at_effective_timestamp():

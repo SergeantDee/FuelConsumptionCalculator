@@ -53,3 +53,34 @@ def test_duplicate_and_ineligible_rows_rejected_and_clear_removes_snapshot(setup
     service.clear_receiving_tank_plan(plan)
     assert service.list_receiving_tank_plan(plan) == []
     assert service.load_incoming_fuel_snapshot(plan).density_15_kg_m3 is None
+
+
+def test_new_auto_snapshot_persists_temperature_and_uses_density_snapshot(setup):
+    _db, tanks, service, plan, eligible = setup
+    batch = tanks.save_fuel_batch(FuelBatch(None, 1, "Incoming", "VLSFO", 978))
+    row = BunkerReceivingTankPlan(eligible.id, 160.0, 90.0)
+
+    service.save_receiving_tank_plan(plan, [row], batch.id, None, 35.0, "AUTO")
+
+    snapshot = service.load_incoming_fuel_snapshot(plan)
+    assert (snapshot.fuel_batch_id, snapshot.density_15_kg_m3, snapshot.incoming_temperature_c, snapshot.vcf_mode, snapshot.manual_vcf) == (batch.id, 978, 35.0, "AUTO", None)
+    effective_vcf, issue = service.effective_vcf(plan)
+    assert issue is None
+    assert effective_vcf == pytest.approx(0.986091857495)
+    assert service.tank_based_max_lift(plan).total_max_lift_mt == pytest.approx(290.0 * effective_vcf * 978 / 1000)
+
+    tanks.save_fuel_batch(FuelBatch(batch.id, 1, "Incoming", "VLSFO", 980))
+    assert service.effective_vcf(plan)[0] == pytest.approx(0.986091857495)
+
+
+def test_manual_mode_is_an_explicit_override(setup):
+    _db, tanks, service, plan, eligible = setup
+    batch = tanks.save_fuel_batch(FuelBatch(None, 1, "Incoming", "VLSFO", 978))
+
+    service.save_receiving_tank_plan(plan, [BunkerReceivingTankPlan(eligible.id, 160.0, 90.0)], batch.id, 0.985, None, "MANUAL")
+
+    snapshot = service.load_incoming_fuel_snapshot(plan)
+    assert snapshot.vcf_mode == "MANUAL"
+    effective_vcf, issue = service.effective_vcf(plan)
+    assert effective_vcf == pytest.approx(0.985)
+    assert issue is None

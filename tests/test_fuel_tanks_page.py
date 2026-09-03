@@ -18,6 +18,7 @@ from fuel_consumption_calculator.services.fuel_tank_service import FuelTankServi
 from fuel_consumption_calculator.services.vessel_service import VesselService
 from fuel_consumption_calculator.ui.pages.fuel_tanks_page import (
     VESSEL_TANK_SET,
+    VESSEL_TANK_CAPACITIES,
     FuelTanksPage,
     TankSoundingSurveyDialog,
     InternalTransferDialog,
@@ -44,6 +45,11 @@ def test_tank_sounding_survey_dialog_constructs_with_measurement_types(tmp_path,
     kind = dialog._rows[0][2]
     assert [kind.itemText(index) for index in range(kind.count())] == ["SOUNDING", "ULLAGE"]
     assert kind.currentText() == "ULLAGE"
+    assert dialog.table.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
+    assert dialog.table.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
+    assert dialog.table.columnWidth(1) >= 180
+    assert dialog.table.columnWidth(2) >= 170
+    assert dialog.table.columnWidth(3) >= 125
 
 
 def test_survey_table_keeps_untouched_rows_neutral_and_excluded_rows_non_blocking(tmp_path, qapp):
@@ -170,26 +176,22 @@ def test_known_positions_and_other_tanks_render_without_placeholders(tmp_path, q
     assert any(label.text() == "OTHER TANKS" for label in page.findChildren(type(page.vessel_label)))
 
 
-def test_compact_scrollable_tank_strip_and_short_labels(tmp_path, qapp):
+def test_tall_full_width_tank_cards_and_short_labels(tmp_path, qapp):
     vessel_service, tank_service = _services(tmp_path)
     vessel = vessel_service.configure_active_vessel("Test Vessel", "1234567")
     for name in ("No. 1 DO Serv.TK", "HFO Deep Tank 1 STBD", "OVFLW TK CH"):
         tank_service.create_tank(FuelTank(None, vessel.id, name, "BUNKER", 100, "SOUNDING"))
     page = FuelTanksPage(vessel_service, tank_service)
     page.refresh()
-    assert isinstance(page.tank_strip, QScrollArea)
-    assert page.tank_strip.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-    assert page.tank_strip.widgetResizable() is False
+    assert page.arrangement_panel.objectName() == "tankWorkspace"
     by_name = {card.toolTip(): card for card in page.tank_cards}
-    assert (by_name["No. 1 DO Serv.TK"].width(), by_name["No. 1 DO Serv.TK"].height()) == (120, 72)
-    assert (by_name["HFO Deep Tank 1 STBD"].width(), by_name["HFO Deep Tank 1 STBD"].height()) == (152, 152)
-    assert (by_name["OVFLW TK CH"].width(), by_name["OVFLW TK CH"].height()) == (128, 142)
+    assert all(card.minimumHeight() >= 150 for card in by_name.values())
     assert _short_display_name("HFO DEEP TANK 1 STBD") == "1S"
     assert _short_display_name("NO.1 DO SERV.TK") == "DO SVC 1"
     assert _short_display_name("OVFLW TK CH") == "CH OVFLW"
 
 
-def test_populated_strip_publishes_nonzero_fixed_content_geometry(tmp_path, qapp):
+def test_populated_full_width_layout_contains_all_tanks(tmp_path, qapp):
     vessel_service, tank_service = _services(tmp_path)
     vessel = vessel_service.configure_active_vessel("Test Vessel", "1234567")
     for name, tank_type, _receiving in VESSEL_TANK_SET:
@@ -201,20 +203,13 @@ def test_populated_strip_publishes_nonzero_fixed_content_geometry(tmp_path, qapp
     qapp.processEvents()
     assert len(page.tank_cards) == 16
     assert {"HFO DEEP TK 1P", "OVFLW TK CH"}.issubset({card.toolTip() for card in page.tank_cards})
-    assert page.strip_content.width() > 0 and page.strip_content.height() > 0
-    assert page.strip_content.width() >= page.arrangement_layout.sizeHint().width()
-    assert page.strip_content.height() >= page.arrangement_layout.sizeHint().height()
-    assert page.tank_strip.widgetResizable() is False
-    assert page.tank_strip.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    assert page.arrangement_panel.width() > 0 and page.arrangement_panel.height() > 0
     by_name = {card.toolTip(): card for card in page.tank_cards}
-    assert by_name["HFO DEEP TK 1P"].height() > by_name["HFO SETT.TK"].height()
-    assert by_name["HFO DEEP TK 1P"].width() > by_name["NO.1 DO SERV.TK"].width()
-    page._select_tank(by_name["HFO DEEP TK 1P"]._tank_id)
-    assert page.edit_tank_button.isEnabled()
+    assert by_name["HFO DEEP TK 1P"].minimumHeight() == by_name["HFO SETT.TK"].minimumHeight()
     page.close()
 
 
-def test_bulk_tank_set_defaults_and_capacity_requirement(tmp_path, qapp):
+def test_bulk_tank_set_defaults_and_verified_capacities(tmp_path, qapp):
     vessel_service, tank_service = _services(tmp_path)
     vessel = vessel_service.configure_active_vessel("Test Vessel", "1234567")
     dialog = VesselTankSetDialog(tank_service, vessel.id)
@@ -225,8 +220,8 @@ def test_bulk_tank_set_defaults_and_capacity_requirement(tmp_path, qapp):
     assert defaults["HFO SETT.TK"] == ("SETTLING", False)
     assert defaults["NO.1 DO SERV.TK"] == ("SERVICE", False)
     assert defaults["OVFLW TK ER"] == ("OTHER", False)
-    with pytest.raises(ValueError, match="capacity greater than 0"):
-        dialog.create_selected_tanks()
+    assert dialog.row_controls[0][1].value() == VESSEL_TANK_CAPACITIES["HFO DEEP TK 3P"]
+    assert dialog.row_controls[2][1].value() == VESSEL_TANK_CAPACITIES["HFO DEEP TK 1P"]
 
 
 def test_bulk_tank_set_creates_selected_tanks_and_skips_alias_duplicates(tmp_path, qapp):
@@ -240,13 +235,45 @@ def test_bulk_tank_set_creates_selected_tanks_and_skips_alias_duplicates(tmp_pat
         include.setChecked(name in selected_names)
         if name in selected_names:
             capacity.setValue(250)
-    created, already_existed = dialog.create_selected_tanks()
+    created, updated, unchanged = dialog.create_selected_tanks()
     tanks = tank_service.list_tanks(vessel.id, include_inactive=True)
-    assert (created, already_existed) == (2, 1)
-    assert existing in tanks
+    assert (created, updated, unchanged) == (2, 1, 0)
+    assert any(tank.id == existing.id for tank in tanks)
+    assert tank_service.get_tank(existing.id).capacity_m3 == 250
     assert {tank.name for tank in tanks} == {"HFO Deep Tank 1 STBD", "HFO DEEP TK 1P", "HFO SETT.TK"}
     assert tank_service.list_fuel_batches(vessel.id) == []
     assert all(tank_service.list_sounding_history(tank.id) == [] for tank in tanks)
+
+
+def test_bulk_tank_set_updates_existing_tank_configuration_in_place_and_is_idempotent(tmp_path, qapp):
+    vessel_service, tank_service = _services(tmp_path)
+    vessel = vessel_service.configure_active_vessel("Test Vessel", "1234567")
+    existing = tank_service.create_tank(FuelTank(None, vessel.id, "HFO Deep Tank 1 PORT", "OTHER", 500, "SOUNDING", False))
+    batch = tank_service.create_fuel_batch(FuelBatch(None, vessel.id, "Existing batch", "VLSFO", 978))
+    tank_service.assign_current_fuel_batch(existing.id, batch.id)
+    tank_service.replace_calibration_points(existing.id, [TankCalibrationPoint(None, existing.id, 100, None, 0, 250)])
+    tank_service.save_sounding_observation(
+        tank_id=existing.id, reading_type="SOUNDING", reading_cm=100, trim_m=0,
+        effective_at_utc="2026-01-01T00:00:00+00:00",
+    )
+
+    dialog = VesselTankSetDialog(tank_service, vessel.id)
+    for row, (name, _, _) in enumerate(VESSEL_TANK_SET):
+        dialog.row_controls[row][0].setChecked(name == "HFO DEEP TK 1P")
+    dialog._create_selected()
+    assert dialog.summary_label.text() == "Created: 0   Updated: 1   Unchanged: 0"
+
+    updated = tank_service.get_tank(existing.id)
+    assert updated.id == existing.id
+    assert updated.name == "HFO Deep Tank 1 PORT"
+    assert updated.capacity_m3 == VESSEL_TANK_CAPACITIES["HFO DEEP TK 1P"]
+    assert updated.capacity_m3 != VESSEL_TANK_CAPACITIES["HFO DEEP TK 1P"] * .95
+    assert updated.tank_type == "BUNKER" and updated.bunker_receiving_eligible
+    assert updated.current_fuel_batch_id == batch.id
+    assert tank_service.list_sounding_history(existing.id)[0].calculated_volume_m3 == 250
+    assert len(tank_service.list_calibration_points(existing.id)) == 1
+    assert dialog.create_selected_tanks() == (0, 0, 1)
+    assert len(tank_service.list_tanks(vessel.id, include_inactive=True)) == 1
 
 
 def test_calibration_dialog_excel_round_trip_generator_and_update_rob(tmp_path, qapp):

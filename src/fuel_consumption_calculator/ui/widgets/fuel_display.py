@@ -12,15 +12,17 @@ from PySide6.QtWidgets import (
 
 
 FUEL_COLORS = {
-    "ULSFO": "#8dc6de",
-    "VLSFO": "#ad9aca",
-    "MDO": "#d7a66d",
+    "ULSFO": "#59CBE8",
+    "VLSFO": "#A58BEA",
+    "MDO": "#F29128",
 }
 
 FUEL_BADGE_BACKGROUNDS = {
-    "ULSFO": "#294858",
-    "VLSFO": "#413753",
-    "MDO": "#513d29",
+    "ULSFO": "#183E4A",
+    "VLSFO": "#352C50",
+    "MDO": "#4A2D13",
+    "UNASSIGNED": "#34434D",
+    "UNKNOWN": "#34434D",
 }
 
 FUEL_ORDER = ("ULSFO", "VLSFO", "MDO")
@@ -52,7 +54,7 @@ class FuelBadge(QLabel):
         self.setStyleSheet(
             "QLabel#fuelBadge {"
             f" background: {FUEL_BADGE_BACKGROUNDS.get(fuel, '#34434d')};"
-            f" color: {FUEL_COLORS.get(fuel, '#c2cdd3')};"
+            f" color: {FUEL_COLORS.get(fuel, '#C2CDD3')};"
             " border-radius: 7px; padding: 2px 6px; font-size: 8pt; font-weight: 700; }"
         )
 

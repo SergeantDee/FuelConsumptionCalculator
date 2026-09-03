@@ -81,8 +81,39 @@ def test_schema_migration_v10_to_v11_preserves_energy_config_and_leaves_maneuver
     assert user_version == SCHEMA_VERSION
 
 
-def test_schema_version_is_19():
-    assert SCHEMA_VERSION == 19
+def test_schema_version_is_20():
+    assert SCHEMA_VERSION == 20
+
+
+def test_schema_migration_v19_preserves_manual_snapshot_and_marks_it_manual(tmp_path):
+    database_file = tmp_path / "v19.db"
+    with sqlite3.connect(database_file) as connection:
+        connection.executescript("""
+            CREATE TABLE vessels (id INTEGER PRIMARY KEY, name TEXT NOT NULL, imo TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+            CREATE TABLE application_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE port_timezones (port_key TEXT PRIMARY KEY, port TEXT NOT NULL, timezone_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+            CREATE TABLE schedule_events (id INTEGER PRIMARY KEY, port TEXT NOT NULL, arrival_at TEXT NOT NULL, departure_at TEXT, arrival_at_utc TEXT, timezone_status TEXT, port_timezone_id TEXT, departure_at_utc TEXT);
+            CREATE TABLE bunker_incoming_fuel_snapshots (
+                vessel_id INTEGER NOT NULL, sequence_number INTEGER NOT NULL, port_snapshot TEXT NOT NULL,
+                arrival_snapshot TEXT NOT NULL, fuel_batch_id INTEGER, density_15_kg_m3 REAL,
+                manual_vcf REAL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                PRIMARY KEY (vessel_id, sequence_number, port_snapshot, arrival_snapshot)
+            );
+            INSERT INTO vessels VALUES (1, 'Existing Vessel', '7654321', 'x', 'x');
+            INSERT INTO bunker_incoming_fuel_snapshots VALUES (1, 7, 'Antwerp', '2026-09-14T04:00', 8, 978.0, 0.985, 'x', 'x');
+            PRAGMA user_version = 19;
+        """)
+
+    Database(database_file).initialize()
+    Database(database_file).initialize()
+
+    with sqlite3.connect(database_file) as connection:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(bunker_incoming_fuel_snapshots)")}
+        row = connection.execute("SELECT density_15_kg_m3, manual_vcf, incoming_temperature_c, vcf_mode FROM bunker_incoming_fuel_snapshots").fetchone()
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+    assert {"incoming_temperature_c", "vcf_mode"}.issubset(columns)
+    assert row == (978.0, 0.985, None, "MANUAL")
+    assert version == 20
 
 
 def test_schema_migration_v12_to_v13_adds_nullable_manual_vcf_snapshots_and_preserves_data(tmp_path):
@@ -109,7 +140,7 @@ def test_schema_migration_v12_to_v13_adds_nullable_manual_vcf_snapshots_and_pres
     assert {"manual_vcf", "standard_volume_15_m3"}.issubset(columns)
     assert row == (12.5, 950.0, 11.875, None, None, "existing")
     assert vessel == ("Existing Vessel",)
-    assert version == 19
+    assert version == 20
 
 
 def test_schema_migration_v14_to_v15_adds_zero_loss_allowances_and_preserves_energy_config(tmp_path):
@@ -138,7 +169,7 @@ def test_schema_migration_v14_to_v15_adds_zero_loss_allowances_and_preserves_ene
         version = connection.execute("PRAGMA user_version").fetchone()[0]
     assert {"main_engine_loss_allowance_mt_per_day", "auxiliary_engine_loss_allowance_mt_per_day"}.issubset(columns)
     assert row == (123.0, 0.0, 0.0)
-    assert version == 19
+    assert version == 20
 
 
 def test_schema_migration_v15_to_v16_adds_effective_dated_tank_allocation_tables(tmp_path):
@@ -162,7 +193,7 @@ def test_schema_migration_v15_to_v16_adds_effective_dated_tank_allocation_tables
         tank = connection.execute("SELECT name FROM fuel_tanks WHERE id = 1").fetchone()
     assert {"tank_consumption_allocation_events", "tank_consumption_allocation_event_tanks"}.issubset(tables)
     assert tank == ("Existing tank",)
-    assert version == 19
+    assert version == 20
 
 
 def test_schema_migration_v17_adds_internal_fuel_transfers_and_preserves_data(tmp_path):
@@ -185,4 +216,4 @@ def test_schema_migration_v17_adds_internal_fuel_transfers_and_preserves_data(tm
         version = connection.execute("PRAGMA user_version").fetchone()[0]
     assert {"vessel_id", "from_tank_id", "to_tank_id", "fuel_type", "quantity_mt", "status", "planned_at_utc", "actual_at_utc"}.issubset(columns)
     assert tank == ("Existing tank",)
-    assert version == 19
+    assert version == 20

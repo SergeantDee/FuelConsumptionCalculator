@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime, timezone
 
 from PySide6.QtCore import QAbstractTableModel, Qt, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QGuiApplication
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -183,27 +184,188 @@ class PortProjectionTableModel(QAbstractTableModel):
 class ReceivingTanksDialog(QDialog):
     """Receiving plan with manual-over-auto advisory arrival estimates."""
     def __init__(self, service: BunkerService, plan, default_target: float, parent=None):
-        super().__init__(parent); self._service, self._plan = service, plan; self.setWindowTitle("Receiving Tanks"); self.resize(900, 520)
-        layout = QVBoxLayout(self); layout.addWidget(QLabel("Projected arrival uses the bunker event arrival UTC. Typing a value creates a manual override."))
-        self.table = QTableWidget(0, 8); self.table.setHorizontalHeaderLabels(("Select", "Tank", "Capacity m3", "Latest Actual m3", "Projected Arrival m3", "Source", "Target Fill %", "Available m3")); self.table.verticalHeader().setVisible(False); self.table.verticalHeader().setDefaultSectionSize(32); self.table.horizontalHeader().setStretchLastSection(True); layout.addWidget(self.table)
-        incoming = QFormLayout(); self.batch_input = QComboBox(); self.batch_input.addItem("No incoming batch", None)
+        super().__init__(parent)
+        self._service, self._plan = service, plan
+        self.setObjectName("receivingTanksDialog")
+        self.setWindowTitle("Receiving Tanks")
+        screen = QGuiApplication.primaryScreen()
+        available = screen.availableGeometry() if screen else self.geometry()
+        width, height = min(1200, available.width() - 50), min(740, available.height() - 50)
+        self.setMinimumSize(min(900, width), min(560, height))
+        self.resize(width, height)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(12)
+        title_row = QHBoxLayout()
+        title_icon = QLabel("◈")
+        title_icon.setObjectName("receivingTitleIcon")
+        title_row.addWidget(title_icon)
+        title = QLabel("Receiving Tanks")
+        title.setObjectName("receivingTitle")
+        title_row.addWidget(title)
+        title_row.addStretch()
+        layout.addLayout(title_row)
+        hint = QLabel("Projected arrival uses the bunker event arrival UTC. Typing a value creates a manual override.")
+        hint.setObjectName("receivingHint")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        self.table = QTableWidget(0, 8)
+        self.table.setObjectName("receivingTanksTable")
+        self.table.setHorizontalHeaderLabels(("Select", "Tank", "Capacity (m³)", "Latest Actual (m³)", "Projected Arrival (m³)", "Source", "Target Fill (%)", "Available (m³)"))
+        self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(44)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+        for column, width in enumerate((70, 230, 120, 140, 160, 130, 135, 125)):
+            self.table.setColumnWidth(column, width)
+        layout.addWidget(self.table, 1)
+
+        lower = QHBoxLayout()
+        lower.setSpacing(12)
+        incoming_card = QFrame()
+        incoming_card.setObjectName("receivingIncomingCard")
+        incoming = QFormLayout(incoming_card)
+        incoming.setContentsMargins(14, 12, 14, 12)
+        incoming.setHorizontalSpacing(16)
+        incoming.setVerticalSpacing(8)
+        self.batch_input = QComboBox(); self.batch_input.addItem("No incoming batch", None)
         for batch in service.list_fuel_batches(plan.vessel_id): self.batch_input.addItem(f"{batch.batch_name} ({batch.fuel_type})", batch.id)
-        self.fuel_label = FuelBadge(None); self.density_label = QLabel("--"); self.vcf_input = QLineEdit(); self.vcf_input.setPlaceholderText("Manual VCF, e.g. 0.98500")
-        incoming.addRow("Incoming Batch", self.batch_input); incoming.addRow("Fuel Type", self.fuel_label); incoming.addRow("Density @15 C", self.density_label); incoming.addRow("Manual VCF", self.vcf_input); layout.addLayout(incoming); layout.addWidget(QLabel("VCF is entered manually. Automatic ASTM/API calculation is not enabled."))
-        self.summary_label = QLabel("Selected Tanks: 0 | Available Volume: -- | Tank-Based Max Lift: --"); layout.addWidget(self.summary_label)
-        actions = QHBoxLayout(); self.use_latest_button = QPushButton("Use Latest Actual"); self.use_latest_button.clicked.connect(self._use_latest); actions.addWidget(self.use_latest_button); self.use_estimate_button = QPushButton("Use Estimate"); self.use_estimate_button.clicked.connect(self._use_estimate); actions.addWidget(self.use_estimate_button); actions.addStretch(); layout.addLayout(actions)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel); buttons.button(QDialogButtonBox.StandardButton.Save).setText("Save Receiving Plan"); buttons.accepted.connect(self._save); buttons.rejected.connect(self.reject); layout.addWidget(buttons)
+        self.fuel_label = FuelBadge(None); self.density_label = QLabel("--")
+        # Keep a distinct special-value sentinel so -50.0 °C remains a valid
+        # API MPMS 11.1 input instead of being mistaken for "not entered".
+        self.temperature_input = QDoubleSpinBox(); self.temperature_input.setRange(-50.1, 150); self.temperature_input.setDecimals(1); self.temperature_input.setSpecialValueText("Enter temperature")
+        self.vcf_mode_input = QComboBox(); self.vcf_mode_input.addItems(("AUTO", "MANUAL"))
+        self.vcf_input = QLineEdit(); self.vcf_input.setPlaceholderText("Manual VCF, e.g. 0.98500")
+        self.auto_vcf_label = QLabel("— AUTO")
+        incoming.addRow("Incoming Batch", self.batch_input); incoming.addRow("Fuel Type", self.fuel_label); incoming.addRow("Density @ 15 °C", self.density_label); incoming.addRow("Incoming Temperature °C", self.temperature_input); incoming.addRow("VCF Mode", self.vcf_mode_input); incoming.addRow("VCF", self.auto_vcf_label); incoming.addRow("Manual VCF", self.vcf_input)
+        note = QLabel("AUTO calculates the API MPMS 11.1 / ASTM D1250-style VCF from the incoming batch density and entered incoming temperature. MANUAL is an explicit override.")
+        note.setObjectName("receivingNote")
+        note.setWordWrap(True)
+        incoming.addRow(note)
+        lower.addWidget(incoming_card, 3)
+
+        summary_card = QFrame()
+        summary_card.setObjectName("receivingSummaryCard")
+        summary = QGridLayout(summary_card)
+        summary.setContentsMargins(14, 12, 14, 12)
+        summary.setHorizontalSpacing(12)
+        summary.setVerticalSpacing(6)
+        for row, label in enumerate(("Selected tanks", "Available volume", "Volume @15°C", "Effective VCF", "Density @15°C", "Incoming temperature", "Tank-based max lift")):
+            summary.addWidget(QLabel(label), row, 0)
+        self.selected_summary = QLabel("0")
+        self.available_summary = QLabel("--")
+        self.volume_15_summary = QLabel("--")
+        self.effective_vcf_summary = QLabel("--")
+        self.summary_density = QLabel("--")
+        self.summary_temperature = QLabel("--")
+        self.max_lift_summary = QLabel("--")
+        for row, value in enumerate((self.selected_summary, self.available_summary, self.volume_15_summary, self.effective_vcf_summary, self.summary_density, self.summary_temperature, self.max_lift_summary)):
+            value.setObjectName("receivingSummaryValue")
+            summary.addWidget(value, row, 1)
+        lower.addWidget(summary_card, 2)
+        layout.addLayout(lower)
+
+        actions = QHBoxLayout()
+        self.use_latest_button = QPushButton("Use Latest Actual")
+        self.use_latest_button.clicked.connect(self._use_latest)
+        actions.addWidget(self.use_latest_button)
+        self.use_estimate_button = QPushButton("Use Estimate")
+        self.use_estimate_button.clicked.connect(self._use_estimate)
+        actions.addWidget(self.use_estimate_button)
+        actions.addWidget(QLabel("Target Fill"))
+        self.apply_target_input = QDoubleSpinBox()
+        self.apply_target_input.setRange(.01, 100)
+        self.apply_target_input.setValue(default_target)
+        self.apply_target_input.setSuffix(" %")
+        actions.addWidget(self.apply_target_input)
+        self.apply_target_button = QPushButton("Apply to Selected")
+        self.apply_target_button.clicked.connect(self._apply_target_to_selected)
+        actions.addWidget(self.apply_target_button)
+        actions.addStretch()
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.setObjectName("receivingCancelButton")
+        self.cancel_button.clicked.connect(self.reject)
+        self.save_button = QPushButton("Save Receiving Plan")
+        self.save_button.setObjectName("receivingSaveButton")
+        self.save_button.clicked.connect(self._save)
+        actions.addWidget(self.cancel_button)
+        actions.addWidget(self.save_button)
+        layout.addLayout(actions)
         persisted = {row.tank_id: row for row in service.list_receiving_tank_plan(plan)}; snapshot = service.load_incoming_fuel_snapshot(plan)
         if snapshot.fuel_batch_id is not None: self.batch_input.setCurrentIndex(next((i for i in range(self.batch_input.count()) if self.batch_input.itemData(i) == snapshot.fuel_batch_id), 0))
+        existing = service.has_receiving_tank_plan(plan)
+        self.vcf_mode_input.setCurrentText(snapshot.vcf_mode if existing else "AUTO")
+        if snapshot.incoming_temperature_c is not None: self.temperature_input.setValue(snapshot.incoming_temperature_c)
         if snapshot.manual_vcf is not None: self.vcf_input.setText(f"{snapshot.manual_vcf:.5f}")
         candidates = [BunkerReceivingTankPlan(tank.id, persisted[tank.id].projected_arrival_volume_m3 if tank.id in persisted else None, persisted[tank.id].target_fill_percent if tank.id in persisted else default_target) for tank, _latest in service.list_eligible_receiving_tanks(plan.vessel_id)]
         estimates = service.resolve_receiving_tank_arrivals(plan, candidates)
         for row, (tank, latest) in enumerate(service.list_eligible_receiving_tanks(plan.vessel_id)):
-            saved = persisted.get(tank.id); estimate = estimates[tank.id]; self.table.insertRow(row); check=QCheckBox(); check.setChecked(saved is not None); self.table.setCellWidget(row,0,check); item=QTableWidgetItem(tank.name); item.setData(Qt.ItemDataRole.UserRole,(tank.id,latest,estimate)); self.table.setItem(row,1,item); self.table.setItem(row,2,QTableWidgetItem(f"{tank.capacity_m3:.3f}")); self.table.setItem(row,3,QTableWidgetItem("--" if latest is None else f"{latest:.3f}")); projected=QLineEdit("" if estimate.projected_arrival_volume_m3 is None else f"{estimate.projected_arrival_volume_m3:.3f}"); projected.setProperty("manual_override", saved is not None and saved.projected_arrival_volume_m3 is not None); projected.textEdited.connect(lambda _text, field=projected: field.setProperty("manual_override", True)); target=QDoubleSpinBox(); target.setRange(.01,100); target.setValue(saved.target_fill_percent if saved else default_target); available="--" if estimate.projected_arrival_volume_m3 is None else f"{max(0.0, tank.capacity_m3 * target.value() / 100 - estimate.projected_arrival_volume_m3):.3f}"; self.table.setCellWidget(row,4,projected); source=QTableWidgetItem("Manual" if estimate.source == "MANUAL" else "Estimated" if estimate.source == "ESTIMATED" else "Unavailable"); source.setToolTip(estimate.issue or ""); self.table.setItem(row,5,source); self.table.setCellWidget(row,6,target); self.table.setItem(row,7,QTableWidgetItem(available))
-        self.batch_input.currentIndexChanged.connect(self._batch_changed); self._batch_changed()
+            saved = persisted.get(tank.id); estimate = estimates[tank.id]; self.table.insertRow(row); check=QCheckBox(); check.setChecked(saved is not None); check.toggled.connect(self._update_summary); self.table.setCellWidget(row,0,check); item=QTableWidgetItem(tank.name); item.setData(Qt.ItemDataRole.UserRole,(tank.id,latest,estimate)); self.table.setItem(row,1,item); self.table.setItem(row,2,QTableWidgetItem(f"{tank.capacity_m3:.3f}")); self.table.setItem(row,3,QTableWidgetItem("--" if latest is None else f"{latest:.3f}")); projected=QLineEdit("" if estimate.projected_arrival_volume_m3 is None else f"{estimate.projected_arrival_volume_m3:.3f}"); projected.setProperty("manual_override", saved is not None and saved.projected_arrival_volume_m3 is not None); projected.textEdited.connect(lambda _text, field=projected: field.setProperty("manual_override", True)); projected.textChanged.connect(self._update_summary); target=QDoubleSpinBox(); target.setRange(.01,100); target.setValue(saved.target_fill_percent if saved else default_target); target.valueChanged.connect(self._update_summary); available="--" if estimate.projected_arrival_volume_m3 is None else f"{max(0.0, tank.capacity_m3 * target.value() / 100 - estimate.projected_arrival_volume_m3):.3f}"; self.table.setCellWidget(row,4,projected); source=QTableWidgetItem("Manual" if estimate.source == "MANUAL" else "Estimated" if estimate.source == "ESTIMATED" else "Unavailable"); source.setToolTip(estimate.issue or ""); self.table.setItem(row,5,source); self.table.setCellWidget(row,6,target); self.table.setItem(row,7,QTableWidgetItem(available))
+        self.batch_input.currentIndexChanged.connect(self._batch_changed); self.vcf_mode_input.currentTextChanged.connect(self._vcf_mode_changed); self.temperature_input.valueChanged.connect(self._refresh_auto_vcf); self.temperature_input.valueChanged.connect(self._update_summary); self.vcf_input.textChanged.connect(self._update_summary); self._batch_changed(); self._vcf_mode_changed(); self._update_summary()
+
+    def _update_summary(self):
+        selected = sum(self.table.cellWidget(row, 0).isChecked() for row in range(self.table.rowCount()))
+        self.selected_summary.setText(str(selected))
+        batch = next((item for item in self._service.list_fuel_batches(self._plan.vessel_id) if item.id == self.batch_input.currentData()), None)
+        effective_vcf = self._dialog_effective_vcf(batch)
+        available = 0.0
+        complete = selected > 0
+        for row in range(self.table.rowCount()):
+            if not self.table.cellWidget(row, 0).isChecked():
+                continue
+            try:
+                capacity = float(self.table.item(row, 2).text())
+                projected = float(self.table.cellWidget(row, 4).text())
+            except (TypeError, ValueError):
+                complete = False
+                continue
+            available += max(0.0, capacity * self.table.cellWidget(row, 6).value() / 100.0 - projected)
+        volume_15 = available * effective_vcf if complete and effective_vcf is not None else None
+        max_lift = volume_15 * batch.density_15_kg_m3 / 1000.0 if volume_15 is not None and batch is not None else None
+        self.available_summary.setText(f"{available:.3f} m³" if complete else "--")
+        self.volume_15_summary.setText("--" if volume_15 is None else f"{volume_15:.3f} m³")
+        mode = self.vcf_mode_input.currentText()
+        self.effective_vcf_summary.setText("--" if effective_vcf is None else f"{effective_vcf:.5f} {mode}")
+        self.summary_density.setText("--" if batch is None else f"{batch.density_15_kg_m3:.3f} kg/m³")
+        self.summary_temperature.setText("--" if mode != "AUTO" or self.temperature_input.value() == self.temperature_input.minimum() else f"{self.temperature_input.value():.1f} °C")
+        self.max_lift_summary.setText("--" if max_lift is None else f"{max_lift:.3f} MT")
+
+    def _dialog_effective_vcf(self, batch):
+        if self.vcf_mode_input.currentText() == "MANUAL":
+            try:
+                value = float(self.vcf_input.text())
+                return value if value > 0 else None
+            except ValueError:
+                return None
+        if batch is None or self.temperature_input.value() == self.temperature_input.minimum():
+            return None
+        try:
+            from fuel_consumption_calculator.calculations.automatic_vcf import calculate_automatic_vcf
+            return calculate_automatic_vcf(batch.density_15_kg_m3, self.temperature_input.value(), batch.fuel_type)
+        except ValueError:
+            return None
 
     def _batch_changed(self):
-        batch_id=self.batch_input.currentData(); batch=next((b for b in self._service.list_fuel_batches(self._plan.vessel_id) if b.id==batch_id),None); self.fuel_label.set_fuel_type(batch.fuel_type if batch else None); self.density_label.setText(f"{batch.density_15_kg_m3:.3f} kg/m3" if batch else "--")
+        batch_id=self.batch_input.currentData(); batch=next((b for b in self._service.list_fuel_batches(self._plan.vessel_id) if b.id==batch_id),None); self.fuel_label.set_fuel_type(batch.fuel_type if batch else None); self.density_label.setText(f"{batch.density_15_kg_m3:.3f} kg/m3" if batch else "--"); self._refresh_auto_vcf(); self._update_summary()
+
+    def _vcf_mode_changed(self):
+        manual = self.vcf_mode_input.currentText() == "MANUAL"
+        self.vcf_input.setEnabled(manual); self.auto_vcf_label.setVisible(not manual); self.temperature_input.setEnabled(not manual)
+        self._refresh_auto_vcf(); self._update_summary()
+
+    def _refresh_auto_vcf(self):
+        if self.vcf_mode_input.currentText() != "AUTO": return
+        batch = next((b for b in self._service.list_fuel_batches(self._plan.vessel_id) if b.id == self.batch_input.currentData()), None)
+        if batch is None or self.temperature_input.value() == self.temperature_input.minimum(): self.auto_vcf_label.setText("Incoming bunker temperature required"); return
+        try:
+            from fuel_consumption_calculator.calculations.automatic_vcf import calculate_automatic_vcf
+            self.auto_vcf_label.setText(f"{calculate_automatic_vcf(batch.density_15_kg_m3, self.temperature_input.value(), batch.fuel_type):.5f} AUTO")
+        except ValueError as error: self.auto_vcf_label.setText(str(error))
 
     def _use_latest(self):
         row=self.table.currentRow()
@@ -218,13 +380,21 @@ class ReceivingTanksDialog(QDialog):
         _tank_id, _latest, estimate=self.table.item(row,1).data(Qt.ItemDataRole.UserRole)
         field=self.table.cellWidget(row,4); field.setText("" if estimate.projected_arrival_volume_m3 is None else f"{estimate.projected_arrival_volume_m3:.3f}"); field.setProperty("manual_override", False)
 
+    def _apply_target_to_selected(self):
+        for row in range(self.table.rowCount()):
+            if self.table.cellWidget(row, 0).isChecked():
+                self.table.cellWidget(row, 6).setValue(self.apply_target_input.value())
+        self._update_summary()
+
     def _save(self):
         rows=[]
         for row in range(self.table.rowCount()):
             if not self.table.cellWidget(row,0).isChecked(): continue
             tank_id,_,_=self.table.item(row,1).data(Qt.ItemDataRole.UserRole); field=self.table.cellWidget(row,4); text=field.text().strip()
             rows.append(BunkerReceivingTankPlan(tank_id, float(text) if field.property("manual_override") and text else None, self.table.cellWidget(row,6).value()))
-        try: self._service.save_receiving_tank_plan(self._plan, rows, self.batch_input.currentData(), float(self.vcf_input.text()) if self.vcf_input.text().strip() else None)
+        mode = self.vcf_mode_input.currentText(); manual_vcf = float(self.vcf_input.text()) if mode == "MANUAL" and self.vcf_input.text().strip() else None
+        temperature = self.temperature_input.value() if mode == "AUTO" and self.temperature_input.value() != self.temperature_input.minimum() else None
+        try: self._service.save_receiving_tank_plan(self._plan, rows, self.batch_input.currentData(), manual_vcf, temperature, mode)
         except (ValueError, TypeError) as error: QMessageBox.warning(self,"Receiving plan not saved",str(error)); return
         self.accept()
 
@@ -234,14 +404,15 @@ class BunkerDistributionDialog(QDialog):
         super().__init__(parent); self._service, self._plan = service, plan; self.setWindowTitle("Bunker Distribution"); self.resize(620, 360)
         layout = QVBoxLayout(self); self.table = QTableWidget(0, 3); self.table.setHorizontalHeaderLabels(("Tank", "Available MT", "Receipt MT")); self.table.verticalHeader().setVisible(False); self.table.horizontalHeader().setStretchLastSection(True); layout.addWidget(self.table)
         incoming = service.load_incoming_fuel_snapshot(plan); batch = next((item for item in service.list_fuel_batches(plan.vessel_id) if item.id == incoming.fuel_batch_id), None)
+        effective_vcf, _vcf_issue = service.effective_vcf(plan)
         self._fuel = batch.fuel_type if batch else None; self._total = plan.quantity_for(self._fuel) if self._fuel else 0.0
         rows = service.list_receiving_tank_plan(plan); tanks = {tank.id: tank for tank, _ in service.list_eligible_receiving_tanks(plan.vessel_id)}; projections = service.resolve_receiving_tank_arrivals(plan); saved = {item.tank_id: item for item in service.list_tank_receipts(plan)}
         for index, row in enumerate(rows):
             tank = tanks.get(row.tank_id); projection = projections.get(row.tank_id)
-            if tank is None or projection is None or projection.projected_arrival_volume_m3 is None or incoming.density_15_kg_m3 is None or incoming.manual_vcf is None: capacity = None
+            if tank is None or projection is None or projection.projected_arrival_volume_m3 is None or incoming.density_15_kg_m3 is None or effective_vcf is None: capacity = None
             else:
                 from fuel_consumption_calculator.calculations.tank_max_lift import SelectedReceivingTank, calculate_tank_max_lift
-                capacity = calculate_tank_max_lift([SelectedReceivingTank(tank.id, tank.capacity_m3, projection.projected_arrival_volume_m3, row.target_fill_percent)], incoming_density_15_kg_m3=incoming.density_15_kg_m3, incoming_manual_vcf=incoming.manual_vcf).total_max_lift_mt
+                capacity = calculate_tank_max_lift([SelectedReceivingTank(tank.id, tank.capacity_m3, projection.projected_arrival_volume_m3, row.target_fill_percent)], incoming_density_15_kg_m3=incoming.density_15_kg_m3, incoming_manual_vcf=effective_vcf).total_max_lift_mt
             self.table.insertRow(index); item=QTableWidgetItem(tank.name if tank else str(row.tank_id)); item.setData(Qt.ItemDataRole.UserRole, row.tank_id); self.table.setItem(index,0,item); self.table.setItem(index,1,QTableWidgetItem("--" if capacity is None else f"{capacity:.3f}")); value=QDoubleSpinBox(); value.setRange(0, capacity if capacity is not None else 999999.99); value.setDecimals(3); value.setValue(saved[row.tank_id].quantity_mt if row.tank_id in saved else 0); value.valueChanged.connect(self._update); self.table.setCellWidget(index,2,value)
         self.summary=QLabel(); self.summary.setObjectName("fieldLabel"); layout.addWidget(self.summary); buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Save|QDialogButtonBox.StandardButton.Cancel); buttons.accepted.connect(self._save); buttons.rejected.connect(self.reject); layout.addWidget(buttons); self._update()
 
@@ -282,6 +453,7 @@ class BunkerPage(QWidget):
         self._target_rob_labels: dict[str, QLabel] = {}
         self._arrival_rob_labels: dict[str, QLabel] = {}
         self._max_lift_labels: dict[str, QLabel] = {}
+        self._capacity_field_labels: dict[str, QLabel] = {}
         self._lift_limits: dict[str, BunkerLiftLimit] = {}
         self._loading_plan = False
 
@@ -393,6 +565,8 @@ class BunkerPage(QWidget):
                 field.setObjectName("fieldLabel")
                 card_grid.addWidget(field, label_row, 0)
                 card_grid.addWidget(value_widget, label_row, 1)
+                if label_text == "Capacity":
+                    self._capacity_field_labels[fuel_type] = field
             self._target_rob_labels[fuel_type] = target_rob_label
             self._arrival_rob_labels[fuel_type] = arrival_label
             self._max_lift_labels[fuel_type] = max_lift_label
@@ -466,13 +640,13 @@ class BunkerPage(QWidget):
 
         self.update_sounding_button.setEnabled(True)
         observations = self._voyage_service.list_actual_rob_observations(vessel.id)
-        latest = max(observations, key=lambda item: item.effective_at_utc, default=None)
+        latest = max(observations, key=lambda item: _utc_instant(item.effective_at_utc), default=None)
         if latest is None:
             self.actual_sounding_label.setText("No Actual Sounding ROB recorded")
         else:
             quantities = " | ".join(f"{fuel} {latest.quantities_mt.get(fuel):.2f} MT" for fuel in FUEL_TYPES)
             remarks = f" | {latest.remarks}" if latest.remarks else ""
-            self.actual_sounding_label.setText(f"Effective: {latest.effective_at_utc:%d %b %Y %H:%M UTC} | {quantities}{remarks}")
+            self.actual_sounding_label.setText(f"Effective: {_utc_instant(latest.effective_at_utc):%d %b %Y %H:%M UTC} | {quantities}{remarks}")
         self.vessel_label.setText(f"Vessel: {vessel.name}  |  IMO {vessel.imo}")
         self._set_controls_enabled(True)
         self._events = self._schedule_service.list_events(vessel.id)
@@ -487,7 +661,7 @@ class BunkerPage(QWidget):
         if vessel is None:
             return
         observations = self._voyage_service.list_actual_rob_observations(vessel.id)
-        latest = max(observations, key=lambda item: item.effective_at_utc, default=None)
+        latest = max(observations, key=lambda item: _utc_instant(item.effective_at_utc), default=None)
         dialog = ActualROBDialog(latest.quantities_mt if latest else None, self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
@@ -646,7 +820,8 @@ class BunkerPage(QWidget):
 
     def _use_max_lift(self) -> None:
         for fuel_type, limit in self._lift_limits.items():
-            self._planned_inputs[fuel_type].setValue(limit.max_lift_mt)
+            if limit.max_lift_mt is not None:
+                self._planned_inputs[fuel_type].setValue(limit.max_lift_mt)
 
     def _open_receiving_tanks(self) -> None:
         vessel=self._vessel_service.get_active_vessel(); event=self._selected_event()
@@ -654,7 +829,13 @@ class BunkerPage(QWidget):
         plan=self._bunker_service.build_plan(vessel_id=vessel.id,event=event,quantities={fuel: self._planned_inputs[fuel].value() for fuel in FUEL_TYPES})
         default_target=next(iter(self._target_inputs.values())).value() if self._target_inputs else 90
         if ReceivingTanksDialog(self._bunker_service,plan,default_target,self).exec() == QDialog.DialogCode.Accepted:
-            self._refresh_projection(vessel.id); self._selection_changed(); self.status_label.setText("Receiving tank plan saved as DRAFT.")
+            self._refresh_after_receiving_plan_save(vessel.id)
+
+    def _refresh_after_receiving_plan_save(self, vessel_id: int) -> None:
+        """Reload the current event's persisted receiving-plan authority after save."""
+        self._refresh_projection(vessel_id)
+        self._selection_changed()
+        self.status_label.setText("Receiving tank plan saved as DRAFT.")
 
     def _open_bunker_distribution(self) -> None:
         plan = self._current_event_plan()
@@ -719,23 +900,49 @@ class BunkerPage(QWidget):
         )
         plan = self._current_event_plan()
         tank_plan = plan is not None and self._bunker_service.has_receiving_tank_plan(plan)
-        tank_result = self._bunker_service.tank_based_max_lift(plan) if tank_plan else None
+        receiving_rows = self._bunker_service.list_receiving_tank_plan(plan) if tank_plan else []
+        incoming = self._bunker_service.load_incoming_fuel_snapshot(plan) if tank_plan else None
+        effective_vcf, vcf_issue = self._bunker_service.effective_vcf(plan) if tank_plan else (None, None)
+        batches = self._bunker_service.list_fuel_batches(plan.vessel_id) if tank_plan else []
+        batch = next((item for item in batches if item.id == incoming.fuel_batch_id), None) if incoming else None
+        tanks = {tank.id: tank for tank, _latest in self._bunker_service.list_eligible_receiving_tanks(plan.vessel_id)} if tank_plan else {}
+        projections = self._bunker_service.resolve_receiving_tank_arrivals(plan, receiving_rows) if tank_plan else {}
+        unavailable_arrivals = sum(
+            1 for row in receiving_rows
+            if row.tank_id not in tanks
+            or projections.get(row.tank_id) is None
+            or projections[row.tank_id].projected_arrival_volume_m3 is None
+        )
+        tank_result = self._bunker_service.tank_based_max_lift(plan) if tank_plan and not unavailable_arrivals else None
         if tank_plan:
-            rows = self._bunker_service.list_receiving_tank_plan(plan)
+            selected_count_label = f"{len(receiving_rows)} {'tank' if len(receiving_rows) == 1 else 'tanks'} selected"
+            selected_capacity_m3 = sum(tanks[row.tank_id].capacity_m3 for row in receiving_rows if row.tank_id in tanks)
+            for fuel_type in FUEL_TYPES:
+                self._capacity_field_labels[fuel_type].setText("Legacy Capacity")
+            if batch is not None:
+                self._capacity_field_labels[batch.fuel_type].setText("Receiving Capacity")
+                getattr(self, f"_{batch.fuel_type.lower()}_capacity_label").setText(f"{selected_capacity_m3:.3f} m³")
             if tank_result is None or tank_result.total_max_lift_mt is None:
-                self.receiving_summary_label.setText(f"{len(rows)} tanks selected · Max Lift incomplete")
+                reasons = []
+                if unavailable_arrivals:
+                    suffix = "tank" if unavailable_arrivals == 1 else "tanks"
+                    reasons.append(f"Projected arrival unavailable for {unavailable_arrivals} selected {suffix}")
+                if vcf_issue:
+                    reasons.append(vcf_issue)
+                self.receiving_summary_label.setText(selected_count_label + " · " + "; ".join(reasons or ["Max Lift unavailable"]))
                 self._lift_limits = {fuel: replace(limit, max_lift_mt=None) for fuel, limit in self._lift_limits.items()}
             else:
-                self.receiving_summary_label.setText(f"{len(rows)} tanks selected · {tank_result.total_available_volume_m3:.3f} m3 available")
-                snapshot = self._bunker_service.load_incoming_fuel_snapshot(plan)
-                batch = next((b for b in self._bunker_service.list_fuel_batches(plan.vessel_id) if b.id == snapshot.fuel_batch_id), None)
+                self.receiving_summary_label.setText(f"{selected_count_label} · {tank_result.total_available_volume_m3:.3f} m³ available")
                 self._lift_limits = {fuel: replace(limit, max_lift_mt=tank_result.total_max_lift_mt if batch and fuel == batch.fuel_type else 0.0) for fuel, limit in self._lift_limits.items()}
                 if sum(self._planned_inputs[fuel].value() for fuel in FUEL_TYPES) > tank_result.total_max_lift_mt + 0.001:
                     self.receiving_summary_label.setText("Receiving plan issue: Planned Lift exceeds refreshed Max Lift")
         else:
             self.receiving_summary_label.setText("Receiving tanks not configured")
         for fuel_type, limit in self._lift_limits.items():
-            getattr(self, f"_{fuel_type.lower()}_capacity_label").setText(_format_mt(limit.capacity_mt))
+            if not tank_plan or batch is None or fuel_type != batch.fuel_type:
+                getattr(self, f"_{fuel_type.lower()}_capacity_label").setText(_format_mt(limit.capacity_mt))
+            if not tank_plan:
+                self._capacity_field_labels[fuel_type].setText("Capacity")
             getattr(self, f"_{fuel_type.lower()}_target_label").setText(f"{limit.target_fill_percent:.2f} %")
             self._target_rob_labels[fuel_type].setText(_format_mt(limit.target_rob_mt))
             self._arrival_rob_labels[fuel_type].setText(_format_mt(limit.arrival_rob_mt))
@@ -823,29 +1030,45 @@ class BunkerPage(QWidget):
         )
         layout.addWidget(port_meta)
 
-        # ARRIVAL
-        arrival_panel = QFrame()
-        arrival_panel.setObjectName("panel")
-        arrival_layout = QGridLayout(arrival_panel)
-        arrival_layout.setContentsMargins(16, 14, 16, 14)
-        arrival_layout.setHorizontalSpacing(24)
-        arrival_layout.setVerticalSpacing(8)
+        # The aggregate voyage projection and tank forecast remain separate
+        # authorities.  The latter is display-only bunker-space advice.
+        vessel = self._vessel_service.get_active_vessel()
+        arrival_bunker, arrival_bunker_issue = self._bunker_service.bunker_tank_rob_at(
+            vessel.id, row.event.effective_arrival_at,
+        ) if vessel else ({fuel: None for fuel in FUEL_TYPES}, "Vessel unavailable.")
+        current_bunker, current_bunker_issue = self._bunker_service.bunker_tank_rob_at(
+            vessel.id, datetime.now(timezone.utc),
+        ) if vessel else ({fuel: None for fuel in FUEL_TYPES}, "Vessel unavailable.")
+        end_at = row.event.effective_departure_at or row.event.effective_arrival_at
+        eoe_bunker, eoe_bunker_issue = self._bunker_service.bunker_tank_rob_at(
+            vessel.id, end_at,
+        ) if vessel else ({fuel: None for fuel in FUEL_TYPES}, "Vessel unavailable.")
 
-        arrival_title = QLabel("ARRIVAL")
-        arrival_title.setObjectName("sectionTitle")
-        arrival_layout.addWidget(arrival_title, 0, 0, 1, 2)
-
-        arrival_layout.addWidget(QLabel("Arrival ROB"), 1, 0)
-        arrival_layout.addWidget(
-            QLabel(_format_fuels(row.arrival_rob_mt)),
-            1,
-            1,
-        )
-
-        arrival_layout.addWidget(QLabel("ROB Source"), 2, 0)
-        arrival_layout.addWidget(QLabel(row.rob_source), 2, 1)
-
-        layout.addWidget(arrival_panel)
+        summary_row = QHBoxLayout()
+        summary_row.setSpacing(12)
+        event_panel = _detail_card("ARRIVAL SUMMARY")
+        event_grid = QGridLayout(); event_panel.layout().addItem(event_grid)
+        event_grid.addWidget(QLabel("Arrival ROB Source"), 0, 0); event_grid.addWidget(QLabel(row.rob_source), 0, 1)
+        event_grid.addWidget(QLabel("Arrival Time UTC"), 1, 0); event_grid.addWidget(QLabel(row.event.effective_arrival_at.strftime("%d %b %Y %H:%M")), 1, 1)
+        event_grid.addWidget(QLabel("Vessel / IMO"), 2, 0); event_grid.addWidget(QLabel(f"{vessel.name} / {vessel.imo}" if vessel else "—"), 2, 1)
+        summary_row.addWidget(event_panel, 2)
+        total_panel = _detail_card("TOTAL VESSEL ROB")
+        total_grid = QGridLayout(); total_panel.layout().addItem(total_grid)
+        total_grid.addWidget(QLabel("Arrival Total ROB"), 0, 0); total_grid.addWidget(QLabel(_format_fuels(row.arrival_rob_mt)), 0, 1)
+        total_grid.addWidget(QLabel("EOE ROB (end of current event)"), 1, 0); total_grid.addWidget(QLabel(_format_fuels(row.departure_rob_mt)), 1, 1)
+        total_grid.addWidget(QLabel("Aggregate voyage authority"), 2, 0, 1, 2)
+        summary_row.addWidget(total_panel, 3)
+        bunker_panel = _detail_card("BUNKER TANKS ROB")
+        bunker_grid = QGridLayout(); bunker_panel.layout().addItem(bunker_grid)
+        bunker_grid.addWidget(QLabel("Arrival Bunker Tanks ROB"), 0, 0); bunker_grid.addWidget(QLabel(_format_fuels(arrival_bunker)), 0, 1)
+        bunker_grid.addWidget(QLabel("Current Bunker Tanks ROB (now)"), 1, 0); bunker_grid.addWidget(QLabel(_format_fuels(current_bunker)), 1, 1)
+        bunker_grid.addWidget(QLabel("EOE Bunker Tanks ROB"), 2, 0); bunker_grid.addWidget(QLabel(_format_fuels(eoe_bunker)), 2, 1)
+        bunker_grid.addWidget(QLabel(arrival_bunker_issue or current_bunker_issue or eoe_bunker_issue or "Tank-forecast advisory only"), 3, 0, 1, 2)
+        summary_row.addWidget(bunker_panel, 3)
+        explanation = _detail_card("WHAT'S THE DIFFERENCE?")
+        explanation.layout().addWidget(QLabel("Total Vessel ROB = all fuel remaining onboard.\n\nBunker Tanks ROB = fuel remaining in configured bunker/storage tanks.\n\nMax Lift = selected physical tank space, converted with incoming density and VCF."))
+        summary_row.addWidget(explanation, 2)
+        layout.addLayout(summary_row)
 
         # BUNKER PLAN
         planning_panel = QFrame()
@@ -973,6 +1196,19 @@ def _spinbox(suffix: str, minimum: float, maximum: float, step: float) -> QDoubl
     return spinbox
 
 
+def _detail_card(title: str) -> QFrame:
+    card = QFrame()
+    card.setObjectName("panel")
+    card.setMinimumHeight(136)
+    layout = QVBoxLayout(card)
+    layout.setContentsMargins(14, 12, 14, 12)
+    layout.setSpacing(8)
+    heading = QLabel(title)
+    heading.setObjectName("fieldLabel")
+    layout.addWidget(heading)
+    return card
+
+
 def _format_fuels(values: dict[str, float | None], *, zero_blank: bool = False) -> str:
     parts = []
     for short, fuel in (("U", "ULSFO"), ("V", "VLSFO"), ("M", "MDO")):
@@ -981,6 +1217,11 @@ def _format_fuels(values: dict[str, float | None], *, zero_blank: bool = False) 
             continue
         parts.append(f"{short} {'—' if value is None else f'{float(value):.1f}'}")
     return " / ".join(parts) if parts else "—"
+
+
+def _utc_instant(value: datetime) -> datetime:
+    """Treat legacy naïve Actual ROB timestamps as UTC for safe instant comparison."""
+    return value.astimezone(timezone.utc) if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
 def _format_mt(value: float | None) -> str:

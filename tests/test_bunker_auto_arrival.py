@@ -87,3 +87,15 @@ def test_auto_estimate_feeds_tank_max_lift_without_persisting_it(setup):
     assert service.list_receiving_tank_plan(plan)[0].projected_arrival_volume_m3 is None
     assert result.total_available_volume_m3 == pytest.approx(375)
     assert result.total_max_lift_mt is None
+
+
+def test_bunker_tank_rob_is_advisory_and_excludes_non_eligible_tanks(setup):
+    database, tank, event = setup
+    excluded = FuelTankRepository(database).save_tank(FuelTank(None, 1, "Service", "SERVICE", 500, "SOUNDING", False))
+    forecast = TankForecast(tank.id, "VLSFO", ARRIVAL, 100, 0, 75)
+    service = BunkerService(BunkerRepository(database), ForecastStub(forecast, None))
+
+    values, issue = service.bunker_tank_rob_at(1, ARRIVAL)
+
+    assert values == {"ULSFO": None, "VLSFO": 75.0, "MDO": None}
+    assert issue is None

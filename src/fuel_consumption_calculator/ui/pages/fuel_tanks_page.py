@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from datetime import datetime, timezone
 
 from PySide6.QtCore import QSize, QTimer, Qt, Signal
-from PySide6.QtGui import QColor, QPainter
+from PySide6.QtGui import QColor, QGuiApplication, QPainter
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout,
     QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton,
@@ -34,15 +35,9 @@ MDO_SLOTS = ("MDO_1_SERV", "MDO_2_SERV", "MDO_1_STOR", "MDO_2_STOR")
 SUPPORT_SLOTS = ("ULSFO_SETT", "ULSFO_SERV", "HFO_SERV", "HFO_SETT", "OVFLW_ER")
 DEEP_SLOTS = ("DEEP_3P", "DEEP_2P", "DEEP_1P", "DEEP_3S", "DEEP_2S", "DEEP_1S")
 VESSEL_TANK_SET = (
-    ("HFO DEEP TK 3P", "BUNKER", True), ("HFO DEEP TK 2P", "BUNKER", True),
-    ("HFO DEEP TK 1P", "BUNKER", True), ("LSFO DEEP TK 3S", "BUNKER", True),
-    ("HFO DEEP TK 2S", "BUNKER", True), ("HFO DEEP TK 1S", "BUNKER", True),
-    ("NO.1 DO STOR.TK", "BUNKER", True), ("NO.2 DO STOR.TK", "BUNKER", True),
-    ("HFO SETT.TK", "SETTLING", False), ("LSHFO SETT.TK", "SETTLING", False),
-    ("HFO SERV.TK", "SERVICE", False), ("LSHFO SERV.TK", "SERVICE", False),
-    ("NO.1 DO SERV.TK", "SERVICE", False), ("NO.2 DO SERV.TK", "SERVICE", False),
-    ("OVFLW TK CH", "OTHER", False), ("OVFLW TK ER", "OTHER", False),
+    ("HFO DEEP TK 3P", "BUNKER", True), ("HFO DEEP TK 2P", "BUNKER", True), ("HFO DEEP TK 1P", "BUNKER", True), ("LSFO DEEP TK 3S", "BUNKER", True), ("HFO DEEP TK 2S", "BUNKER", True), ("HFO DEEP TK 1S", "BUNKER", True), ("NO.1 DO STOR.TK", "BUNKER", True), ("NO.2 DO STOR.TK", "BUNKER", True), ("HFO SETT.TK", "SETTLING", False), ("LSHFO SETT.TK", "SETTLING", False), ("HFO SERV.TK", "SERVICE", False), ("LSHFO SERV.TK", "SERVICE", False), ("NO.1 DO SERV.TK", "SERVICE", False), ("NO.2 DO SERV.TK", "SERVICE", False), ("OVFLW TK CH", "OTHER", False), ("OVFLW TK ER", "OTHER", False),
 )
+VESSEL_TANK_CAPACITIES = {"HFO DEEP TK 1P":1515.4,"HFO DEEP TK 1S":1573.3,"HFO DEEP TK 2P":1643.5,"HFO DEEP TK 2S":1643.5,"HFO DEEP TK 3P":849.2,"LSFO DEEP TK 3S":849.2,"HFO SERV.TK":154.9,"HFO SETT.TK":294.3,"LSHFO SERV.TK":154.9,"LSHFO SETT.TK":158.6,"NO.1 DO STOR.TK":182.0,"NO.2 DO STOR.TK":151.7,"NO.1 DO SERV.TK":196.8,"NO.2 DO SERV.TK":182.0,"OVFLW TK ER":78.6,"OVFLW TK CH":62.1}
 
 
 class TankLevelWidget(QWidget):
@@ -60,10 +55,7 @@ class TankLevelWidget(QWidget):
         painter.setPen(QColor("#5c8194"))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRoundedRect(outline, 4, 4)
-        if self._unknown:
-            painter.setPen(QColor("#6f8796"))
-            painter.drawText(outline, Qt.AlignmentFlag.AlignCenter, "?")
-            return
+        if self._unknown: return
         height = round(outline.height() * self._fill_percent / 100)
         if height:
             liquid = outline.adjusted(2, outline.height() - height + 2, -2, -2)
@@ -76,50 +68,38 @@ class TankCard(QFrame):
     selected = Signal(int)
     activated = Signal(int)
 
-    SIZES = {
-        "mdo": (120, 72, 9, 52),
-        "support": (110, 58, 8, 40),
-        "deep": (152, 152, 12, 128),
-        "overflow": (128, 142, 10, 118),
-        "other": (104, 80, 10, 58),
-    }
-
     def __init__(self, tank: FuelTank, fuel_type: str | None, batch_name: str | None, latest: TankSounding | None, kind: str = "other", parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._tank_id = tank.id
-        self.setObjectName("card")
+        self.setObjectName("tankCard")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.kind = kind
-        width, height, gauge_width, gauge_height = self.SIZES[kind]
-        self.setFixedSize(width, height)
+        self.kind = kind; self.setMinimumHeight(180); self.setProperty("fuel", (fuel_type or "UNASSIGNED").upper())
         self.setToolTip(tank.name)
         fill_percent = None if latest is None else latest.calculated_volume_m3 / tank.capacity_m3 * 100
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(7, 6, 5, 6)
-        layout.setSpacing(4)
+        layout = QHBoxLayout(self); layout.setContentsMargins(17, 16, 16, 16); layout.setSpacing(14)
         details = QVBoxLayout()
-        details.setSpacing(0)
-        name = QLabel(_short_display_name(tank.name))
-        name.setStyleSheet("font-size: 10pt; font-weight: 700;" if kind in {"deep", "overflow"} else "font-size: 8pt; font-weight: 700;")
-        details.addWidget(name)
-        marker = FuelBadge(fuel_type)
-        marker.setObjectName("fuelIndicator")
-        details.addWidget(marker)
+        details.setSpacing(5)
+        name = QLabel(_short_display_name(tank.name)); name.setObjectName("tankName")
+        marker = FuelBadge(fuel_type or "UNASSIGNED")
+        top = QHBoxLayout(); top.setContentsMargins(0, 0, 0, 0); top.addWidget(name, 1); top.addWidget(marker); details.addLayout(top)
         if latest is None:
-            details.addWidget(_card_value("MT --"))
-            details.addWidget(_card_value("ROB --"))
+            details.addWidget(_card_value("—")); details.addWidget(_card_meta("No ROB available")); details.addWidget(_card_meta("FILL  —"))
         else:
             if latest.calculated_mass_mt is not None:
                 details.addWidget(_card_value(f"{latest.calculated_mass_mt:.2f} MT"))
             else:
-                details.addWidget(_card_value("MT --"))
-            details.addWidget(_card_value(f"{max(0.0, min(100.0, fill_percent or 0.0)):.0f}%"))
+                details.addWidget(_card_value("—"))
+            details.addWidget(_card_meta("ACTUAL ROB")); percent = QLabel(f"{max(0.0, min(100.0, fill_percent or 0.0)):.0f}%"); percent.setObjectName("tankFill"); percent.setStyleSheet(f"color:{fuel_color(fuel_type or 'UNKNOWN')};"); details.addWidget(percent)
         details.addStretch()
         layout.addLayout(details, 1)
-        layout.addWidget(TankLevelWidget(fill_percent, fuel_type, gauge_width, gauge_height), alignment=Qt.AlignmentFlag.AlignVCenter)
+        gauge_box = QVBoxLayout(); gauge_box.setContentsMargins(0, 0, 0, 0); gauge_box.setSpacing(0)
+        for mark in ("100%", "75%", "50%", "25%", "0%"):
+            label = QLabel(mark); label.setObjectName("tankGaugeMark"); gauge_box.addWidget(label, 1)
+        gauge = TankLevelWidget(fill_percent, fuel_type, 20, 126)
+        gauge_wrap = QHBoxLayout(); gauge_wrap.setContentsMargins(0, 0, 0, 0); gauge_wrap.setSpacing(9); gauge_wrap.addWidget(gauge); gauge_wrap.addLayout(gauge_box); layout.addLayout(gauge_wrap)
 
     def set_selected(self, selected: bool) -> None:
-        self.setStyleSheet("QFrame#card { border: 2px solid #1aa0b8; }" if selected else "")
+        self.setStyleSheet("QFrame#tankCard { border: 2px solid #2ba2c3; }" if selected else "")
 
     def mousePressEvent(self, event) -> None:
         if self._tank_id is not None:
@@ -176,7 +156,7 @@ class VesselTankSetDialog(QDialog):
         self.setWindowTitle("Load Vessel Tank Set")
         self.setMinimumSize(720, 510)
         layout = QVBoxLayout(self)
-        layout.addWidget(_muted("Select the tanks to create and enter each actual capacity before confirming."))
+        layout.addWidget(_muted("Verified 100% physical capacities are prefilled; adjust only if the vessel placard differs."))
         self.tank_table = QTableWidget(len(VESSEL_TANK_SET), 5)
         self.tank_table.setHorizontalHeaderLabels(("Include", "Tank Name", "Tank Type", "Capacity m³", "Bunker Receiving"))
         self.tank_table.verticalHeader().setVisible(False)
@@ -185,7 +165,7 @@ class VesselTankSetDialog(QDialog):
         self.row_controls: list[tuple[QCheckBox, QDoubleSpinBox, QCheckBox]] = []
         for row, (name, tank_type, receiving_default) in enumerate(VESSEL_TANK_SET):
             include = QCheckBox(); include.setChecked(True)
-            capacity = QDoubleSpinBox(); capacity.setRange(0.0, 100000.0); capacity.setDecimals(2); capacity.setSuffix(" m³"); capacity.setSpecialValueText("Required")
+            capacity = QDoubleSpinBox(); capacity.setRange(0.0, 100000.0); capacity.setDecimals(2); capacity.setSuffix(" m³"); capacity.setSpecialValueText("Required"); capacity.setValue(VESSEL_TANK_CAPACITIES[name])
             receiving = QCheckBox(); receiving.setChecked(receiving_default)
             self.tank_table.setCellWidget(row, 0, include)
             self.tank_table.setItem(row, 1, QTableWidgetItem(name))
@@ -205,7 +185,7 @@ class VesselTankSetDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
-    def create_selected_tanks(self) -> tuple[int, int]:
+    def create_selected_tanks(self) -> tuple[int, int, int]:
         selected: list[tuple[str, str, bool, float]] = []
         missing_capacities: list[str] = []
         for row, (name, tank_type, _) in enumerate(VESSEL_TANK_SET):
@@ -219,30 +199,43 @@ class VesselTankSetDialog(QDialog):
         if missing_capacities:
             raise ValueError("Enter a capacity greater than 0 m³ for every selected tank: " + ", ".join(missing_capacities))
         existing_tanks = self._service.list_tanks(self._vessel_id, include_inactive=True)
-        existing_names = {_normalized_name(tank.name) for tank in existing_tanks}
-        existing_positions = {_position_for_tank(tank.name) for tank in existing_tanks}
-        created = existing = 0
+        existing_names = {_normalized_name(tank.name): tank for tank in existing_tanks}
+        existing_positions = {_position_for_tank(tank.name): tank for tank in existing_tanks}
+        created = updated = unchanged = 0
         for name, tank_type, receiving, capacity in selected:
             position = _position_for_tank(name)
-            if _normalized_name(name) in existing_names or (position is not None and position in existing_positions):
-                existing += 1
+            existing = existing_names.get(_normalized_name(name)) or (existing_positions.get(position) if position is not None else None)
+            if existing is not None:
+                configured = replace(
+                    existing,
+                    tank_type=tank_type,
+                    capacity_m3=capacity,
+                    bunker_receiving_eligible=receiving,
+                )
+                if configured != existing:
+                    self._service.update_tank(configured)
+                    updated += 1
+                else:
+                    unchanged += 1
                 continue
             saved = self._service.create_tank(FuelTank(
                 id=None, vessel_id=self._vessel_id, name=name, tank_type=tank_type, capacity_m3=capacity,
                 preferred_measurement_type="SOUNDING", bunker_receiving_eligible=receiving,
             ))
-            existing_names.add(_normalized_name(saved.name))
-            existing_positions.add(_position_for_tank(saved.name))
+            existing_names[_normalized_name(saved.name)] = saved
+            existing_positions[_position_for_tank(saved.name)] = saved
             created += 1
-        return created, existing
+        return created, updated, unchanged
 
     def _create_selected(self) -> None:
         try:
-            created, existing = self.create_selected_tanks()
+            created, updated, unchanged = self.create_selected_tanks()
         except ValueError as error:
             QMessageBox.warning(self, "Tank set not created", str(error))
             return
-        self.summary_label.setText(f"{created} tank{'s' if created != 1 else ''} created, {existing} already existed.")
+        self.summary_label.setText(
+            f"Created: {created}   Updated: {updated}   Unchanged: {unchanged}"
+        )
 
 
 class LegacyTankDetailsDialog(QDialog):
@@ -515,48 +508,63 @@ class InternalTransferDialog(QDialog):
 class TankSoundingSurveyDialog(QDialog):
     def __init__(self, service: FuelTankService, vessel_id: int, parent: QWidget | None = None, voyage_service=None) -> None:
         super().__init__(parent); self._service, self._vessel_id, self._voyage_service = service, vessel_id, voyage_service; self._rows = []; self._save_attempted = False
-        self.setWindowTitle("Tank Sounding Survey"); self.resize(1180, 700); self.setMinimumSize(980, 600)
-        layout = QVBoxLayout(self); layout.setContentsMargins(14, 12, 14, 12); layout.setSpacing(8)
-        title = QLabel("Tank Sounding Survey"); title.setObjectName("pageTitle"); layout.addWidget(title)
-        common_box = QFrame(); common_box.setObjectName("panel"); common = QGridLayout(common_box); common.setContentsMargins(10, 7, 10, 7); common.setHorizontalSpacing(8); common.setVerticalSpacing(4)
+        self.setWindowTitle("Tank Sounding Survey"); self.setObjectName("soundingSurveyDialog")
+        screen = QGuiApplication.primaryScreen()
+        available = screen.availableGeometry() if screen is not None else None
+        maximum_width = min(1350, available.width() - 40) if available else 1350
+        maximum_height = min(820, available.height() - 40) if available else 820
+        self.setMinimumSize(min(1100, maximum_width), min(650, maximum_height))
+        self.resize(maximum_width, maximum_height)
+        layout = QVBoxLayout(self); layout.setContentsMargins(20, 18, 20, 18); layout.setSpacing(12)
+        title_row = QHBoxLayout(); icon = QLabel("♒"); icon.setObjectName("surveyIcon"); title = QLabel("Tank Sounding Survey"); title.setObjectName("surveyTitle"); title_row.addWidget(icon); title_row.addWidget(title); title_row.addStretch(); layout.addLayout(title_row)
+        common_box = QFrame(); common_box.setObjectName("surveyHeaderCard"); common = QGridLayout(common_box); common.setContentsMargins(14, 10, 14, 10); common.setHorizontalSpacing(10); common.setVerticalSpacing(8)
         self.time = QLineEdit(datetime.now(timezone.utc).isoformat(timespec="seconds")); self.trim = QLineEdit("0"); self.remarks = QLineEdit()
-        self.time.setMinimumWidth(235); self.trim.setMaximumWidth(100)
-        common.addWidget(QLabel("Observation UTC:"), 0, 0); common.addWidget(self.time, 0, 1); common.addWidget(QLabel("Trim m:"), 0, 2); common.addWidget(self.trim, 0, 3)
-        common.addWidget(QLabel("Remarks:"), 1, 0); common.addWidget(self.remarks, 1, 1, 1, 3); layout.addWidget(common_box)
+        self.time.setMinimumWidth(330); self.trim.setFixedWidth(120)
+        common.addWidget(QLabel("Observation UTC"), 0, 0); common.addWidget(self.time, 0, 1); utc_note = QLabel("All times are in UTC"); utc_note.setObjectName("surveyHint"); common.addWidget(utc_note, 0, 2); common.addWidget(QLabel("Trim (m)"), 0, 3); common.addWidget(self.trim, 0, 4)
+        common.addWidget(QLabel("Remarks"), 1, 0); common.addWidget(self.remarks, 1, 1, 1, 4); layout.addWidget(common_box)
+        common.setColumnStretch(1, 5); common.setColumnStretch(2, 2); common.setColumnStretch(4, 2)
         self.table = QTableWidget(0, 10); self.table.setObjectName("soundingSurveyTable")
         self.table.setHorizontalHeaderLabels(("Include", "Tank", "Fuel / basis", "Measurement", "Reading cm", "Temp C", "Manual VCF", "Volume m3", "MT", "Status"))
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers); self.table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
-        self.table.verticalHeader().setVisible(False); self.table.verticalHeader().setDefaultSectionSize(42); self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setVisible(False); self.table.verticalHeader().setDefaultSectionSize(52); self.table.setAlternatingRowColors(True)
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded); self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         header = self.table.horizontalHeader()
-        for column in (0, 3, 4, 5, 6, 7, 8): header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
-        for column in (1, 2, 9): header.setSectionResizeMode(column, QHeaderView.ResizeMode.Stretch)
+        widths = (70, 205, 180, 135, 118, 105, 120, 110, 92, 155)
+        for column, width in enumerate(widths):
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed); self.table.setColumnWidth(column, width)
         layout.addWidget(self.table, 1)
         batches = {batch.id: batch for batch in service.list_fuel_batches(vessel_id)}
         for tank in service.list_tanks(vessel_id): self._add_row(tank, batches.get(tank.current_fuel_batch_id))
-        totals_box = QFrame(); totals_box.setObjectName("panel"); totals_layout = QVBoxLayout(totals_box); totals_layout.setContentsMargins(10, 7, 10, 7); totals_layout.setSpacing(3)
-        totals_title = QLabel("SURVEY TOTAL ROB"); totals_title.setStyleSheet("font-weight: 700;")
-        self.totals = QLabel("--"); self.totals.setStyleSheet("font-size: 14px; font-weight: 600;")
-        self.completeness = QLabel("Status: INCOMPLETE"); totals_layout.addWidget(totals_title); totals_layout.addWidget(self.totals); totals_layout.addWidget(self.completeness); layout.addWidget(totals_box)
+        totals_box = QFrame(); totals_box.setObjectName("surveySummaryCard"); totals_layout = QHBoxLayout(totals_box); totals_layout.setContentsMargins(16, 12, 16, 12); totals_layout.setSpacing(20)
+        total_column = QVBoxLayout(); totals_title = QLabel("SURVEY TOTAL ROB"); totals_title.setObjectName("surveySummaryTitle"); self.totals = QLabel("—"); self.totals.setObjectName("surveyTotalValue"); total_column.addWidget(totals_title); total_column.addWidget(self.totals); totals_layout.addLayout(total_column)
+        status_column = QVBoxLayout(); status_label = QLabel("STATUS"); status_label.setObjectName("surveySummaryTitle"); self.completeness = QLabel("INCOMPLETE"); self.completeness.setObjectName("surveyStatusBadge"); self.completeness_reason = QLabel(""); self.completeness_reason.setObjectName("surveyHint"); status_column.addWidget(status_label); status_column.addWidget(self.completeness); status_column.addWidget(self.completeness_reason); totals_layout.addLayout(status_column, 1)
+        self.summary_counts = {}
+        for key, caption in (("included", "Included Tanks"), ("excluded", "Excluded Tanks"), ("known", "Tanks with ROB"), ("unknown", "Unknown ROB")):
+            column = QVBoxLayout(); name = QLabel(caption); name.setObjectName("surveyHint"); value = QLabel("0"); value.setObjectName("surveyCountValue"); column.addWidget(name); column.addWidget(value); totals_layout.addLayout(column); self.summary_counts[key] = value
+        layout.addWidget(totals_box)
         self.use_actual = QCheckBox("Use survey totals as Actual Vessel ROB"); self.use_actual.setToolTip("Checking this re-anchors aggregate vessel ROB. It is available only when every active tank has a known mass in this survey.")
-        layout.addWidget(self.use_actual)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel); self.save_button = buttons.addButton("Save Survey", QDialogButtonBox.ButtonRole.AcceptRole)
-        self.save_button.clicked.connect(self._save); buttons.rejected.connect(self.reject); layout.addWidget(buttons)
+        footer = QHBoxLayout(); actual_column = QVBoxLayout(); actual_column.addWidget(self.use_actual); actual_note = QLabel("When enabled, survey totals update the vessel's Actual ROB."); actual_note.setObjectName("surveyHint"); actual_column.addWidget(actual_note); footer.addLayout(actual_column); footer.addStretch()
+        cancel = QPushButton("Cancel"); cancel.setObjectName("surveyCancelButton"); cancel.clicked.connect(self.reject); self.save_button = QPushButton("Save Survey"); self.save_button.setObjectName("primaryButton"); self.save_button.clicked.connect(self._save); footer.addWidget(cancel); footer.addWidget(self.save_button); layout.addLayout(footer)
         self.trim.textChanged.connect(self._refresh_all); self._refresh_all()
 
     def _add_row(self, tank: FuelTank, batch: FuelBatch | None) -> None:
         row_number = self.table.rowCount(); self.table.insertRow(row_number)
         include = QCheckBox(); include.setChecked(tank.tank_type == "BUNKER"); include.setToolTip("Include this tank in the survey")
-        kind = QComboBox(); kind.addItems(MEASUREMENT_TYPES); kind.setCurrentText(tank.preferred_measurement_type); kind.setMaximumWidth(110)
+        kind = QComboBox(); kind.addItems(MEASUREMENT_TYPES); kind.setCurrentText(tank.preferred_measurement_type); kind.setFixedWidth(135)
         reading, temp, vcf = QLineEdit(), QLineEdit(), QLineEdit()
         for widget, placeholder in ((reading, "cm"), (temp, "optional"), (vcf, "optional")):
-            widget.setPlaceholderText(placeholder); widget.setMaximumWidth(105); widget.setStyleSheet("QLineEdit { background: #263b47; }")
-        fuel = batch.fuel_type if batch else "UNKNOWN"; basis = f"{fuel}\n{batch.batch_name}\n{batch.density_15_kg_m3:.0f} kg/m3" if batch else "UNKNOWN\nNo batch assigned"
-        fuel_label = QLabel(basis); fuel_label.setToolTip(basis); fuel_label.setStyleSheet("font-size: 11px;")
-        volume, mass, status = QLabel("--"), QLabel("--"), QLabel("--")
-        for result in (volume, mass, status): result.setStyleSheet("color: #b8c9d4; font-weight: 600;")
+            widget.setPlaceholderText(placeholder); widget.setFixedWidth(112)
+        fuel = batch.fuel_type if batch else "UNASSIGNED"
+        basis_widget = QWidget(); basis_layout = QVBoxLayout(basis_widget); basis_layout.setContentsMargins(6, 3, 6, 3); basis_layout.setSpacing(2)
+        basis_layout.addWidget(FuelBadge(fuel), alignment=Qt.AlignmentFlag.AlignLeft)
+        basis = QLabel(batch.batch_name if batch else "No batch assigned"); basis.setObjectName("surveyBasisText"); basis_layout.addWidget(basis)
+        volume, mass, status = QLabel("—"), QLabel("—"), QLabel("PENDING")
+        volume.setObjectName("surveyCalculated"); mass.setObjectName("surveyCalculated"); status.setObjectName("surveyStatus")
         row = (tank, include, kind, reading, temp, vcf, status, batch, volume, mass)
         self._rows.append(row)
-        self.table.setCellWidget(row_number, 0, include); self.table.setCellWidget(row_number, 1, QLabel(tank.name)); self.table.setCellWidget(row_number, 2, fuel_label)
+        include_holder = QWidget(); include_layout = QHBoxLayout(include_holder); include_layout.setContentsMargins(0, 0, 0, 0); include_layout.addWidget(include, alignment=Qt.AlignmentFlag.AlignCenter)
+        tank_label = QLabel(tank.name); tank_label.setObjectName("surveyTankName")
+        self.table.setCellWidget(row_number, 0, include_holder); self.table.setCellWidget(row_number, 1, tank_label); self.table.setCellWidget(row_number, 2, basis_widget)
         for column, widget in ((3, kind), (4, reading), (5, temp), (6, vcf), (7, volume), (8, mass), (9, status)): self.table.setCellWidget(row_number, column, widget)
         include.toggled.connect(lambda *_unused, item=row: self._preview_row(item))
         for widget in (kind, reading, temp, vcf):
@@ -568,40 +576,49 @@ class TankSoundingSurveyDialog(QDialog):
     def _preview_row(self, row) -> None:
         tank, include, kind, reading, temp, vcf, status, batch, volume_label, mass_label = row
         for widget in (kind, reading, temp, vcf): widget.setEnabled(include.isChecked())
-        if not include.isChecked(): status.setText("Excluded"); volume_label.setText("--"); mass_label.setText("--"); self._refresh_totals(); return
+        if not include.isChecked(): self._set_row_status(status, "Excluded"); volume_label.setText("—"); mass_label.setText("—"); self._refresh_totals(); return
         entered = any(widget.currentText().strip() if isinstance(widget, QComboBox) else widget.text().strip() for widget in (reading, temp, vcf))
         if not reading.text().strip() or not self.trim.text().strip():
-            status.setText("Reading required" if self._save_attempted else ("Incomplete" if entered else "--")); volume_label.setText("--"); mass_label.setText("--"); self._refresh_totals(); return
+            self._set_row_status(status, "Reading required" if self._save_attempted else ("Incomplete" if entered else "--")); volume_label.setText("—"); mass_label.setText("—"); self._refresh_totals(); return
         try:
             reading_value = _optional_float(reading.text(), "Reading")
             trim_value = _optional_float(self.trim.text(), "Trim")
             if reading_value is None or trim_value is None: raise ValueError("Invalid reading")
             volume = self._service.calculate_calibrated_volume(tank.id, kind.currentText(), reading_value, trim_value)
             volume_label.setText(f"{volume:.3f}")
-            if not vcf.text().strip(): status.setText("VCF needed for MT"); mass_label.setText("--")
-            elif batch is None: status.setText("No batch"); mass_label.setText("--")
+            if not vcf.text().strip(): self._set_row_status(status, "VCF needed for MT"); mass_label.setText("—")
+            elif batch is None: self._set_row_status(status, "No batch"); mass_label.setText("—")
             else:
                 vcf_value = _optional_float(vcf.text(), "Manual VCF")
-                result = self._service.calculate_manual_vcf_mass(volume, vcf_value, batch.density_15_kg_m3); mass_label.setText(f"{result.mass_mt:.3f}"); mass_label.setToolTip(f"Volume @15: {result.standard_volume_15_m3:.3f} m3"); status.setText("Ready")
+                result = self._service.calculate_manual_vcf_mass(volume, vcf_value, batch.density_15_kg_m3); mass_label.setText(f"{result.mass_mt:.3f}"); mass_label.setToolTip(f"Volume @15: {result.standard_volume_15_m3:.3f} m3"); self._set_row_status(status, "Ready")
         except ValueError as error:
-            message = str(error).lower(); status.setText("Outside range" if "range" in message else ("No calibration" if "calibration" in message else "Invalid reading")); volume_label.setText("--"); mass_label.setText("--")
+            message = str(error).lower(); self._set_row_status(status, "Outside range" if "range" in message else ("No calibration" if "calibration" in message else "Invalid reading")); volume_label.setText("—"); mass_label.setText("—")
         self._refresh_totals()
 
     def _refresh_all(self) -> None:
         for row in self._rows: self._preview_row(row)
+
+    @staticmethod
+    def _set_row_status(label: QLabel, state: str) -> None:
+        colors = {"Ready": "#63C98D", "Excluded": "#8A9AA8", "Pending": "#E3A33B", "--": "#E3A33B", "VCF needed for MT": "#59CBE8", "No batch": "#F29128", "No calibration": "#E3A33B", "Outside range": "#E37C4A"}
+        label.setText(state); label.setStyleSheet(f"color:{colors.get(state, '#E3A33B')}; font-weight:700; font-size:10px;")
 
     def _refresh_totals(self) -> None:
         totals = {fuel: 0.0 for fuel in FUEL_BATCH_TYPES}; included = []; unknown = 0
         for tank, include, _kind, _reading, _temp, _vcf, _status, batch, _volume, mass in self._rows:
             if not include.isChecked(): continue
             included.append(tank)
-            if batch is None or mass.text() == "--": unknown += 1
+            if batch is None or mass.text() in {"--", "—"}: unknown += 1
             else: totals[batch.fuel_type] += float(mass.text())
         visible = [f"{fuel}  {amount:,.2f} MT" for fuel, amount in totals.items() if amount]
-        self.totals.setText("    ".join(visible) if visible else "--")
+        self.totals.setText("    ".join(visible) if visible else "—")
         active_count = len(self._service.list_tanks(self._vessel_id))
         complete = bool(included) and len(included) == active_count and unknown == 0
-        self.completeness.setText("Status: COMPLETE" if complete else f"Status: INCOMPLETE{f' — {unknown} included tank(s) have unknown MT' if unknown else ''}")
+        self.completeness.setText("COMPLETE" if complete else "INCOMPLETE")
+        self.completeness.setStyleSheet(f"color:{'#63C98D' if complete else '#F29128'}; font-weight:700; font-size:14px;")
+        self.completeness_reason.setText("Complete" if complete else f"{unknown} included tank(s) have unknown MT")
+        included_count = len(included); excluded_count = len(self._rows) - included_count; known_count = included_count - unknown
+        self.summary_counts["included"].setText(str(included_count)); self.summary_counts["excluded"].setText(str(excluded_count)); self.summary_counts["known"].setText(str(known_count)); self.summary_counts["unknown"].setText(str(unknown))
         self.use_actual.setEnabled(complete)
         if not complete: self.use_actual.setChecked(False)
 
@@ -644,56 +661,28 @@ class FuelTanksPage(QWidget):
         layout.addWidget(PageHeader("Fuel Oil Tanks", "Vessel fuel tank overview and ROB management."))
         self.vessel_label = _muted("Vessel: Not configured"); layout.addWidget(self.vessel_label)
         self.empty_label = _muted(""); self.empty_label.setObjectName("notConfiguredStatus"); layout.addWidget(self.empty_label)
-        self.arrangement_panel = QFrame(); self.arrangement_panel.setObjectName("panel")
-        panel_layout = QVBoxLayout(self.arrangement_panel); panel_layout.setContentsMargins(18, 16, 18, 18); panel_layout.setSpacing(10)
-        title = QLabel("TANK ARRANGEMENT"); title.setObjectName("sectionTitle"); panel_layout.addWidget(title)
-        self.tank_strip = QScrollArea()
-        self.tank_strip.setWidgetResizable(False)
-        self.tank_strip.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.tank_strip.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.tank_strip.setFrameShape(QFrame.Shape.NoFrame)
-        self.tank_strip.setStyleSheet("""
-            QScrollBar:horizontal { height: 8px; background: #16252d; margin: 1px 8px; }
-            QScrollBar::handle:horizontal { background: #426778; border-radius: 4px; min-width: 28px; }
-            QScrollBar::handle:horizontal:hover { background: #5a8799; }
-            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
-        """)
-        self.tank_strip.setFixedHeight(282)
-        self.strip_content = QWidget()
-        self.strip_content.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self.arrangement_layout = QVBoxLayout(self.strip_content)
-        self.arrangement_layout.setContentsMargins(0, 0, 0, 0)
-        self.arrangement_layout.setSpacing(12)
-        self.tank_strip.setWidget(self.strip_content)
-        panel_layout.addWidget(self.tank_strip)
-        self.add_tank_button = QPushButton("Add Tank"); self.add_tank_button.setObjectName("primaryButton"); self.add_tank_button.clicked.connect(self._add_tank)
+        self.arrangement_panel = QFrame(); self.arrangement_panel.setObjectName("tankWorkspace")
+        self.arrangement_layout = QVBoxLayout(self.arrangement_panel); self.arrangement_layout.setContentsMargins(10, 8, 10, 10); self.arrangement_layout.setSpacing(14)
+        self.add_tank_button = QPushButton("Add Tank"); self.add_tank_button.clicked.connect(self._add_tank)
         self.load_tank_set_button = QPushButton("Load Vessel Tank Set"); self.load_tank_set_button.clicked.connect(self._load_vessel_tank_set)
         self.survey_button = QPushButton("Update Tank ROBs"); self.survey_button.setObjectName("primaryButton"); self.survey_button.clicked.connect(self._open_survey)
         self.consumption_tanks_button = QPushButton("Consumption Tanks"); self.consumption_tanks_button.clicked.connect(self._configure_consumption_tanks)
         self.internal_transfer_button = QPushButton("Internal Transfer"); self.internal_transfer_button.clicked.connect(self._open_internal_transfer)
-        self.update_rob_button = QPushButton("Update ROB"); self.update_rob_button.setEnabled(False); self.update_rob_button.clicked.connect(self._update_rob)
-        self.calibration_button = QPushButton("Calibration"); self.calibration_button.setEnabled(False); self.calibration_button.clicked.connect(self._open_calibration)
-        self.fuel_batch_button = QPushButton("Fuel / Batch"); self.fuel_batch_button.setEnabled(False); self.fuel_batch_button.clicked.connect(self._open_fuel_batch)
-        self.edit_tank_button = QPushButton("Edit Selected Tank"); self.edit_tank_button.setEnabled(False); self.edit_tank_button.clicked.connect(self._edit_selected_tank)
         self.primary_actions_layout = QGridLayout(); self.primary_actions_layout.setHorizontalSpacing(10); self.primary_actions_layout.setVerticalSpacing(8)
         for column, button in enumerate((self.survey_button, self.consumption_tanks_button, self.internal_transfer_button, self.add_tank_button, self.load_tank_set_button)):
             self.primary_actions_layout.addWidget(button, 0, column)
         layout.addLayout(self.primary_actions_layout)
         layout.addWidget(self.arrangement_panel)
-        self.selected_actions_layout = QGridLayout(); self.selected_actions_layout.setHorizontalSpacing(10); self.selected_actions_layout.setVerticalSpacing(8)
-        for column, button in enumerate((self.edit_tank_button, self.update_rob_button, self.calibration_button, self.fuel_batch_button)):
-            self.selected_actions_layout.addWidget(button, 0, column)
-        layout.addLayout(self.selected_actions_layout)
         recent_title = QLabel("RECENT SOUNDINGS / ROB HISTORY"); recent_title.setObjectName("sectionTitle"); layout.addWidget(recent_title)
-        self.history_table = QTableWidget(0, 11); self.history_table.setHorizontalHeaderLabels(("UTC", "Tank", "Type", "Reading", "Trim", "Temperature", "Observed Volume m3", "VCF", "Volume @15 m3", "MT", "Fuel"))
+        self.history_table = QTableWidget(0, 12); self.history_table.setHorizontalHeaderLabels(("UTC", "Tank", "Type", "Reading (cm)", "Trim (m)", "Temp (°C)", "Observed (m³)", "VCF", "Volume @15°C (m³)", "MT", "Fuel", "Batch"))
         self.history_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers); self.history_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection); self.history_table.setAlternatingRowColors(True)
-        self.history_table.horizontalHeader().setStretchLastSection(True); self.history_table.setMinimumHeight(190); layout.addWidget(self.history_table)
+        self.history_table.verticalHeader().setVisible(False); self.history_table.horizontalHeader().setStretchLastSection(True); self.history_table.setMinimumHeight(190); layout.addWidget(self.history_table)
         self.history_empty_label = _muted("No tank soundings recorded."); layout.addWidget(self.history_empty_label); layout.addStretch()
         scroll.setWidget(content); root.addWidget(scroll)
 
     def refresh(self) -> None:
         vessel = self._vessel_service.get_active_vessel()
-        self._selected_tank_id = None; self.tank_cards = []; self.edit_tank_button.setEnabled(False); self.update_rob_button.setEnabled(False); self.calibration_button.setEnabled(False); self.fuel_batch_button.setEnabled(False); self._clear_layout(self.arrangement_layout); self.history_table.setRowCount(0)
+        self._selected_tank_id = None; self.tank_cards = []; self._clear_layout(self.arrangement_layout); self.history_table.setRowCount(0)
         if vessel is None:
             self.vessel_label.setText("Vessel: Not configured"); self.empty_label.setText("Configure a vessel before adding fuel oil tanks.")
             self.empty_label.show(); self.arrangement_panel.hide(); self.add_tank_button.setEnabled(False); self.load_tank_set_button.setEnabled(False); self.consumption_tanks_button.setEnabled(False); self.internal_transfer_button.setEnabled(False); self.survey_button.setEnabled(False); self.history_empty_label.show(); return
@@ -712,39 +701,32 @@ class FuelTanksPage(QWidget):
             else:
                 slots[position] = tank
         history: list[tuple[FuelTank, TankSounding, str | None]] = []
-        orientation = _muted("AFT  ←----------------------------------------------------------→  FORWARD")
-        orientation.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        self.arrangement_layout.addWidget(orientation)
-        self.arrangement_layout.addWidget(self._build_tank_plan(slots, batches, history))
-        if other:
-            other_block = QWidget()
-            other_layout = QVBoxLayout(other_block); other_layout.setContentsMargins(0, 0, 0, 0); other_layout.setSpacing(5)
-            other_layout.addWidget(_section("OTHER TANKS"))
-            other_grid = QGridLayout(); other_grid.setSpacing(10)
-            for index, tank in enumerate(other):
-                self._add_tank_card(other_grid, tank, index // 4, index % 4, batches, history, "other")
-            other_layout.addLayout(other_grid)
-            self.arrangement_layout.addWidget(other_block)
-        self._sync_tank_strip_geometry()
-        # A visible QScrollArea may finish its child-layout negotiation on the next event turn.
-        QTimer.singleShot(0, self._sync_tank_strip_geometry)
+        self._build_approved_groups(slots, other, batches, history)
         self._populate_history(history)
 
-    def _sync_tank_strip_geometry(self) -> None:
-        """Publish the dynamically populated strip geometry to its non-resizable scroll area."""
-        self.strip_content.ensurePolished()
-        self.arrangement_layout.invalidate()
-        self.arrangement_layout.activate()
-        layout_size = self.arrangement_layout.sizeHint().expandedTo(self.arrangement_layout.minimumSize())
-        content_size = self.strip_content.sizeHint().expandedTo(layout_size)
-        content_size = QSize(max(1, content_size.width()), max(1, content_size.height()))
-        self.strip_content.setFixedSize(content_size)
-        self.strip_content.updateGeometry()
-        self.strip_content.update()
-        scrollbar_height = self.tank_strip.horizontalScrollBar().sizeHint().height()
-        self.tank_strip.setFixedHeight(max(282, content_size.height() + scrollbar_height + 4))
-        self.tank_strip.updateGeometry()
-        self.tank_strip.viewport().update()
+    def _build_approved_groups(self, slots, other, batches, history) -> None:
+        groups = (("MDO Tanks", ("MDO_1_STOR", "MDO_2_STOR", "MDO_1_SERV", "MDO_2_SERV"), "MDO"), ("ULSFO Tanks", ("ULSFO_SETT", "ULSFO_SERV", "DEEP_3S"), "ULSFO"), ("VLSFO Tanks", ("DEEP_1P", "DEEP_1S", "DEEP_2P", "DEEP_2S", "DEEP_3P", "HFO_SETT", "HFO_SERV", "OVFLW_ER", "OVFLW_CH"), "VLSFO"))
+        for title, positions, fuel in groups:
+            tanks = [slots[position] for position in positions if position in slots]
+            if not tanks: continue
+            section = QWidget(); layout = QVBoxLayout(section); layout.setContentsMargins(0, 0, 0, 0); layout.setSpacing(8)
+            total, unknown = self._group_total(tanks)
+            heading = QLabel(f"{title}     Total ROB: {total if total is not None else '—'}" + (f"  ·  {unknown} tank unknown" if unknown else "")); heading.setObjectName("tankGroupHeading"); heading.setStyleSheet(f"color:{fuel_color(fuel)};"); layout.addWidget(heading)
+            grid = QGridLayout(); grid.setHorizontalSpacing(10); grid.setVerticalSpacing(10)
+            split = 5 if title == "VLSFO Tanks" else len(tanks)
+            for index, tank in enumerate(tanks): self._add_tank_card(grid, tank, index // split, index % split, batches, history, fuel.lower())
+            for column in range(split): grid.setColumnStretch(column, 1)
+            layout.addLayout(grid); self.arrangement_layout.addWidget(section)
+        for tank in other:
+            # Unmapped tanks remain visible without changing established identities.
+            if tank is other[0]:
+                heading = _section("OTHER TANKS"); self.arrangement_layout.addWidget(heading)
+            self._add_tank_card(self.arrangement_layout, tank, batches, history, "other")
+
+    def _group_total(self, tanks) -> tuple[str | None, int]:
+        values = [self._fuel_tank_service.get_latest_sounding(tank.id) for tank in tanks]
+        unknown = sum(1 for item in values if item is None or item.calculated_mass_mt is None)
+        return (None if unknown else f"{sum(item.calculated_mass_mt for item in values):,.2f} MT", unknown)
 
     def _build_tank_plan(self, slots: dict[str, FuelTank], batches, history) -> QWidget:
         plan = QWidget()
@@ -797,14 +779,13 @@ class FuelTanksPage(QWidget):
             layout.addWidget(card)
         self.tank_cards.append(card)
         for sounding in self._fuel_tank_service.list_sounding_history(tank.id):
-            sounding_batch = batches.get(sounding.fuel_batch_id) or batch
-            history.append((tank, sounding, sounding_batch.fuel_type if sounding_batch else None))
+            history.append((tank, sounding, batches.get(sounding.fuel_batch_id) or batch))
 
     def _populate_history(self, history: list[tuple[FuelTank, TankSounding, str | None]]) -> None:
         history.sort(key=lambda item: (item[1].effective_at_utc, item[1].id or 0), reverse=True)
-        for row, (tank, sounding, fuel_type) in enumerate(history[:20]):
+        for row, (tank, sounding, batch) in enumerate(history[:20]):
             self.history_table.insertRow(row)
-            values = (_format_utc(sounding.effective_at_utc), tank.name, sounding.reading_type, f"{sounding.reading_cm:.2f}", f"{sounding.trim_m:.2f}", "" if sounding.temperature_c is None else f"{sounding.temperature_c:.1f}", f"{sounding.calculated_volume_m3:.2f}", f"{sounding.manual_vcf:.5f}" if sounding.manual_vcf is not None else "--", f"{sounding.standard_volume_15_m3:.2f}" if sounding.standard_volume_15_m3 is not None else "--", f"{sounding.calculated_mass_mt:.2f}" if sounding.calculated_mass_mt is not None else "--", fuel_type or "")
+            values = (_format_utc(sounding.effective_at_utc), tank.name, sounding.reading_type, f"{sounding.reading_cm:.2f}", f"{sounding.trim_m:.2f}", "" if sounding.temperature_c is None else f"{sounding.temperature_c:.1f}", f"{sounding.calculated_volume_m3:.2f}", f"{sounding.manual_vcf:.5f}" if sounding.manual_vcf is not None else "--", f"{sounding.standard_volume_15_m3:.2f}" if sounding.standard_volume_15_m3 is not None else "--", f"{sounding.calculated_mass_mt:.2f}" if sounding.calculated_mass_mt is not None else "--", batch.fuel_type if batch else "", batch.batch_name if batch else "")
             for column, value in enumerate(values): self.history_table.setItem(row, column, QTableWidgetItem(value))
         self.history_empty_label.setVisible(not history)
 
@@ -815,7 +796,7 @@ class FuelTanksPage(QWidget):
             elif item.layout() is not None: self._clear_layout(item.layout())
 
     def _select_tank(self, tank_id: int) -> None:
-        self._selected_tank_id = tank_id; self.edit_tank_button.setEnabled(True); self.update_rob_button.setEnabled(True); self.calibration_button.setEnabled(True); self.fuel_batch_button.setEnabled(True)
+        self._selected_tank_id = tank_id
         for card in self.tank_cards:
             card.set_selected(card._tank_id == tank_id)
 
@@ -928,8 +909,12 @@ def _format_utc(value: str) -> str:
 
 def _card_value(text: str) -> QLabel:
     label = QLabel(text)
-    label.setStyleSheet("font-size: 7pt;")
+    label.setObjectName("tankRob")
     return label
+
+
+def _card_meta(text: str) -> QLabel:
+    label = QLabel(text); label.setObjectName("tankMeta"); return label
 
 
 def _optional_float(value: str, label: str) -> float | None:

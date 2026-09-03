@@ -92,6 +92,8 @@ class Database:
                 self._migrate_to_v18(connection)
             if current_version < 19:
                 self._migrate_to_v19(connection)
+            if current_version < 20:
+                self._migrate_to_v20(connection)
             if current_version >= 9:
                 self._ensure_default_port_timezones(connection)
                 self._resolve_existing_schedule_timezones(connection)
@@ -778,6 +780,20 @@ class Database:
                 ON bunker_tank_receipts (vessel_id, effective_at_utc);
         """)
         LOGGER.info("Database migrated to schema version 19.")
+
+    def _migrate_to_v20(self, connection: sqlite3.Connection) -> None:
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(bunker_incoming_fuel_snapshots)")}
+        # Some pre-v20 development fixtures intentionally omit the optional
+        # receiving-plan tables. A real v19 database has this table already;
+        # leave an absent optional table for its owning migration path.
+        if not columns:
+            LOGGER.info("Schema version 20: incoming fuel snapshot table is not present.")
+            return
+        if "incoming_temperature_c" not in columns:
+            connection.execute("ALTER TABLE bunker_incoming_fuel_snapshots ADD COLUMN incoming_temperature_c REAL")
+        if "vcf_mode" not in columns:
+            connection.execute("ALTER TABLE bunker_incoming_fuel_snapshots ADD COLUMN vcf_mode TEXT NOT NULL DEFAULT 'MANUAL' CHECK (vcf_mode IN ('AUTO', 'MANUAL'))")
+        LOGGER.info("Database migrated to schema version 20.")
 
     def _ensure_default_port_timezones(self, connection: sqlite3.Connection) -> None:
         timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")

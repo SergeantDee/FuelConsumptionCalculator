@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from fuel_consumption_calculator.calculations.current_rob_engine import estimate_current_rob
 from fuel_consumption_calculator.domain.consumption import FUEL_TYPES
 from fuel_consumption_calculator.domain.voyage import ActualROBObservation, CalculatedVoyageLeg, FuelChangeoverEvent, MACHINERY_TYPES, MachineryFuelState
 from fuel_consumption_calculator.domain.voyage_stages import (
@@ -259,11 +260,13 @@ class VoyagePage(QWidget):
         starting_rob = self._rob_service.load_starting_rob(vessel.id)
         observations = self._voyage_service.list_actual_rob_observations(vessel.id)
         self._rob_observations = tuple(observations)
+        now_utc = datetime.now(timezone.utc)
         self._timeline = build_voyage_stage_timeline(
             events,
             plan,
             starting_rob,
             port_breakdowns=voyage_result.port_breakdowns,
+            now_utc=now_utc,
             rob_observations=observations,
         )
         self._active_fuel_state = plan.initial_fuel_state
@@ -279,7 +282,15 @@ class VoyagePage(QWidget):
         self.next_event_label.setText(f"Next Major Event: {next_major.title if next_major else '-'}")
         self.summary_rob_label.setText(
             format_fuel_html(
-                self._timeline.current_predicted_rob_mt,
+                _current_predicted_rob_at(
+                    self._timeline,
+                    observations,
+                    starting_rob,
+                    plan.initial_fuel_state,
+                    plan.fuel_changeovers,
+                    plan.energy_config,
+                    now_utc,
+                ),
                 decimals=2,
                 show_unit=True,
                 prefix="Current Predicted ROB: ",
@@ -1994,3 +2005,37 @@ def _as_naive_utc(value: datetime | None) -> datetime | None:
     if value.tzinfo is not None:
         return value.astimezone(timezone.utc).replace(tzinfo=None)
     return value
+
+
+def _current_predicted_rob_at(
+    timeline: VoyageStageTimeline,
+    observations: list[ActualROBObservation],
+    starting_rob,
+    initial_fuel_state: MachineryFuelState | None,
+    fuel_changeovers: tuple[FuelChangeoverEvent, ...],
+    energy_config,
+    now_utc: datetime,
+) -> dict[str, float | None]:
+    """Use the latest eligible Actual ROB anchor for the planner's now-value."""
+    current_utc = _as_utc(now_utc)
+    anchor = max(
+        (observation for observation in observations if _as_utc(observation.effective_at_utc) <= current_utc),
+        key=lambda observation: _as_utc(observation.effective_at_utc),
+        default=None,
+    )
+    if anchor is None:
+        # Preserve the established starting-ROB fallback when no Actual ROB exists.
+        return timeline.current_predicted_rob_mt
+    return estimate_current_rob(
+        anchor_quantities_mt=anchor.quantities_mt,
+        anchor_at_utc=_as_utc(anchor.effective_at_utc),
+        current_utc=current_utc,
+        stages=timeline.stages,
+        initial_fuel_state=initial_fuel_state,
+        fuel_changeovers=fuel_changeovers,
+        energy_config=energy_config,
+    )
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value.astimezone(timezone.utc) if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)

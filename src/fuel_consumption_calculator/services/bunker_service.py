@@ -8,6 +8,7 @@ from fuel_consumption_calculator.calculations.bunker_projection_engine import (
 )
 from fuel_consumption_calculator.calculations.consumption_engine import ScheduleFuelConsumption
 from fuel_consumption_calculator.calculations.tank_max_lift import SelectedReceivingTank, TankMaxLiftResult, calculate_tank_max_lift
+from fuel_consumption_calculator.calculations.automatic_vcf import AutomaticVcfError, calculate_automatic_vcf
 from fuel_consumption_calculator.domain.bunker import (
     BunkerCapacity,
     BunkerCapacityProfile,
@@ -134,7 +135,30 @@ class BunkerService:
     def list_fuel_batches(self, vessel_id: int):
         return self._repository.list_fuel_batches(vessel_id)
 
-    def save_receiving_tank_plan(self, plan: PlannedBunker, rows: list[BunkerReceivingTankPlan], incoming_batch_id: int | None, manual_vcf: float | None) -> None:
+    def bunker_tank_rob_at(self, vessel_id: int, target_utc: datetime) -> tuple[dict[str, float | None], str | None]:
+        """Advisory MT remaining in configured bunker/storage tanks only.
+
+        This deliberately does not feed aggregate ROB or any voyage calculation.
+        """
+        values: dict[str, float | None] = {fuel: None for fuel in FUEL_TYPES}
+        if self._tank_forecast_service is None:
+            return values, "Tank forecast service is unavailable."
+        tanks = {tank.id for tank, _latest in self.list_eligible_receiving_tanks(vessel_id)}
+        if not tanks:
+            return values, "No eligible bunker/storage tanks are configured."
+        forecasts = [item for item in self._tank_forecast_service.predict_tank_rob_at(vessel_id, target_utc) if item.tank_id in tanks]
+        issues = []
+        for fuel_type in FUEL_TYPES:
+            matching = [item for item in forecasts if item.fuel_type == fuel_type]
+            if not matching:
+                continue
+            if any(item.predicted_mass_mt is None for item in matching):
+                issues.append(f"{fuel_type} tank forecast unavailable")
+                continue
+            values[fuel_type] = sum(float(item.predicted_mass_mt) for item in matching)
+        return values, "; ".join(issues) or None
+
+    def save_receiving_tank_plan(self, plan: PlannedBunker, rows: list[BunkerReceivingTankPlan], incoming_batch_id: int | None, manual_vcf: float | None, incoming_temperature_c: float | None = None, vcf_mode: str | None = None) -> None:
         batches = {batch.id: batch for batch in self.list_fuel_batches(plan.vessel_id)}
         if incoming_batch_id is not None and incoming_batch_id not in batches:
             raise ValueError("Incoming fuel batch must belong to the bunker-plan vessel.")
@@ -149,10 +173,33 @@ class BunkerService:
                 raise ValueError("Projected arrival volume must be at least 0.")
             if not 0 < row.target_fill_percent <= 100:
                 raise ValueError("Target fill percent must be greater than 0 and at most 100.")
+        mode = vcf_mode or ("MANUAL" if manual_vcf is not None else "AUTO")
+        if mode not in {"AUTO", "MANUAL"}:
+            raise ValueError("VCF mode must be AUTO or MANUAL.")
+        if mode == "MANUAL" and (manual_vcf is None or manual_vcf <= 0):
+            raise ValueError("Incoming Manual VCF must be greater than 0.")
+        if mode == "AUTO" and incoming_temperature_c is not None and not -50 <= incoming_temperature_c <= 150:
+            raise ValueError("Incoming bunker temperature is outside the supported range.")
         if manual_vcf is not None and manual_vcf <= 0:
             raise ValueError("Incoming Manual VCF must be greater than 0.")
         density = batches[incoming_batch_id].density_15_kg_m3 if incoming_batch_id is not None else None
-        self._repository.save_receiving_tank_plan(plan, rows, BunkerIncomingFuelSnapshot(incoming_batch_id, density, manual_vcf))
+        self._repository.save_receiving_tank_plan(plan, rows, BunkerIncomingFuelSnapshot(incoming_batch_id, density, manual_vcf if mode == "MANUAL" else None, incoming_temperature_c, mode))
+
+    def effective_vcf(self, plan: PlannedBunker) -> tuple[float | None, str | None]:
+        incoming = self.load_incoming_fuel_snapshot(plan)
+        if incoming.vcf_mode == "MANUAL":
+            return (incoming.manual_vcf, None if incoming.manual_vcf is not None else "Manual VCF required")
+        batch = next((item for item in self.list_fuel_batches(plan.vessel_id) if item.id == incoming.fuel_batch_id), None)
+        if batch is None:
+            return None, "Incoming batch required"
+        if incoming.density_15_kg_m3 is None:
+            return None, "Incoming density @15°C required"
+        if incoming.incoming_temperature_c is None:
+            return None, "Incoming bunker temperature required"
+        try:
+            return calculate_automatic_vcf(incoming.density_15_kg_m3, incoming.incoming_temperature_c, batch.fuel_type), None
+        except AutomaticVcfError as error:
+            return None, str(error)
 
     def list_receiving_tank_plan(self, plan: PlannedBunker) -> list[BunkerReceivingTankPlan]:
         return self._repository.list_receiving_tank_plan(plan)
@@ -169,6 +216,7 @@ class BunkerService:
     def save_tank_receipts(self, plan: PlannedBunker, receipts: list[BunkerTankReceipt]) -> None:
         """Persist a complete MT distribution; aggregate bunker remains the sole ROB authority."""
         incoming = self.load_incoming_fuel_snapshot(plan)
+        effective_vcf, _vcf_issue = self.effective_vcf(plan)
         batch = next((item for item in self.list_fuel_batches(plan.vessel_id) if item.id == incoming.fuel_batch_id), None)
         if batch is None:
             raise ValueError("Incoming fuel batch is required for bunker tank distribution.")
@@ -195,9 +243,9 @@ class BunkerService:
             if item.quantity_mt < 0:
                 raise ValueError("Bunker receipt quantity cannot be negative.")
             projected = projections.get(item.tank_id)
-            if projected is None or projected.projected_arrival_volume_m3 is None or incoming.density_15_kg_m3 is None or incoming.manual_vcf is None:
+            if projected is None or projected.projected_arrival_volume_m3 is None or incoming.density_15_kg_m3 is None or effective_vcf is None:
                 raise ValueError("Tank receiving capacity in MT is unavailable.")
-            capacity = calculate_tank_max_lift([SelectedReceivingTank(item.tank_id, tank.capacity_m3, projected.projected_arrival_volume_m3, selected[item.tank_id].target_fill_percent)], incoming_density_15_kg_m3=incoming.density_15_kg_m3, incoming_manual_vcf=incoming.manual_vcf).total_max_lift_mt
+            capacity = calculate_tank_max_lift([SelectedReceivingTank(item.tank_id, tank.capacity_m3, projected.projected_arrival_volume_m3, selected[item.tank_id].target_fill_percent)], incoming_density_15_kg_m3=incoming.density_15_kg_m3, incoming_manual_vcf=effective_vcf).total_max_lift_mt
             if capacity is None or item.quantity_mt > capacity + 0.001:
                 raise ValueError("Bunker receipt exceeds the selected tank's available receiving capacity.")
         effective = _arrival_utc(plan.arrival_snapshot)
@@ -214,7 +262,8 @@ class BunkerService:
         if any(row.tank_id not in tanks or projections[row.tank_id].projected_arrival_volume_m3 is None for row in rows):
             return None
         incoming = self._repository.load_incoming_fuel_snapshot(plan)
-        return calculate_tank_max_lift([SelectedReceivingTank(row.tank_id, tanks[row.tank_id].capacity_m3, projections[row.tank_id].projected_arrival_volume_m3, row.target_fill_percent) for row in rows], incoming_density_15_kg_m3=incoming.density_15_kg_m3, incoming_manual_vcf=incoming.manual_vcf)
+        effective_vcf, _issue = self.effective_vcf(plan)
+        return calculate_tank_max_lift([SelectedReceivingTank(row.tank_id, tanks[row.tank_id].capacity_m3, projections[row.tank_id].projected_arrival_volume_m3, row.target_fill_percent) for row in rows], incoming_density_15_kg_m3=incoming.density_15_kg_m3, incoming_manual_vcf=effective_vcf)
 
     def resolve_receiving_tank_arrivals(
         self, plan: PlannedBunker, rows: list[BunkerReceivingTankPlan] | None = None,

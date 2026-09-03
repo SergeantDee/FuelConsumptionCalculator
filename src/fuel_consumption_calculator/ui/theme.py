@@ -8,6 +8,7 @@ QWidget {
     font-family: "Segoe UI";
     font-size: 10pt;
 }
+QLabel { background: transparent; }
 QMainWindow { background-color: #0b1622; }
 QDialog { background-color: #0b1622; }
 #topClockRow {
@@ -290,4 +291,38 @@ QScrollBar::add-page, QScrollBar::sub-page {
     background: transparent;
 }
 QStatusBar { background-color: #0d1d29; color: #7798aa; }
+#tankWorkspace { background-color: #0d1b27; border: 1px solid #23475d; border-radius: 7px; }
+#tankGroupHeading { background: transparent; font-size: 13pt; font-weight: 700; padding: 6px 2px 5px 2px; border-bottom: 1px solid #23475d; }
+#tankCard { background-color: #102535; border: 1px solid #31556b; border-radius: 6px; }
+#tankCard[fuel="MDO"] { border-color: #8a5a22; }
+#tankCard[fuel="ULSFO"] { border-color: #287a91; }
+#tankCard[fuel="VLSFO"] { border-color: #66538d; }
+#tankCard:hover { background-color: #143246; border-color: #7bbbd2; }
+#tankName { color: #f4fbff; font-size: 14px; font-weight: 600; }
+#tankRob { color: #f5fbff; font-size: 29px; font-weight: 600; }
+#tankFill { font-size: 18px; font-weight: 700; }
+#tankMeta { color: #8caabd; font-size: 10px; }
+#tankGaugeMark { color: #b2c5d0; font-size: 9px; }
+#soundingSurveyDialog { background-color: #0b1622; }
+#surveyIcon { color: #2ba2c3; font-size: 28px; }
+#surveyTitle { color: #f4fbff; font-size: 26px; font-weight: 700; }
+#surveyHeaderCard, #surveySummaryCard { background-color: #102535; border: 1px solid #23475d; border-radius: 7px; }
+#surveyHint { color: #8caabd; font-size: 10px; }
+#surveyBasisText { color: #dce8f2; font-size: 11px; }
+#surveyTankName { color: #f4fbff; font-size: 12px; font-weight: 600; padding-left: 6px; }
+#surveyCalculated { color: #dce8f2; font-size: 12px; font-weight: 600; padding-left: 8px; }
+#surveySummaryTitle { color: #dce8f2; font-size: 10px; font-weight: 700; }
+#surveyTotalValue { color: #f5fbff; font-size: 22px; font-weight: 700; }
+#surveyCountValue { color: #f5fbff; font-size: 20px; font-weight: 700; }
+QTableWidget#soundingSurveyTable { background-color: #0e1d29; border: 1px solid #23475d; gridline-color: #23475d; }
+QPushButton#surveyCancelButton { min-height: 36px; min-width: 110px; }
+#receivingTanksDialog { background-color: #0b1622; }
+#receivingTitleIcon { color: #20bdd7; font-size: 24px; }
+#receivingTitle { color: #f4fbff; font-size: 24px; font-weight: 700; }
+#receivingHint, #receivingNote { color: #9bb3c3; font-size: 11px; }
+#receivingIncomingCard, #receivingSummaryCard { background-color: #102535; border: 1px solid #23475d; border-radius: 7px; }
+QTableWidget#receivingTanksTable { background-color: #0e1d29; border: 1px solid #23475d; gridline-color: #23475d; }
+#receivingSummaryValue { color: #f4fbff; font-size: 14px; font-weight: 700; }
+QPushButton#receivingCancelButton, QPushButton#receivingSaveButton { min-height: 38px; min-width: 130px; }
+QPushButton#receivingSaveButton { background-color: #087f9e; border-color: #20bdd7; color: #ffffff; font-weight: 700; }
 """
