@@ -8,6 +8,7 @@ from math import inf, nan
 import pytest
 
 from fuel_consumption_calculator.calculations.tank_calibration_engine import CalibrationError, calculate_calibrated_volume_m3
+from fuel_consumption_calculator.calculations.automatic_vcf import calculate_automatic_vcf
 from fuel_consumption_calculator.config import SCHEMA_VERSION
 from fuel_consumption_calculator.domain.fuel_tank import FuelBatch, FuelTank, TankCalibrationPoint
 from fuel_consumption_calculator.repositories.database import Database
@@ -106,7 +107,10 @@ def test_tank_batch_calibration_and_sounding_workflow(tmp_path):
         effective_at_utc="2026-08-01T00:00:00+00:00",
     )
     assert later.calculated_volume_m3 == 50
-    assert later.calculated_density_kg_m3 is None and later.calculated_mass_mt is None
+    expected_vcf = calculate_automatic_vcf(batch.density_15_kg_m3, 42, batch.fuel_type)
+    assert later.standard_volume_15_m3 == pytest.approx(50 * expected_vcf)
+    assert later.calculated_density_kg_m3 == batch.density_15_kg_m3
+    assert later.calculated_mass_mt == pytest.approx(50 * expected_vcf * batch.density_15_kg_m3 / 1000)
     assert later.temperature_c == 42 and later.fuel_batch_id == batch.id
     assert later.effective_at_utc.endswith("+00:00")
     assert service.get_latest_sounding(tank.id) == later

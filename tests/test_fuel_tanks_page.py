@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timedelta, timezone
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QScrollArea
+from PySide6.QtWidgets import QApplication, QLabel, QScrollArea
 
 from fuel_consumption_calculator.app import build_main_window
 from fuel_consumption_calculator.domain.fuel_tank import FuelBatch, FuelTank, TankCalibrationPoint
@@ -17,6 +18,7 @@ from fuel_consumption_calculator.repositories.vessel_repository import VesselRep
 from fuel_consumption_calculator.services.fuel_tank_service import FuelTankService
 from fuel_consumption_calculator.services.vessel_service import VesselService
 from fuel_consumption_calculator.ui.pages.fuel_tanks_page import (
+    ConsumptionTanksDialog,
     VESSEL_TANK_SET,
     VESSEL_TANK_CAPACITIES,
     FuelTanksPage,
@@ -27,6 +29,7 @@ from fuel_consumption_calculator.ui.pages.fuel_tanks_page import (
     _position_for_tank,
     _short_display_name,
 )
+from fuel_consumption_calculator.domain.tank_forecast import TankConsumptionPlan, TankConsumptionPlanPhase, TankConsumptionPlanPhaseTank, TankForecast
 from fuel_consumption_calculator.ui.pages.fuel_tank_operational_dialogs import (
     CalibrationDialog,
     UpdateTankROBDialog,
@@ -75,9 +78,12 @@ def test_survey_table_calculates_volume_mass_totals_and_completeness(tmp_path, q
     dialog = TankSoundingSurveyDialog(service, vessel.id)
     row = dialog._rows[0]
     row[3].setText("50")
-    assert row[8].text() == "50.000"
-    assert row[6].text() == "VCF needed for MT"
+    assert row[9].text() != "50.000"
+    assert row[6].text() == "Temperature required"
     assert not dialog.use_actual.isEnabled()
+    row[4].setText("15")
+    assert row[9].text() == "48.900"
+    assert row[6].text() == "Ready"
     row[5].setText("0.985")
     assert row[9].text() != "--"
     assert row[6].text() == "Ready"
@@ -98,6 +104,151 @@ def test_internal_transfer_action_and_dialog_construct(tmp_path, qapp):
     assert dialog.history_table.columnCount() == 7
 
 
+def test_consumption_plan_uses_phase_cards_and_readable_operational_footer(tmp_path, qapp):
+    vessel_service, service = _services(tmp_path); vessel = vessel_service.configure_active_vessel("Vessel", "1234567")
+    batch = service.create_fuel_batch(FuelBatch(None, vessel.id, "VLSFO", "VLSFO", 978))
+    tanks = [service.create_tank(FuelTank(None, vessel.id, name, "BUNKER", 100, "SOUNDING", current_fuel_batch_id=batch.id)) for name in ("HFO DEEP TK 1P", "HFO DEEP TK 2P")]
+    service.save_consumption_plan(TankConsumptionPlan(None, vessel.id, "VLSFO", "ACTIVE", __import__("datetime").datetime(2026, 9, 4, tzinfo=__import__("datetime").timezone.utc), (TankConsumptionPlanPhase(None, 1, (TankConsumptionPlanPhaseTank(tanks[0].id, 1.0),)), TankConsumptionPlanPhase(None, 2, (TankConsumptionPlanPhaseTank(tanks[1].id, 1.0),)))))
+    dialog = ConsumptionTanksDialog(service, vessel.id); dialog.fuel_input.setCurrentText("VLSFO")
+    assert dialog.width() >= 680 and dialog.height() >= 560
+    assert not hasattr(dialog, "phase_table") and dialog.phase_scroll.widget() is dialog.phase_content
+    assert dialog.findChildren(QLabel, "phaseTitle")[0].text() == "PHASE 1"
+    assert "Plan effective: 04 Sep 2026 00:00" in dialog.effective_label.text()
+    assert dialog.add_phase_button.text() == "+ Add Phase"
+
+
+def test_phase_editor_disables_unselected_allocations_and_equal_splits(tmp_path, qapp):
+    vessel_service, service = _services(tmp_path); vessel = vessel_service.configure_active_vessel("Vessel", "1234567")
+    batch = service.create_fuel_batch(FuelBatch(None, vessel.id, "VLSFO", "VLSFO", 978))
+    tanks = [service.create_tank(FuelTank(None, vessel.id, name, "BUNKER", 100, "SOUNDING", current_fuel_batch_id=batch.id)) for name in ("HFO DEEP TK 2P", "HFO DEEP TK 2S")]
+    dialog = ConsumptionTanksDialog(service, vessel.id); dialog.fuel_input.setCurrentText("VLSFO"); editor = __import__("fuel_consumption_calculator.ui.pages.fuel_tanks_page", fromlist=["_PhaseEditorDialog"])._PhaseEditorDialog(dialog._eligible_tanks(), [], dialog)
+    assert editor.width() >= 680 and editor.table.columnCount() == 4
+    assert not editor.table.cellWidget(0, 3).isEnabled()
+    editor.table.cellWidget(0, 0).setChecked(True); editor.table.cellWidget(1, 0).setChecked(True)
+    assert [value for _tank_id, value in editor.value()] == pytest.approx([.5, .5])
+    assert editor.save_button.isEnabled() and "VALID" == editor.validity.text()
+
+
+def test_plan_forecasts_reach_fuel_tank_cards_and_plan_dialog(tmp_path, qapp):
+    vessel_service, service = _services(tmp_path); vessel = vessel_service.configure_active_vessel("Vessel", "1234567")
+    batch = service.create_fuel_batch(FuelBatch(None, vessel.id, "VLSFO", "VLSFO", 978))
+    start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    tank = _create_mass_tank(service, vessel.id, batch, "HFO DEEP TK 1P", 10, start)
+    service.save_consumption_plan(TankConsumptionPlan(None, vessel.id, "VLSFO", "ACTIVE", start, (
+        TankConsumptionPlanPhase(None, 1, (TankConsumptionPlanPhaseTank(tank.id, 1.0),)),
+    )))
+    forecast = TankForecast(
+        tank.id, "VLSFO", start, 9.78, 1.0, 8.78,
+        estimated_depleted_at_utc=start + timedelta(hours=5), active_phase_sequence=1,
+        planned_phase_start_utc=start,
+    )
+
+    class ForecastService:
+        def predict_plan_completion(self, vessel_id):
+            assert vessel_id == vessel.id
+            return [forecast]
+
+    page = FuelTanksPage(vessel_service, service, ForecastService()); page.refresh()
+    assert page._plan_forecasts == {tank.id: forecast}
+    card_text = "\n".join(label.text() for label in page.tank_cards[0].findChildren(QLabel))
+    assert "ACTIVE CONSUMPTION" in card_text
+    assert "FORECAST UNAVAILABLE" not in card_text
+
+    dialog = ConsumptionTanksDialog(service, vessel.id, page); dialog.fuel_input.setCurrentText("VLSFO")
+    assert dialog._forecast_by_tank == {tank.id: forecast}
+    assert tank.name in dialog.depletion_summary.value.text()
+
+
+def test_phase_and_card_states_follow_forecast_active_sequence(tmp_path, qapp):
+    vessel_service, service = _services(tmp_path); vessel = vessel_service.configure_active_vessel("Vessel", "1234567")
+    batch = service.create_fuel_batch(FuelBatch(None, vessel.id, "VLSFO", "VLSFO", 978))
+    start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    tanks = [
+        _create_mass_tank(service, vessel.id, batch, name, 10, start)
+        for name in ("HFO DEEP TK 1P", "HFO DEEP TK 2P", "HFO DEEP TK 2S", "HFO DEEP TK 3P")
+    ]
+    standby = _create_mass_tank(service, vessel.id, batch, "Spare Bunker", 10, start)
+    unavailable = service.create_tank(FuelTank(None, vessel.id, "Unknown Bunker", "BUNKER", 100, "SOUNDING", current_fuel_batch_id=batch.id))
+    service.save_consumption_plan(TankConsumptionPlan(None, vessel.id, "VLSFO", "ACTIVE", start, tuple(
+        TankConsumptionPlanPhase(None, index + 1, (TankConsumptionPlanPhaseTank(tank.id, 1.0),))
+        for index, tank in enumerate(tanks)
+    )))
+    forecasts = [
+        TankForecast(tanks[0].id, "VLSFO", start, 9.78, 9.78, 0.0, estimated_depleted_at_utc=start + timedelta(hours=1), active_phase_sequence=2, planned_phase_start_utc=start),
+        TankForecast(tanks[1].id, "VLSFO", start, 9.78, 1.0, 8.78, estimated_depleted_at_utc=start + timedelta(hours=5), active_phase_sequence=2, planned_phase_start_utc=start + timedelta(hours=1)),
+        TankForecast(tanks[2].id, "VLSFO", start, 9.78, 0.0, 9.78, active_phase_sequence=2, planned_phase_start_utc=start + timedelta(hours=5)),
+        TankForecast(tanks[3].id, "VLSFO", start, 9.78, 0.0, 9.78, active_phase_sequence=2),
+    ]
+
+    class ForecastService:
+        def predict_plan_completion(self, _vessel_id):
+            return forecasts
+
+    page = FuelTanksPage(vessel_service, service, ForecastService()); page.refresh()
+    card_text = {
+        card._tank_id: "\n".join(label.text() for label in card.findChildren(QLabel))
+        for card in page.tank_cards
+    }
+    assert "DEPLETED" in card_text[tanks[0].id]
+    assert "ACTIVE CONSUMPTION" in card_text[tanks[1].id]
+    assert "NEXT CONSUMPTION" in card_text[tanks[2].id]
+    assert "PLANNED" in card_text[tanks[3].id]
+    assert "STANDBY" in card_text[standby.id]
+    assert "FORECAST UNAVAILABLE" in card_text[unavailable.id]
+
+    dialog = ConsumptionTanksDialog(service, vessel.id, page); dialog.fuel_input.setCurrentText("VLSFO")
+    assert [dialog._phase_status(index) for index in range(4)] == ["COMPLETED", "ACTIVE", "NEXT", "PLANNED"]
+
+
+def test_current_bunker_tank_rob_is_unavailable_until_every_mass_is_known(tmp_path, qapp):
+    vessel_service, service = _services(tmp_path); vessel = vessel_service.configure_active_vessel("Vessel", "1234567")
+    batch = service.create_fuel_batch(FuelBatch(None, vessel.id, "VLSFO", "VLSFO", 978))
+    start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    _create_mass_tank(service, vessel.id, batch, "HFO DEEP TK 1P", 10, start)
+    _create_mass_tank(service, vessel.id, batch, "HFO DEEP TK 2P", 10, start)
+    unknown = service.create_tank(FuelTank(None, vessel.id, "HFO DEEP TK 2S", "BUNKER", 100, "SOUNDING", current_fuel_batch_id=batch.id))
+    service.replace_calibration_points(unknown.id, [
+        TankCalibrationPoint(None, unknown.id, 0, None, 0, 0),
+        TankCalibrationPoint(None, unknown.id, 100, None, 0, 100),
+    ])
+
+    dialog = ConsumptionTanksDialog(service, vessel.id); dialog.fuel_input.setCurrentText("VLSFO")
+    assert dialog.rob_summary.value.text().startswith("—")
+    assert "1 bunker tank ROB unavailable" in dialog.rob_summary.value.text()
+
+    service.save_sounding_observation(
+        tank_id=unknown.id, reading_type="SOUNDING", reading_cm=0, trim_m=0,
+        temperature_c=15, effective_at_utc=start,
+    )
+    dialog._load_plan()
+    assert dialog.rob_summary.value.text() == "19.56 MT"
+
+
+def test_next_depletion_is_filtered_to_selected_fuel_and_active_phase(tmp_path, qapp):
+    vessel_service, service = _services(tmp_path); vessel = vessel_service.configure_active_vessel("Vessel", "1234567")
+    vlsfo = service.create_fuel_batch(FuelBatch(None, vessel.id, "VLSFO", "VLSFO", 978))
+    mdo = service.create_fuel_batch(FuelBatch(None, vessel.id, "MDO", "MDO", 850))
+    start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    vlsfo_tank = _create_mass_tank(service, vessel.id, vlsfo, "HFO DEEP TK 1P", 10, start)
+    mdo_tank = _create_mass_tank(service, vessel.id, mdo, "NO.1 DO STOR.TK", 10, start)
+    service.save_consumption_plan(TankConsumptionPlan(None, vessel.id, "VLSFO", "ACTIVE", start, (
+        TankConsumptionPlanPhase(None, 1, (TankConsumptionPlanPhaseTank(vlsfo_tank.id, 1.0),)),
+    )))
+    forecasts = [
+        TankForecast(vlsfo_tank.id, "VLSFO", start, 9.78, 1.0, 8.78, estimated_depleted_at_utc=start + timedelta(hours=5), active_phase_sequence=1),
+        TankForecast(mdo_tank.id, "MDO", start, 8.5, 1.0, 7.5, estimated_depleted_at_utc=start + timedelta(minutes=10), active_phase_sequence=1),
+    ]
+
+    class ForecastService:
+        def predict_plan_completion(self, _vessel_id):
+            return forecasts
+
+    page = FuelTanksPage(vessel_service, service, ForecastService())
+    dialog = ConsumptionTanksDialog(service, vessel.id, page); dialog.fuel_input.setCurrentText("VLSFO")
+    assert vlsfo_tank.name in dialog.depletion_summary.value.text()
+    assert mdo_tank.name not in dialog.depletion_summary.value.text()
+
+
 @pytest.fixture(scope="module")
 def qapp():
     return QApplication.instance() or QApplication([])
@@ -107,6 +258,19 @@ def _services(tmp_path):
     database = Database(tmp_path / "fuel.db")
     database.initialize()
     return VesselService(VesselRepository(database)), FuelTankService(FuelTankRepository(database))
+
+
+def _create_mass_tank(service, vessel_id, batch, name, reading_cm, effective_at):
+    tank = service.create_tank(FuelTank(None, vessel_id, name, "BUNKER", 100, "SOUNDING", current_fuel_batch_id=batch.id))
+    service.replace_calibration_points(tank.id, [
+        TankCalibrationPoint(None, tank.id, 0, None, 0, 0),
+        TankCalibrationPoint(None, tank.id, 100, None, 0, 100),
+    ])
+    service.save_sounding_observation(
+        tank_id=tank.id, reading_type="SOUNDING", reading_cm=reading_cm, trim_m=0,
+        temperature_c=15, effective_at_utc=effective_at,
+    )
+    return tank
 
 
 def test_fuel_tanks_page_handles_no_vessel_and_empty_tanks(tmp_path, qapp):

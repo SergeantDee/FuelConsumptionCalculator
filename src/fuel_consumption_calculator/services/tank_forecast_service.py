@@ -23,6 +23,12 @@ class TankForecastService:
         intervals = self._future_intervals(vessel_id)
         return self._tanks.predict_tank_rob_at(vessel_id, target_utc, intervals)
 
+    def predict_plan_completion(self, vessel_id: int) -> list[TankForecast]:
+        """Project through the last deterministic voyage interval for tank-card context."""
+        intervals = self._future_intervals(vessel_id)
+        ends = [item.end_utc for item in intervals]
+        return self._tanks.predict_tank_rob_at(vessel_id, max(ends), intervals) if ends else []
+
     def anchor_sounding_at(self, tank_id: int, target_utc: datetime) -> TankSounding | None:
         """Return the exact historical sounding anchor used by arrival forecasting."""
         return self._tanks.get_latest_sounding_at_or_before(tank_id, target_utc)

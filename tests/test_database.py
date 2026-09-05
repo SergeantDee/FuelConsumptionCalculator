@@ -38,6 +38,9 @@ def test_database_initialization_creates_deterministic_schema(tmp_path):
         "vessel_energy_config",
         "generator_sfoc_points",
         "internal_fuel_transfers",
+        "tank_consumption_plans",
+        "tank_consumption_plan_phases",
+        "tank_consumption_plan_phase_tanks",
     }.issubset(tables)
     assert schema_version == str(SCHEMA_VERSION)
     assert user_version == SCHEMA_VERSION
@@ -81,8 +84,8 @@ def test_schema_migration_v10_to_v11_preserves_energy_config_and_leaves_maneuver
     assert user_version == SCHEMA_VERSION
 
 
-def test_schema_version_is_20():
-    assert SCHEMA_VERSION == 20
+def test_schema_version_is_21():
+    assert SCHEMA_VERSION == 21
 
 
 def test_schema_migration_v19_preserves_manual_snapshot_and_marks_it_manual(tmp_path):
@@ -113,7 +116,7 @@ def test_schema_migration_v19_preserves_manual_snapshot_and_marks_it_manual(tmp_
         version = connection.execute("PRAGMA user_version").fetchone()[0]
     assert {"incoming_temperature_c", "vcf_mode"}.issubset(columns)
     assert row == (978.0, 0.985, None, "MANUAL")
-    assert version == 20
+    assert version == 21
 
 
 def test_schema_migration_v12_to_v13_adds_nullable_manual_vcf_snapshots_and_preserves_data(tmp_path):
@@ -140,7 +143,7 @@ def test_schema_migration_v12_to_v13_adds_nullable_manual_vcf_snapshots_and_pres
     assert {"manual_vcf", "standard_volume_15_m3"}.issubset(columns)
     assert row == (12.5, 950.0, 11.875, None, None, "existing")
     assert vessel == ("Existing Vessel",)
-    assert version == 20
+    assert version == 21
 
 
 def test_schema_migration_v14_to_v15_adds_zero_loss_allowances_and_preserves_energy_config(tmp_path):
@@ -169,7 +172,7 @@ def test_schema_migration_v14_to_v15_adds_zero_loss_allowances_and_preserves_ene
         version = connection.execute("PRAGMA user_version").fetchone()[0]
     assert {"main_engine_loss_allowance_mt_per_day", "auxiliary_engine_loss_allowance_mt_per_day"}.issubset(columns)
     assert row == (123.0, 0.0, 0.0)
-    assert version == 20
+    assert version == 21
 
 
 def test_schema_migration_v15_to_v16_adds_effective_dated_tank_allocation_tables(tmp_path):
@@ -193,7 +196,7 @@ def test_schema_migration_v15_to_v16_adds_effective_dated_tank_allocation_tables
         tank = connection.execute("SELECT name FROM fuel_tanks WHERE id = 1").fetchone()
     assert {"tank_consumption_allocation_events", "tank_consumption_allocation_event_tanks"}.issubset(tables)
     assert tank == ("Existing tank",)
-    assert version == 20
+    assert version == 21
 
 
 def test_schema_migration_v17_adds_internal_fuel_transfers_and_preserves_data(tmp_path):
@@ -216,4 +219,4 @@ def test_schema_migration_v17_adds_internal_fuel_transfers_and_preserves_data(tm
         version = connection.execute("PRAGMA user_version").fetchone()[0]
     assert {"vessel_id", "from_tank_id", "to_tank_id", "fuel_type", "quantity_mt", "status", "planned_at_utc", "actual_at_utc"}.issubset(columns)
     assert tank == ("Existing tank",)
-    assert version == 20
+    assert version == 21

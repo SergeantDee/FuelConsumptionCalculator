@@ -22,6 +22,7 @@ from fuel_consumption_calculator.ui.pages.fuel_tanks_page import (
     TankFuelBatchDialog,
     TankLevelWidget,
 )
+from fuel_consumption_calculator.ui.widgets.fuel_display import FuelBadge
 
 
 @pytest.fixture(scope="module")
@@ -48,14 +49,15 @@ def _batch(service, vessel_id, fuel_type="VLSFO", name="Batch 26-08", density=95
     )
 
 
-def test_fuel_batch_action_depends_on_tank_selection(services, qapp):
+def test_tank_selection_tracks_the_selected_card(services, qapp):
     vessel_service, tank_service, _vessel, tank = services
     page = FuelTanksPage(vessel_service, tank_service)
     page.refresh()
 
-    assert not page.fuel_batch_button.isEnabled()
+    assert page._selected_tank_id is None
     page._select_tank(tank.id)
-    assert page.fuel_batch_button.isEnabled()
+    assert page._selected_tank_id == tank.id
+    assert "2px solid" in page.tank_cards[0].styleSheet()
 
 
 def test_batch_dialog_lists_vessel_batches_and_create_edit(services, qapp):
@@ -101,15 +103,16 @@ def test_tank_card_fuel_indicator_and_gauge_color(fuel_type, services, qapp):
     _vessel_service, _tank_service, _vessel, tank = services
     card = TankCard(tank, fuel_type, "B26-08", None, "deep")
 
-    assert card.findChild(QLabel, "fuelIndicator").text() == fuel_type
-    assert card.findChild(TankLevelWidget)._color.name() == FUEL_COLORS[fuel_type]
+    assert card.findChild(FuelBadge, "fuelBadge").text() == fuel_type
+    assert card.findChild(TankLevelWidget)._color.name() == FUEL_COLORS[fuel_type].lower()
 
 
 def test_unassigned_card_and_tank_details_show_no_mass_and_batch_data(services, qapp):
     vessel_service, tank_service, vessel, tank = services
     unassigned = TankCard(tank, None, None, None, "deep")
-    assert unassigned.findChild(QLabel, "fuelIndicator").text() == "UNKNOWN"
-    assert "MT --" in {label.text() for label in unassigned.findChildren(QLabel)}
+    assert unassigned.findChild(FuelBadge, "fuelBadge").text() == "UNASSIGNED"
+    assert "—" in {label.text() for label in unassigned.findChildren(QLabel)}
+    assert "No ROB available" in {label.text() for label in unassigned.findChildren(QLabel)}
 
     batch = _batch(tank_service, vessel.id, "VLSFO", "B26-08", 950)
     tank_service.assign_fuel_batch_to_tank(tank.id, batch.id)
@@ -121,4 +124,4 @@ def test_unassigned_card_and_tank_details_show_no_mass_and_batch_data(services, 
     page = FuelTanksPage(vessel_service, tank_service)
     page.refresh()
     assigned_card = next(card for card in page.tank_cards if card._tank_id == tank.id)
-    assert "MT --" in {label.text() for label in assigned_card.findChildren(QLabel)}
+    assert "—" in {label.text() for label in assigned_card.findChildren(QLabel)}

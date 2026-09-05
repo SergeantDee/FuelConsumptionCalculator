@@ -28,6 +28,7 @@ from fuel_consumption_calculator.services.vessel_service import VesselService
 from fuel_consumption_calculator.ui.widgets.page_header import PageHeader
 from fuel_consumption_calculator.ui.widgets.fuel_display import FUEL_COLORS, FuelBadge, fuel_color
 from fuel_consumption_calculator.ui.pages.fuel_tank_operational_dialogs import CalibrationDialog, UpdateTankROBDialog
+from fuel_consumption_calculator.domain.tank_forecast import TankConsumptionPlan, TankConsumptionPlanPhase, TankConsumptionPlanPhaseTank
 
 
 NEUTRAL_LEVEL_COLOR = "#477a91"
@@ -68,7 +69,7 @@ class TankCard(QFrame):
     selected = Signal(int)
     activated = Signal(int)
 
-    def __init__(self, tank: FuelTank, fuel_type: str | None, batch_name: str | None, latest: TankSounding | None, kind: str = "other", parent: QWidget | None = None) -> None:
+    def __init__(self, tank: FuelTank, fuel_type: str | None, batch_name: str | None, latest: TankSounding | None, kind: str = "other", parent: QWidget | None = None, consumption_status: str | None = None) -> None:
         super().__init__(parent)
         self._tank_id = tank.id
         self.setObjectName("tankCard")
@@ -90,6 +91,8 @@ class TankCard(QFrame):
             else:
                 details.addWidget(_card_value("—"))
             details.addWidget(_card_meta("ACTUAL ROB")); percent = QLabel(f"{max(0.0, min(100.0, fill_percent or 0.0)):.0f}%"); percent.setObjectName("tankFill"); percent.setStyleSheet(f"color:{fuel_color(fuel_type or 'UNKNOWN')};"); details.addWidget(percent)
+        if consumption_status:
+            status = _card_meta(consumption_status); status.setWordWrap(True); details.addWidget(status)
         details.addStretch()
         layout.addLayout(details, 1)
         gauge_box = QVBoxLayout(); gauge_box.setContentsMargins(0, 0, 0, 0); gauge_box.setSpacing(0)
@@ -417,39 +420,205 @@ class TankDetailsDialog(QDialog):
 class ConsumptionTanksDialog(QDialog):
     def __init__(self, service: FuelTankService, vessel_id: int, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._service, self._vessel_id = service, vessel_id
-        self.setWindowTitle("Consumption Tanks")
-        layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Select active bunker/storage tanks. Equal depletion is split by fuel."))
-        current = service.list_consumption_allocation_events(vessel_id)
-        selected = set(current[-1].tank_ids) if current else set()
-        self._checks: dict[int, QCheckBox] = {}
-        for tank in service.list_tanks(vessel_id):
-            if tank.tank_type != "BUNKER":
-                continue
-            check = QCheckBox(f"{tank.name}  —  Consuming")
-            check.setChecked(tank.id in selected)
-            self._checks[tank.id] = check
-            layout.addWidget(check)
-        form = QFormLayout()
-        self.effective_input = QLineEdit(datetime.now(timezone.utc).isoformat(timespec="seconds"))
-        form.addRow("Effective UTC", self.effective_input)
-        layout.addLayout(form)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
-        apply = buttons.addButton("Apply Consumption Tanks", QDialogButtonBox.ButtonRole.AcceptRole)
-        apply.clicked.connect(self._apply)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        self._service, self._vessel_id = service, vessel_id; self._forecast_by_tank = {}
+        self.setWindowTitle("Tank Consumption Plan")
+        screen = QGuiApplication.primaryScreen(); available = screen.availableGeometry() if screen else None
+        width = min(1100, available.width() - 48) if available else 1100; height = min(750, available.height() - 48) if available else 750
+        self.setMinimumSize(min(800, width), min(560, height)); self.resize(width, height)
+        layout = QVBoxLayout(self); layout.setContentsMargins(24, 20, 24, 18); layout.setSpacing(14)
+        title_row = QHBoxLayout(); title = QLabel("TANK CONSUMPTION PLAN"); title.setObjectName("pageTitle"); title_row.addWidget(title); title_row.addStretch(); title_row.addWidget(QLabel("Fuel")); self.fuel_input = QComboBox(); self.fuel_input.addItems(FUEL_BATCH_TYPES); self.fuel_input.setMinimumWidth(140); title_row.addWidget(self.fuel_input); layout.addLayout(title_row)
+        self.summary = QFrame(); self.summary.setObjectName("planSummaryCard"); summary_layout = QHBoxLayout(self.summary); summary_layout.setContentsMargins(16, 12, 16, 12); summary_layout.setSpacing(34)
+        self.rob_summary = self._summary_value("CURRENT BUNKER-TANK ROB"); self.depletion_summary = self._summary_value("NEXT DEPLETION"); self.status_summary = self._summary_value("PLAN STATUS")
+        summary_layout.addWidget(self.rob_summary); summary_layout.addWidget(self.depletion_summary, 1); summary_layout.addWidget(self.status_summary); layout.addWidget(self.summary)
+        self.phase_scroll = QScrollArea(); self.phase_scroll.setWidgetResizable(True); self.phase_scroll.setFrameShape(QFrame.Shape.NoFrame); self.phase_content = QWidget(); self.phase_layout = QVBoxLayout(self.phase_content); self.phase_layout.setContentsMargins(0, 2, 6, 2); self.phase_layout.setSpacing(10); self.phase_layout.addStretch(); self.phase_scroll.setWidget(self.phase_content); layout.addWidget(self.phase_scroll, 1)
+        self.add_phase_button = QPushButton("+ Add Phase"); self.add_phase_button.setObjectName("secondaryButton"); self.add_phase_button.clicked.connect(self._add_phase); layout.addWidget(self.add_phase_button, alignment=Qt.AlignmentFlag.AlignLeft)
+        footer = QHBoxLayout(); self.effective_label = _muted(""); footer.addWidget(self.effective_label); footer.addStretch(); cancel = QPushButton("Cancel"); cancel.clicked.connect(self.reject); self.save_button = QPushButton("Save Active Plan"); self.save_button.setObjectName("primaryButton"); self.save_button.clicked.connect(self._apply); footer.addWidget(cancel); footer.addWidget(self.save_button); layout.addLayout(footer)
+        self._phases: list[list[tuple[int, float]]] = []; self._effective = datetime.now(timezone.utc)
+        self.fuel_input.currentTextChanged.connect(self._load_plan)
+        self._load_plan()
+
+    def _eligible_tanks(self):
+        fuel = self.fuel_input.currentText(); existing = self._service.get_active_consumption_plan(self._vessel_id, fuel)
+        batches = {item.id: item for item in self._service.list_fuel_batches(self._vessel_id)}
+        return [(tank.id, tank.name) for tank in self._service.list_tanks(self._vessel_id) if tank.tank_type == "BUNKER" and tank.current_fuel_batch_id in batches and batches[tank.current_fuel_batch_id].fuel_type == fuel]
+
+    def _load_plan(self) -> None:
+        existing = self._service.get_active_consumption_plan(self._vessel_id, self.fuel_input.currentText())
+        self._phases = [[(item.tank_id, item.allocation_fraction) for item in phase.tanks] for phase in existing.phases] if existing else []
+        self._effective = existing.effective_from_utc if existing else datetime.now(timezone.utc)
+        self._forecast_by_tank = self._load_forecasts()
+        self._refresh_phases()
+
+    def _summary_value(self, caption: str) -> QWidget:
+        column = QWidget(); layout = QVBoxLayout(column); layout.setContentsMargins(0, 0, 0, 0); layout.setSpacing(3); label = QLabel(caption); label.setObjectName("planSummaryLabel"); value = QLabel("—"); value.setObjectName("planSummaryValue"); value.setWordWrap(True); layout.addWidget(label); layout.addWidget(value); column.value = value; return column
+
+    def _load_forecasts(self):
+        # This is a read-only presentation adapter around the existing authority.
+        parent = self.parent()
+        forecast_service = getattr(parent, "_tank_forecast_service", None)
+        if forecast_service is None: return {}
+        try: return {item.tank_id: item for item in forecast_service.predict_plan_completion(self._vessel_id)}
+        except Exception: return {}
+
+    def _refresh_phases(self) -> None:
+        while self.phase_layout.count():
+            item = self.phase_layout.takeAt(0)
+            if item.widget(): item.widget().deleteLater()
+        names = dict(self._eligible_tanks())
+        for index, phase in enumerate(self._phases): self.phase_layout.addWidget(self._phase_card(index, phase, names))
+        self.phase_layout.addStretch()
+        self.effective_label.setText(f"Plan effective: {_format_utc(self._effective.isoformat())}")
+        self._refresh_summary(names)
+
+    def _phase_card(self, index, phase, names):
+        card = QFrame(); card.setObjectName("consumptionPhaseCard"); layout = QVBoxLayout(card); layout.setContentsMargins(16, 13, 16, 12); layout.setSpacing(7)
+        heading = QHBoxLayout(); title = QLabel(f"PHASE {index + 1}"); title.setObjectName("phaseTitle"); heading.addWidget(title); heading.addStretch(); badge = QLabel(self._phase_status(index)); badge.setObjectName(f"phaseBadge{self._phase_status(index).title()}"); heading.addWidget(badge); layout.addLayout(heading)
+        for tank_id, share in phase:
+            row = QHBoxLayout(); name = QLabel(names.get(tank_id, str(tank_id))); name.setObjectName("phaseTankName"); row.addWidget(name); row.addStretch(); allocation = QLabel(f"{share * 100:.2f}%"); allocation.setObjectName("phaseAllocation"); row.addWidget(allocation); layout.addLayout(row)
+        forecast = self._phase_forecast(index, phase); details = QGridLayout(); details.setHorizontalSpacing(24); details.setVerticalSpacing(4)
+        details.addWidget(_muted("Estimated Start"), 0, 0); details.addWidget(QLabel(_forecast_time(forecast["start"])), 0, 1); details.addWidget(_muted("Estimated End"), 1, 0); details.addWidget(QLabel(_forecast_time(forecast["end"])), 1, 1)
+        details.addWidget(_muted("Trigger Tank"), 0, 2); details.addWidget(QLabel(names.get(forecast["trigger"], "—") if forecast["trigger"] else "—"), 0, 3)
+        if forecast["reason"]: details.addWidget(_muted(forecast["reason"]), 1, 2, 1, 2)
+        layout.addLayout(details)
+        for tank_id, _share in phase:
+            item = self._forecast_by_tank.get(tank_id); depleted = item.estimated_depleted_at_utc if item else None
+            line = QLabel(f"{names.get(tank_id, tank_id)} estimated depleted  {_forecast_time(depleted)}" + (f"  ·  {_time_remaining(depleted)} remaining" if depleted else "")); line.setObjectName("phaseForecastLine"); layout.addWidget(line)
+        actions = QHBoxLayout(); edit = QPushButton("Edit"); edit.clicked.connect(lambda _, row=index: self._edit_phase_at(row)); up = QPushButton("Move Up"); up.setToolTip("Move phase up"); up.setEnabled(index > 0); up.clicked.connect(lambda: self._move_phase(index, -1)); down = QPushButton("Move Down"); down.setToolTip("Move phase down"); down.setEnabled(index < len(self._phases) - 1); down.clicked.connect(lambda: self._move_phase(index, 1)); delete = QPushButton("Delete"); delete.clicked.connect(lambda: self._delete_phase(index))
+        for button in (edit, up, down, delete): actions.addWidget(button)
+        actions.addStretch(); layout.addLayout(actions); return card
+
+    def _phase_status(self, index):
+        if not self._phases: return "PLANNED"
+        plan = self._service.get_active_consumption_plan(self._vessel_id, self.fuel_input.currentText())
+        if plan is None: return "PLANNED"
+        active_sequence = self._active_phase_sequence(plan)
+        if active_sequence is None: return "FORECAST UNAVAILABLE"
+        sequence = index + 1
+        if sequence < active_sequence: return "COMPLETED"
+        if sequence == active_sequence: return "ACTIVE"
+        if sequence == active_sequence + 1: return "NEXT"
+        return "PLANNED"
+
+    def _active_phase_sequence(self, plan):
+        plan_tank_ids = {item.tank_id for phase in plan.phases for item in phase.tanks}
+        forecasts = [self._forecast_by_tank[tank_id] for tank_id in plan_tank_ids if tank_id in self._forecast_by_tank]
+        active = {item.active_phase_sequence for item in forecasts if item.active_phase_sequence is not None}
+        if active:
+            return min(active)
+        if plan.phases:
+            final_tanks = {item.tank_id for item in plan.phases[-1].tanks}
+            if any(
+                tank_id in self._forecast_by_tank
+                and self._forecast_by_tank[tank_id].estimated_depleted_at_utc is not None
+                for tank_id in final_tanks
+            ):
+                return plan.phases[-1].sequence_number + 1
+        return None
+
+    def _phase_forecast(self, index, phase):
+        members = [(tank_id, self._forecast_by_tank.get(tank_id)) for tank_id, _share in phase]; depleted = [(tank_id, item.estimated_depleted_at_utc) for tank_id, item in members if item and item.estimated_depleted_at_utc]
+        start = self._effective if index == 0 else next((item.planned_phase_start_utc for _tank, item in members if item and item.planned_phase_start_utc), None)
+        trigger, end = min(depleted, key=lambda item: item[1]) if depleted else (None, None)
+        reason = "Forecast unavailable" if not self._forecast_by_tank else ""
+        return {"start": start, "end": end, "trigger": trigger, "reason": reason}
+
+    def _refresh_summary(self, names):
+        fuel = self.fuel_input.currentText()
+        eligible_ids = set(names)
+        masses = []
+        unknown = 0
+        for tank_id in eligible_ids:
+            sounding = self._service.get_latest_sounding(tank_id)
+            if sounding is None or sounding.calculated_mass_mt is None:
+                unknown += 1
+            else:
+                masses.append(sounding.calculated_mass_mt)
+        if unknown:
+            reason = f"{unknown} bunker tank ROB{'s' if unknown != 1 else ''} unavailable"
+            self.rob_summary.value.setText(f"—\n{reason}")
+            self.rob_summary.value.setToolTip(reason)
+        else:
+            self.rob_summary.value.setText(f"{sum(masses):,.2f} MT" if eligible_ids else "—")
+            self.rob_summary.value.setToolTip("")
+        plan = self._service.get_active_consumption_plan(self._vessel_id, fuel)
+        active_sequence = self._active_phase_sequence(plan) if plan else None
+        active_tank_ids = {
+            item.tank_id
+            for phase in plan.phases if phase.sequence_number == active_sequence
+            for item in phase.tanks
+        } if plan and active_sequence is not None else set()
+        forecast_items = [
+            (tank_id, item.estimated_depleted_at_utc)
+            for tank_id, item in self._forecast_by_tank.items()
+            if tank_id in eligible_ids
+            and tank_id in active_tank_ids
+            and item.fuel_type == fuel
+            and item.estimated_depleted_at_utc
+        ]
+        if forecast_items:
+            tank_id, when = min(forecast_items, key=lambda item: item[1]); self.depletion_summary.value.setText(f"{names.get(tank_id, tank_id)}\n{_forecast_time(when)}\n{_time_remaining(when)} remaining")
+        else: self.depletion_summary.value.setText("—")
+        self.status_summary.value.setText("ACTIVE" if self._phases else "—")
+
+    def _add_phase(self) -> None:
+        self._edit_phase_at(len(self._phases))
+
+    def _edit_phase_at(self, index: int) -> None:
+        dialog = _PhaseEditorDialog(self._eligible_tanks(), self._phases[index] if index < len(self._phases) else [], self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            if index == len(self._phases): self._phases.append(dialog.value())
+            else: self._phases[index] = dialog.value()
+            self._refresh_phases()
+
+    def _delete_phase(self, row=None) -> None:
+        row = len(self._phases) - 1 if row is None else row
+        if 0 <= row < len(self._phases): self._phases.pop(row); self._refresh_phases()
+
+    def _move_phase(self, row: int, direction: int) -> None:
+        destination = row + direction
+        if 0 <= row < len(self._phases) and 0 <= destination < len(self._phases): self._phases[row], self._phases[destination] = self._phases[destination], self._phases[row]; self._refresh_phases()
 
     def _apply(self) -> None:
         try:
-            effective = datetime.fromisoformat(self.effective_input.text().strip())
-            if effective.tzinfo is None:
-                raise ValueError("Effective UTC must include +00:00.")
-            self._service.apply_consumption_tanks(self._vessel_id, [tank_id for tank_id, check in self._checks.items() if check.isChecked()], effective)
+            if not self._phases: raise FuelTankValidationError("Add at least one consumption phase.")
+            phases = tuple(TankConsumptionPlanPhase(None, index + 1, tuple(TankConsumptionPlanPhaseTank(tank_id, share) for tank_id, share in phase)) for index, phase in enumerate(self._phases))
+            self._service.save_consumption_plan(TankConsumptionPlan(None, self._vessel_id, self.fuel_input.currentText(), "ACTIVE", self._effective, phases))
         except (ValueError, FuelTankValidationError) as error:
-            QMessageBox.warning(self, "Consumption tanks not applied", str(error))
-            return
+            QMessageBox.warning(self, "Consumption plan not saved", str(error)); return
+        self.accept()
+
+
+class _PhaseEditorDialog(QDialog):
+    def __init__(self, tanks, selected, parent=None):
+        super().__init__(parent); self.setWindowTitle("Edit Consumption Phase")
+        screen = QGuiApplication.primaryScreen(); available = screen.availableGeometry() if screen else None; width = min(850, available.width() - 48) if available else 850; height = min(600, available.height() - 48) if available else 600
+        self.setMinimumSize(min(680, width), min(470, height)); self.resize(width, height); layout = QVBoxLayout(self); layout.setContentsMargins(22, 18, 22, 16); layout.setSpacing(12)
+        heading = QLabel("EDIT CONSUMPTION PHASE"); heading.setObjectName("pageTitle"); layout.addWidget(heading); layout.addWidget(_muted("The phase ends when the first selected tank reaches 0 MT. The next planned phase then becomes active."))
+        self.table = QTableWidget(0, 4); self.table.setHorizontalHeaderLabels(("Use", "Tank", "ROB / Forecast ROB", "Allocation %")); self.table.setSelectionMode(QTableWidget.SelectionMode.NoSelection); self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers); self.table.verticalHeader().setVisible(False); self.table.verticalHeader().setDefaultSectionSize(46); self.table.horizontalHeader().setStretchLastSection(False); layout.addWidget(self.table, 1)
+        selected_by_id = dict(selected)
+        for row, (tank_id, name) in enumerate(tanks):
+            self.table.insertRow(row); use = QCheckBox(); use.setChecked(tank_id in selected_by_id); share = QDoubleSpinBox(); share.setRange(0.001, 100); share.setDecimals(2); share.setSuffix(" %"); share.setMinimumWidth(125); share.setValue(selected_by_id.get(tank_id, 0) * 100); share.setEnabled(use.isChecked())
+            service = getattr(parent, "_service", None); latest = service.get_latest_sounding(tank_id) if service else None; forecast = getattr(parent, "_forecast_by_tank", {}).get(tank_id)
+            rob = forecast.predicted_mass_mt if forecast and forecast.predicted_mass_mt is not None else (latest.calculated_mass_mt if latest else None)
+            self.table.setCellWidget(row, 0, use); item = QTableWidgetItem(name); item.setData(Qt.ItemDataRole.UserRole, tank_id); self.table.setItem(row, 1, item); self.table.setItem(row, 2, QTableWidgetItem(f"{rob:,.2f} MT" if rob is not None else "—")); self.table.setCellWidget(row, 3, share)
+            use.toggled.connect(lambda checked, current=row: self._toggle_row(current, checked)); use.toggled.connect(self._equal_split); share.valueChanged.connect(self._refresh_total)
+        for column, width_value in enumerate((70, 350, 190, 150)): self.table.setColumnWidth(column, width_value)
+        panel = QFrame(); panel.setObjectName("phaseValidationCard"); panel_layout = QHBoxLayout(panel); panel_layout.setContentsMargins(14, 10, 14, 10); self.count = QLabel(); self.total = QLabel(); self.validity = QLabel(); panel_layout.addWidget(self.count); panel_layout.addWidget(self.total); panel_layout.addStretch(); panel_layout.addWidget(self.validity); layout.addWidget(panel)
+        footer = QHBoxLayout(); footer.addWidget(_muted("END CONDITION\nFirst selected tank depleted")); footer.addStretch(); cancel = QPushButton("Cancel"); cancel.clicked.connect(self.reject); self.save_button = QPushButton("Save Phase"); self.save_button.setObjectName("primaryButton"); self.save_button.clicked.connect(self._save); footer.addWidget(cancel); footer.addWidget(self.save_button); layout.addLayout(footer); self._refresh_total()
+    def value(self): return [(self.table.item(row, 1).data(Qt.ItemDataRole.UserRole), self.table.cellWidget(row, 3).value() / 100) for row in range(self.table.rowCount()) if self.table.cellWidget(row, 0).isChecked()]
+    def _toggle_row(self, row, checked): self.table.cellWidget(row, 3).setEnabled(checked); self._refresh_total()
+    def _equal_split(self, *_):
+        selected_rows = [row for row in range(self.table.rowCount()) if self.table.cellWidget(row, 0).isChecked()]
+        if selected_rows:
+            share = 100 / len(selected_rows)
+            for row in selected_rows: self.table.cellWidget(row, 3).setValue(share)
+        self._refresh_total()
+    def _refresh_total(self, *_):
+        values = self.value(); total = sum(share for _, share in values) * 100; valid = bool(values) and abs(total - 100) <= 1e-9
+        self.count.setText(f"SELECTED TANKS\n{len(values)}"); self.total.setText(f"ALLOCATION TOTAL\n{total:.2f}%"); self.validity.setText("VALID" if valid else "MUST TOTAL 100%"); self.validity.setStyleSheet("color: #63C98D; font-weight: 700;" if valid else "color: #F29128; font-weight: 700;"); self.save_button.setEnabled(valid)
+    def _save(self):
+        values = self.value()
+        if not values or abs(sum(share for _, share in values) - 1.0) > 1e-9: return
         self.accept()
 
 
@@ -524,7 +693,7 @@ class TankSoundingSurveyDialog(QDialog):
         common.addWidget(QLabel("Remarks"), 1, 0); common.addWidget(self.remarks, 1, 1, 1, 4); layout.addWidget(common_box)
         common.setColumnStretch(1, 5); common.setColumnStretch(2, 2); common.setColumnStretch(4, 2)
         self.table = QTableWidget(0, 10); self.table.setObjectName("soundingSurveyTable")
-        self.table.setHorizontalHeaderLabels(("Include", "Tank", "Fuel / basis", "Measurement", "Reading cm", "Temp C", "Manual VCF", "Volume m3", "MT", "Status"))
+        self.table.setHorizontalHeaderLabels(("Include", "Tank", "Fuel / basis", "Measurement", "Reading cm", "Temp C", "VCF", "Volume m3", "MT", "Status"))
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers); self.table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self.table.verticalHeader().setVisible(False); self.table.verticalHeader().setDefaultSectionSize(52); self.table.setAlternatingRowColors(True)
         self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded); self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -552,7 +721,7 @@ class TankSoundingSurveyDialog(QDialog):
         include = QCheckBox(); include.setChecked(tank.tank_type == "BUNKER"); include.setToolTip("Include this tank in the survey")
         kind = QComboBox(); kind.addItems(MEASUREMENT_TYPES); kind.setCurrentText(tank.preferred_measurement_type); kind.setFixedWidth(135)
         reading, temp, vcf = QLineEdit(), QLineEdit(), QLineEdit()
-        for widget, placeholder in ((reading, "cm"), (temp, "optional"), (vcf, "optional")):
+        for widget, placeholder in ((reading, "cm"), (temp, "required for AUTO"), (vcf, "AUTO / manual override")):
             widget.setPlaceholderText(placeholder); widget.setFixedWidth(112)
         fuel = batch.fuel_type if batch else "UNASSIGNED"
         basis_widget = QWidget(); basis_layout = QVBoxLayout(basis_widget); basis_layout.setContentsMargins(6, 3, 6, 3); basis_layout.setSpacing(2)
@@ -586,13 +755,11 @@ class TankSoundingSurveyDialog(QDialog):
             if reading_value is None or trim_value is None: raise ValueError("Invalid reading")
             volume = self._service.calculate_calibrated_volume(tank.id, kind.currentText(), reading_value, trim_value)
             volume_label.setText(f"{volume:.3f}")
-            if not vcf.text().strip(): self._set_row_status(status, "VCF needed for MT"); mass_label.setText("—")
-            elif batch is None: self._set_row_status(status, "No batch"); mass_label.setText("—")
-            else:
-                vcf_value = _optional_float(vcf.text(), "Manual VCF")
-                result = self._service.calculate_manual_vcf_mass(volume, vcf_value, batch.density_15_kg_m3); mass_label.setText(f"{result.mass_mt:.3f}"); mass_label.setToolTip(f"Volume @15: {result.standard_volume_15_m3:.3f} m3"); self._set_row_status(status, "Ready")
+            manual_vcf = _optional_float(vcf.text(), "Manual VCF") if vcf.text().strip() else None
+            result, effective_vcf, mode = self._service.calculate_tank_sounding_mass(volume, _optional_float(temp.text(), "Temperature") if temp.text().strip() else None, batch, manual_vcf)
+            mass_label.setText(f"{result.mass_mt:.3f}"); mass_label.setToolTip(f"Volume @15: {result.standard_volume_15_m3:.3f} m3\nVCF: {effective_vcf:.5f} {mode}\nDensity @15: {batch.density_15_kg_m3:.3f} kg/m3"); vcf.setToolTip(f"{effective_vcf:.5f} {mode}"); self._set_row_status(status, "Ready")
         except ValueError as error:
-            message = str(error).lower(); self._set_row_status(status, "Outside range" if "range" in message else ("No calibration" if "calibration" in message else "Invalid reading")); volume_label.setText("—"); mass_label.setText("—")
+            message = str(error).lower(); state = "No batch density" if "batch density" in message else ("Temperature required" if "temperature required" in message else ("Fuel basis unknown" if "fuel type" in message else ("Outside range" if "range" in message else ("No calibration" if "calibration" in message else "Invalid reading")))); self._set_row_status(status, state); volume_label.setText("—"); mass_label.setText("—")
         self._refresh_totals()
 
     def _refresh_all(self) -> None:
@@ -600,7 +767,7 @@ class TankSoundingSurveyDialog(QDialog):
 
     @staticmethod
     def _set_row_status(label: QLabel, state: str) -> None:
-        colors = {"Ready": "#63C98D", "Excluded": "#8A9AA8", "Pending": "#E3A33B", "--": "#E3A33B", "VCF needed for MT": "#59CBE8", "No batch": "#F29128", "No calibration": "#E3A33B", "Outside range": "#E37C4A"}
+        colors = {"Ready": "#63C98D", "Excluded": "#8A9AA8", "Pending": "#E3A33B", "--": "#E3A33B", "No batch density": "#F29128", "Temperature required": "#59CBE8", "Fuel basis unknown": "#F29128", "No calibration": "#E3A33B", "Outside range": "#E37C4A"}
         label.setText(state); label.setStyleSheet(f"color:{colors.get(state, '#E3A33B')}; font-weight:700; font-size:10px;")
 
     def _refresh_totals(self) -> None:
@@ -653,6 +820,7 @@ class FuelTanksPage(QWidget):
         super().__init__()
         self._vessel_service, self._fuel_tank_service, self._tank_forecast_service, self._voyage_service = vessel_service, fuel_tank_service, tank_forecast_service, voyage_service
         self._selected_tank_id: int | None = None
+        self._plan_forecasts = {}
         self.tank_cards: list[TankCard] = []
         root = QVBoxLayout(self); root.setContentsMargins(0, 0, 0, 0)
         scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -666,7 +834,7 @@ class FuelTanksPage(QWidget):
         self.add_tank_button = QPushButton("Add Tank"); self.add_tank_button.clicked.connect(self._add_tank)
         self.load_tank_set_button = QPushButton("Load Vessel Tank Set"); self.load_tank_set_button.clicked.connect(self._load_vessel_tank_set)
         self.survey_button = QPushButton("Update Tank ROBs"); self.survey_button.setObjectName("primaryButton"); self.survey_button.clicked.connect(self._open_survey)
-        self.consumption_tanks_button = QPushButton("Consumption Tanks"); self.consumption_tanks_button.clicked.connect(self._configure_consumption_tanks)
+        self.consumption_tanks_button = QPushButton("Tank Consumption Plan"); self.consumption_tanks_button.clicked.connect(self._configure_consumption_tanks)
         self.internal_transfer_button = QPushButton("Internal Transfer"); self.internal_transfer_button.clicked.connect(self._open_internal_transfer)
         self.primary_actions_layout = QGridLayout(); self.primary_actions_layout.setHorizontalSpacing(10); self.primary_actions_layout.setVerticalSpacing(8)
         for column, button in enumerate((self.survey_button, self.consumption_tanks_button, self.internal_transfer_button, self.add_tank_button, self.load_tank_set_button)):
@@ -688,6 +856,10 @@ class FuelTanksPage(QWidget):
             self.empty_label.show(); self.arrangement_panel.hide(); self.add_tank_button.setEnabled(False); self.load_tank_set_button.setEnabled(False); self.consumption_tanks_button.setEnabled(False); self.internal_transfer_button.setEnabled(False); self.survey_button.setEnabled(False); self.history_empty_label.show(); return
         self.vessel_label.setText(f"Vessel: {vessel.name}"); self.add_tank_button.setEnabled(True); self.load_tank_set_button.setEnabled(True); self.consumption_tanks_button.setEnabled(True); self.internal_transfer_button.setEnabled(True); self.survey_button.setEnabled(True)
         tanks = self._fuel_tank_service.list_tanks(vessel.id)
+        try:
+            self._plan_forecasts = {item.tank_id: item for item in self._tank_forecast_service.predict_plan_completion(vessel.id)} if self._tank_forecast_service else {}
+        except Exception:
+            self._plan_forecasts = {}
         if not tanks:
             self.empty_label.setText("No fuel oil tanks configured."); self.empty_label.show(); self.arrangement_panel.hide(); self.history_empty_label.show(); return
         self.empty_label.hide(); self.arrangement_panel.show()
@@ -771,7 +943,7 @@ class FuelTanksPage(QWidget):
             batches, history, kind = args
         latest = self._fuel_tank_service.get_latest_sounding(tank.id)
         batch = batches.get(tank.current_fuel_batch_id)
-        card = TankCard(tank, batch.fuel_type if batch else None, batch.batch_name if batch else None, latest, kind)
+        card = TankCard(tank, batch.fuel_type if batch else None, batch.batch_name if batch else None, latest, kind, consumption_status=self._consumption_status(tank, batch, latest))
         card.selected.connect(self._select_tank); card.activated.connect(self._show_tank_details)
         if isinstance(layout, QGridLayout):
             layout.addWidget(card, row, column)
@@ -780,6 +952,39 @@ class FuelTanksPage(QWidget):
         self.tank_cards.append(card)
         for sounding in self._fuel_tank_service.list_sounding_history(tank.id):
             history.append((tank, sounding, batches.get(sounding.fuel_batch_id) or batch))
+
+    def _consumption_status(self, tank: FuelTank, batch, latest: TankSounding | None) -> str:
+        if batch is None or latest is None or latest.calculated_mass_mt is None:
+            return "FORECAST UNAVAILABLE"
+        plan = self._fuel_tank_service.get_active_consumption_plan(tank.vessel_id, batch.fuel_type)
+        if plan is None:
+            return "STANDBY"
+        for phase in plan.phases:
+            allocation = next((item.allocation_fraction for item in phase.tanks if item.tank_id == tank.id), None)
+            if allocation is None:
+                continue
+            forecast = self._plan_forecasts.get(tank.id)
+            if forecast is None or forecast.predicted_mass_mt is None:
+                return "FORECAST UNAVAILABLE"
+            active_sequence = forecast.active_phase_sequence
+            if active_sequence is None:
+                if forecast.estimated_depleted_at_utc is not None:
+                    return f"DEPLETED\nDepleted UTC: {_format_utc(forecast.estimated_depleted_at_utc.isoformat())}"
+                return "STANDBY"
+            if phase.sequence_number < active_sequence:
+                if forecast.estimated_depleted_at_utc is not None:
+                    return f"DEPLETED\nDepleted UTC: {_format_utc(forecast.estimated_depleted_at_utc.isoformat())}"
+                return "STANDBY"
+            if phase.sequence_number == active_sequence:
+                depleted = _format_utc(forecast.estimated_depleted_at_utc.isoformat()) if forecast and forecast.estimated_depleted_at_utc else "forecast unavailable"
+                return f"ACTIVE CONSUMPTION · allocation {allocation * 100:g}%\nEstimated depleted UTC: {depleted} · Time remaining: {_time_remaining(forecast.estimated_depleted_at_utc) if forecast and forecast.estimated_depleted_at_utc else 'forecast unavailable'}"
+            if phase.sequence_number == active_sequence + 1:
+                start = forecast.planned_phase_start_utc
+                start_text = _format_utc(start.isoformat()) if start else "forecast unavailable"
+                starts_in = _time_remaining(start) if start else "forecast unavailable"
+                return f"NEXT CONSUMPTION · allocation {allocation * 100:g}%\nPlanned start UTC: {start_text} · Starts in: {starts_in}"
+            return f"PLANNED · phase {phase.sequence_number} · allocation {allocation * 100:g}%"
+        return "STANDBY"
 
     def _populate_history(self, history: list[tuple[FuelTank, TankSounding, str | None]]) -> None:
         history.sort(key=lambda item: (item[1].effective_at_utc, item[1].id or 0), reverse=True)
@@ -905,6 +1110,17 @@ def _muted(text: str) -> QLabel:
 def _format_utc(value: str) -> str:
     try: return datetime.fromisoformat(value).strftime("%d %b %Y %H:%M")
     except ValueError: return value
+
+
+def _forecast_time(value: datetime | None) -> str:
+    return _format_utc(value.isoformat()) if value else "—"
+
+
+def _time_remaining(value: datetime) -> str:
+    seconds = int((value - datetime.now(timezone.utc)).total_seconds())
+    if seconds <= 0: return "now / passed"
+    hours, remainder = divmod(seconds, 3600)
+    return f"{hours // 24}d {hours % 24}h {remainder // 60}m"
 
 
 def _card_value(text: str) -> QLabel:

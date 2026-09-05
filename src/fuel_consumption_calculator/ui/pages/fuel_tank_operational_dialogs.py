@@ -181,9 +181,9 @@ class UpdateTankROBDialog(QDialog):
         form.addRow("Observation Time UTC", self.time); form.addRow("Measurement Type", self.type); form.addRow("Reading cm", self.reading); form.addRow("Trim m", self.trim); form.addRow("Temperature C", self.temperature)
         form.addRow("Fuel", QLabel(self._batch.fuel_type if self._batch else "UNKNOWN")); form.addRow("Batch", QLabel(self._batch.batch_name if self._batch else "No batch assigned")); form.addRow("Density @15°C", QLabel(f"{self._batch.density_15_kg_m3:.3f} kg/m³" if self._batch else "--")); form.addRow("Manual VCF", self.manual_vcf); form.addRow("Remarks", self.remarks)
         layout.addLayout(form)
-        layout.addWidget(_muted_label("VCF is entered manually. Automatic ASTM/API calculation is not enabled."))
+        layout.addWidget(_muted_label("AUTO VCF uses this tank sounding's temperature and assigned batch density @15°C. Enter Manual VCF only for an explicit override."))
         self.preview = QLabel("Enter reading and trim to calculate volume."); self.preview.setWordWrap(True); layout.addWidget(self.preview)
-        layout.addWidget(_muted_label("Temperature is recorded with the observation. VCF is entered manually in the current version."))
+        layout.addWidget(_muted_label("A valid batch density and temperature create a mass-bearing ROB anchor."))
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.save); buttons.rejected.connect(self.reject); layout.addWidget(buttons)
         self.reading.textChanged.connect(self.update_preview); self.trim.textChanged.connect(self.update_preview); self.type.currentTextChanged.connect(self.update_preview); self.manual_vcf.textChanged.connect(self.update_preview)
@@ -205,19 +205,14 @@ class UpdateTankROBDialog(QDialog):
             trim = _finite(trim_text, "Trim")
             volume = self._service.calculate_calibrated_volume(self._tank.id, self.type.currentText(), reading, trim)
             lines = [f"Observed Volume: {volume:.3f} m3", f"Fill: {volume / self._tank.capacity_m3 * 100:.1f}%"]
-            vcf_text = self.manual_vcf.text().strip()
-            if not vcf_text:
-                lines.append("Mass snapshot: not recorded (Manual VCF not entered).")
-            else:
-                vcf = _finite(vcf_text, "Manual VCF")
-                if self._batch is None:
-                    lines.append("Mass snapshot: not recorded (no fuel batch assigned).")
-                elif self._batch.density_15_kg_m3 < 100:
-                    lines.append("Mass snapshot unavailable: batch density must be entered in kg/m3 (for example 978, not 0.978).")
-                else:
-                    result = self._service.calculate_manual_vcf_mass(volume, vcf, self._batch.density_15_kg_m3)
-                    self._snapshot = (vcf, result.standard_volume_15_m3, self._batch.density_15_kg_m3, result.mass_mt)
-                    lines.extend((f"Manual VCF: {vcf:.5f}", f"Volume @15 C: {result.standard_volume_15_m3:.3f} m3", f"Density @15 C: {self._batch.density_15_kg_m3:.3f} kg/m3", f"Calculated Mass: {result.mass_mt:.3f} MT"))
+            vcf_text = self.manual_vcf.text().strip(); manual_vcf = _finite(vcf_text, "Manual VCF") if vcf_text else None
+            temperature = _finite(self.temperature.text(), "Temperature") if self.temperature.text().strip() else None
+            try:
+                result, effective_vcf, mode = self._service.calculate_tank_sounding_mass(volume, temperature, self._batch, manual_vcf)
+                self._snapshot = (manual_vcf, result.standard_volume_15_m3, self._batch.density_15_kg_m3, result.mass_mt)
+                lines.extend((f"VCF: {effective_vcf:.5f} {mode}", f"Volume @15 C: {result.standard_volume_15_m3:.3f} m3", f"Density @15 C: {self._batch.density_15_kg_m3:.3f} kg/m3", f"Calculated Mass: {result.mass_mt:.3f} MT"))
+            except ValueError as error:
+                lines.append(f"Mass snapshot unavailable: {error}")
             self.preview.setText("\n".join(lines)); self._valid = True
         except ValueError as error:
             self.preview.setText(str(error)); self._valid = False

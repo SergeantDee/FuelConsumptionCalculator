@@ -94,6 +94,8 @@ class Database:
                 self._migrate_to_v19(connection)
             if current_version < 20:
                 self._migrate_to_v20(connection)
+            if current_version < 21:
+                self._migrate_to_v21(connection)
             if current_version >= 9:
                 self._ensure_default_port_timezones(connection)
                 self._resolve_existing_schedule_timezones(connection)
@@ -794,6 +796,45 @@ class Database:
         if "vcf_mode" not in columns:
             connection.execute("ALTER TABLE bunker_incoming_fuel_snapshots ADD COLUMN vcf_mode TEXT NOT NULL DEFAULT 'MANUAL' CHECK (vcf_mode IN ('AUTO', 'MANUAL'))")
         LOGGER.info("Database migrated to schema version 20.")
+
+    def _migrate_to_v21(self, connection: sqlite3.Connection) -> None:
+        """Add future-only physical tank consumption plans; v20 data remains intact."""
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS tank_consumption_plans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vessel_id INTEGER NOT NULL,
+                fuel_type TEXT NOT NULL CHECK (fuel_type IN ('ULSFO', 'VLSFO', 'MDO')),
+                status TEXT NOT NULL CHECK (status IN ('ACTIVE', 'ARCHIVED')),
+                effective_from_utc TEXT NOT NULL,
+                remarks TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (vessel_id) REFERENCES vessels(id) ON DELETE CASCADE
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_active_tank_consumption_plan
+                ON tank_consumption_plans (vessel_id, fuel_type) WHERE status = 'ACTIVE';
+            CREATE TABLE IF NOT EXISTS tank_consumption_plan_phases (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                plan_id INTEGER NOT NULL,
+                sequence_number INTEGER NOT NULL,
+                end_condition TEXT NOT NULL DEFAULT 'FIRST_DEPLETION' CHECK (end_condition = 'FIRST_DEPLETION'),
+                depletion_threshold_mt REAL NOT NULL DEFAULT 0.0 CHECK (depletion_threshold_mt >= 0),
+                remarks TEXT,
+                FOREIGN KEY (plan_id) REFERENCES tank_consumption_plans(id) ON DELETE CASCADE,
+                UNIQUE (plan_id, sequence_number)
+            );
+            CREATE TABLE IF NOT EXISTS tank_consumption_plan_phase_tanks (
+                phase_id INTEGER NOT NULL,
+                tank_id INTEGER NOT NULL,
+                allocation_fraction REAL NOT NULL CHECK (allocation_fraction > 0 AND allocation_fraction <= 1),
+                PRIMARY KEY (phase_id, tank_id),
+                FOREIGN KEY (phase_id) REFERENCES tank_consumption_plan_phases(id) ON DELETE CASCADE,
+                FOREIGN KEY (tank_id) REFERENCES fuel_tanks(id) ON DELETE CASCADE
+            );
+            """
+        )
+        LOGGER.info("Database migrated to schema version 21.")
 
     def _ensure_default_port_timezones(self, connection: sqlite3.Connection) -> None:
         timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")

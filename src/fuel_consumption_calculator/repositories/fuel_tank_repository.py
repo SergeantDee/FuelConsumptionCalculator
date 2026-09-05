@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from fuel_consumption_calculator.domain.fuel_tank import FuelBatch, FuelTank, InternalFuelTransfer, TankCalibrationPoint, TankSounding, TankSoundingSurvey
 from fuel_consumption_calculator.domain.bunker import BunkerTankReceipt
-from fuel_consumption_calculator.domain.tank_forecast import TankConsumptionAllocationEvent
+from fuel_consumption_calculator.domain.tank_forecast import TankConsumptionAllocationEvent, TankConsumptionPlan, TankConsumptionPlanPhase, TankConsumptionPlanPhaseTank
 from fuel_consumption_calculator.repositories.database import Database
 
 
@@ -195,6 +195,49 @@ class FuelTankRepository:
                 [(event_id, tank_id) for tank_id in sorted(set(event.tank_ids))],
             )
         return next(item for item in self.list_consumption_allocation_events(event.vessel_id) if item.id == event_id)
+
+    def get_active_consumption_plan(self, vessel_id: int, fuel_type: str) -> TankConsumptionPlan | None:
+        with self._database.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM tank_consumption_plans WHERE vessel_id = ? AND fuel_type = ? AND status = 'ACTIVE'",
+                (vessel_id, fuel_type),
+            ).fetchone()
+            return self._plan_from_row(connection, row) if row else None
+
+    def list_consumption_plans(self, vessel_id: int) -> list[TankConsumptionPlan]:
+        with self._database.connect() as connection:
+            rows = connection.execute("SELECT * FROM tank_consumption_plans WHERE vessel_id = ? ORDER BY fuel_type, CASE status WHEN 'ACTIVE' THEN 0 ELSE 1 END, id", (vessel_id,)).fetchall()
+            return [self._plan_from_row(connection, row) for row in rows]
+
+    def save_consumption_plan(self, plan: TankConsumptionPlan) -> TankConsumptionPlan:
+        timestamp = _timestamp()
+        effective = plan.effective_from_utc.astimezone(timezone.utc).isoformat(timespec="seconds")
+        with self._database.connect() as connection:
+            if plan.status == "ACTIVE":
+                connection.execute("UPDATE tank_consumption_plans SET status = 'ARCHIVED', updated_at = ? WHERE vessel_id = ? AND fuel_type = ? AND status = 'ACTIVE'", (timestamp, plan.vessel_id, plan.fuel_type))
+            cursor = connection.execute(
+                "INSERT INTO tank_consumption_plans (vessel_id,fuel_type,status,effective_from_utc,remarks,created_at,updated_at) VALUES (?,?,?,?,?,?,?)",
+                (plan.vessel_id, plan.fuel_type, plan.status, effective, plan.remarks, timestamp, timestamp),
+            )
+            plan_id = cursor.lastrowid
+            for phase in plan.phases:
+                phase_id = connection.execute(
+                    "INSERT INTO tank_consumption_plan_phases (plan_id,sequence_number,end_condition,depletion_threshold_mt,remarks) VALUES (?,?,?,?,?)",
+                    (plan_id, phase.sequence_number, phase.end_condition, phase.depletion_threshold_mt, phase.remarks),
+                ).lastrowid
+                connection.executemany(
+                    "INSERT INTO tank_consumption_plan_phase_tanks (phase_id,tank_id,allocation_fraction) VALUES (?,?,?)",
+                    [(phase_id, item.tank_id, item.allocation_fraction) for item in phase.tanks],
+                )
+            row = connection.execute("SELECT * FROM tank_consumption_plans WHERE id = ?", (plan_id,)).fetchone()
+            return self._plan_from_row(connection, row)
+
+    def _plan_from_row(self, connection, row) -> TankConsumptionPlan:
+        phases = []
+        for phase in connection.execute("SELECT * FROM tank_consumption_plan_phases WHERE plan_id = ? ORDER BY sequence_number", (row["id"],)).fetchall():
+            tanks = tuple(TankConsumptionPlanPhaseTank(item["tank_id"], float(item["allocation_fraction"])) for item in connection.execute("SELECT tank_id, allocation_fraction FROM tank_consumption_plan_phase_tanks WHERE phase_id = ? ORDER BY tank_id", (phase["id"],)).fetchall())
+            phases.append(TankConsumptionPlanPhase(phase["id"], phase["sequence_number"], tanks, phase["end_condition"], float(phase["depletion_threshold_mt"]), phase["remarks"]))
+        return TankConsumptionPlan(row["id"], row["vessel_id"], row["fuel_type"], row["status"], datetime.fromisoformat(row["effective_from_utc"]), tuple(phases), row["remarks"])
 
     def get_internal_fuel_transfer(self, transfer_id: int) -> InternalFuelTransfer | None:
         with self._database.connect() as connection:

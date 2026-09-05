@@ -127,7 +127,7 @@ def test_manual_vcf_update_rob_saves_full_snapshot_and_refreshes_ui(configured_t
 
     page = FuelTanksPage(vessel_service, service); page.refresh()
     card = page.tank_cards[0]
-    assert "154.133 MT" in {label.text() for label in card.findChildren(type(dialog.preview))}
+    assert "154.13 MT" in {label.text() for label in card.findChildren(type(dialog.preview))}
     details = TankDetailsDialog(service, service.get_tank(tank.id), "VLSFO", batch.batch_name, saved)
     assert details.current_fuel_value.text() == "VLSFO"
     assert any("0.98500" in label.text() for label in details.findChildren(type(dialog.preview)))
