@@ -119,7 +119,7 @@ def test_unassigned_card_and_tank_details_show_no_mass_and_batch_data(services, 
     details = TankDetailsDialog(tank_service, tank_service.get_tank(tank.id), "VLSFO", "B26-08", None)
     assert details.current_fuel_value.text() == "VLSFO"
     assert details.current_batch_value.text() == "B26-08"
-    assert details.density_value.text() == "950 kg/m3"
+    assert details.density_value.text() == "950 kg/m³"
 
     page = FuelTanksPage(vessel_service, tank_service)
     page.refresh()

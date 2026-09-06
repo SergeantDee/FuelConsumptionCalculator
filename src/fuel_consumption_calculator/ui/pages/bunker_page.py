@@ -351,7 +351,7 @@ class ReceivingTanksDialog(QDialog):
             return None
 
     def _batch_changed(self):
-        batch_id=self.batch_input.currentData(); batch=next((b for b in self._service.list_fuel_batches(self._plan.vessel_id) if b.id==batch_id),None); self.fuel_label.set_fuel_type(batch.fuel_type if batch else None); self.density_label.setText(f"{batch.density_15_kg_m3:.3f} kg/m3" if batch else "--"); self._refresh_auto_vcf(); self._update_summary()
+        batch_id=self.batch_input.currentData(); batch=next((b for b in self._service.list_fuel_batches(self._plan.vessel_id) if b.id==batch_id),None); self.fuel_label.set_fuel_type(batch.fuel_type if batch else None); self.density_label.setText(f"{batch.density_15_kg_m3:.3f} kg/m³" if batch else "--"); self._refresh_auto_vcf(); self._update_summary()
 
     def _vcf_mode_changed(self):
         manual = self.vcf_mode_input.currentText() == "MANUAL"
@@ -552,10 +552,10 @@ class BunkerPage(QWidget):
             planned_input = _spinbox(" MT", 0, 999999.99, 10)
             for label_row, (label_text, value_widget) in enumerate(
                 (
-                    ("Capacity", capacity_label),
+                    ("Aggregate Capacity", capacity_label),
                     ("Target %", target_label),
-                    ("Target ROB", target_rob_label),
-                    ("Arrival ROB", arrival_label),
+                    ("Target Total ROB", target_rob_label),
+                    ("Arrival Total ROB", arrival_label),
                     ("Max Lift", max_lift_label),
                     ("Planned Lift", planned_input),
                 ),
@@ -565,7 +565,7 @@ class BunkerPage(QWidget):
                 field.setObjectName("fieldLabel")
                 card_grid.addWidget(field, label_row, 0)
                 card_grid.addWidget(value_widget, label_row, 1)
-                if label_text == "Capacity":
+                if label_text == "Aggregate Capacity":
                     self._capacity_field_labels[fuel_type] = field
             self._target_rob_labels[fuel_type] = target_rob_label
             self._arrival_rob_labels[fuel_type] = arrival_label
@@ -918,7 +918,7 @@ class BunkerPage(QWidget):
             selected_count_label = f"{len(receiving_rows)} {'tank' if len(receiving_rows) == 1 else 'tanks'} selected"
             selected_capacity_m3 = sum(tanks[row.tank_id].capacity_m3 for row in receiving_rows if row.tank_id in tanks)
             for fuel_type in FUEL_TYPES:
-                self._capacity_field_labels[fuel_type].setText("Legacy Capacity")
+                self._capacity_field_labels[fuel_type].setText("Aggregate Capacity")
             if batch is not None:
                 self._capacity_field_labels[batch.fuel_type].setText("Receiving Capacity")
                 getattr(self, f"_{batch.fuel_type.lower()}_capacity_label").setText(f"{selected_capacity_m3:.3f} m³")
@@ -942,7 +942,7 @@ class BunkerPage(QWidget):
             if not tank_plan or batch is None or fuel_type != batch.fuel_type:
                 getattr(self, f"_{fuel_type.lower()}_capacity_label").setText(_format_mt(limit.capacity_mt))
             if not tank_plan:
-                self._capacity_field_labels[fuel_type].setText("Capacity")
+                self._capacity_field_labels[fuel_type].setText("Aggregate Capacity")
             getattr(self, f"_{fuel_type.lower()}_target_label").setText(f"{limit.target_fill_percent:.2f} %")
             self._target_rob_labels[fuel_type].setText(_format_mt(limit.target_rob_mt))
             self._arrival_rob_labels[fuel_type].setText(_format_mt(limit.arrival_rob_mt))

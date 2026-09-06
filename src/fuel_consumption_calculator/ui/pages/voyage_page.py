@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from PySide6.QtCore import QDateTime, Qt, Signal
+from PySide6.QtCore import QDateTime, QTimeZone, Qt, Signal
 from PySide6.QtGui import QAction, QColor
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -503,12 +503,12 @@ class VoyagePage(QWidget):
 
     def _stage_time_tooltip(self, stage: OperationalStage, endpoint: str) -> str:
         if self._time_display_mode == "UTC":
-            return "UTC ? authoritative calculation timeline"
+            return "UTC — authoritative calculation timeline"
 
         port, timezone_id = self._port_local_context(stage, endpoint)
         if timezone_id:
-            return f"Local Time ? {port}\n{timezone_id}"
-        return "UTC ? port-local timezone context unavailable"
+            return f"Local Time — {port}\n{timezone_id}"
+        return "UTC — port-local timezone context unavailable"
 
     def _stage_for_timestamp(self, value: datetime | None) -> OperationalStage | None:
         target = self._aware_utc(value)
@@ -541,11 +541,11 @@ class VoyagePage(QWidget):
 
     def _changeover_time_tooltip(self, value: datetime | None) -> str:
         if self._time_display_mode == "UTC":
-            return "UTC ? authoritative fuel-changeover timestamp"
+            return "UTC — authoritative fuel-changeover timestamp"
 
         stage = self._stage_for_timestamp(value)
         if stage is None or stage.stage_type == STAGE_SEA_PASSAGE:
-            return "UTC ? no unambiguous port-local timezone while at sea"
+            return "UTC — no unambiguous port-local timezone while at sea"
 
         return self._stage_time_tooltip(stage, "start")
 
@@ -1226,12 +1226,14 @@ class VoyagePage(QWidget):
         change_to.addItems(FUEL_TYPES)
         planned = QDateTimeEdit()
         planned.setCalendarPopup(True)
-        planned.setDisplayFormat("dd MMM yyyy HH:mm")
+        planned.setTimeZone(QTimeZone.utc())
+        planned.setDisplayFormat("dd MMM yyyy HH:mm 'UTC'")
         planned.setDateTime(QDateTime(stage.start_utc or datetime.now()))
         actual_enabled = QCheckBox("Actual changeover completed")
         actual = QDateTimeEdit()
         actual.setCalendarPopup(True)
-        actual.setDisplayFormat("dd MMM yyyy HH:mm")
+        actual.setTimeZone(QTimeZone.utc())
+        actual.setDisplayFormat("dd MMM yyyy HH:mm 'UTC'")
         actual.setDateTime(QDateTime(stage.start_utc or datetime.now()))
         actual.setEnabled(False)
         actual_enabled.toggled.connect(actual.setEnabled)
@@ -1381,7 +1383,8 @@ class NewChangeoverDialog(QDialog):
         layout.addLayout(grid)
         self.planned = QDateTimeEdit(QDateTime.currentDateTimeUtc())
         self.planned.setCalendarPopup(True)
-        self.planned.setDisplayFormat("dd MMM yyyy HH:mm")
+        self.planned.setTimeZone(QTimeZone.utc())
+        self.planned.setDisplayFormat("dd MMM yyyy HH:mm 'UTC'")
         grid.addWidget(QLabel("Planned UTC"), 0, 0)
         grid.addWidget(self.planned, 0, 1, 1, 2)
         for row, (machinery, label) in enumerate((("MAIN_ENGINE", "Main Engine"), ("GENERATORS", "Auxiliary Engines"), ("AUX_BOILER", "Auxiliary Boiler")), start=1):
@@ -1445,12 +1448,14 @@ class ChangeoverDetailsDialog(QDialog):
         first = changeovers[0]
         self.planned = QDateTimeEdit(QDateTime(first.planned_at_utc))
         self.planned.setCalendarPopup(True)
-        self.planned.setDisplayFormat("dd MMM yyyy HH:mm")
+        self.planned.setTimeZone(QTimeZone.utc())
+        self.planned.setDisplayFormat("dd MMM yyyy HH:mm 'UTC'")
         self.actual_enabled = QCheckBox("Actual time entered")
         self.actual_enabled.setChecked(all(event.actual_at_utc is not None for event in changeovers))
         self.actual = QDateTimeEdit(QDateTime(first.actual_at_utc or first.planned_at_utc))
         self.actual.setCalendarPopup(True)
-        self.actual.setDisplayFormat("dd MMM yyyy HH:mm")
+        self.actual.setTimeZone(QTimeZone.utc())
+        self.actual.setDisplayFormat("dd MMM yyyy HH:mm 'UTC'")
         self.actual.setEnabled(self.actual_enabled.isChecked())
         self.actual_enabled.toggled.connect(self.actual.setEnabled)
         grid.addWidget(QLabel("Planned UTC"), 0, 0)
@@ -1590,7 +1595,8 @@ class StageEditDialog(QDialog):
         enabled = QCheckBox(label)
         editor = QDateTimeEdit()
         editor.setCalendarPopup(True)
-        editor.setDisplayFormat("dd MMM yyyy HH:mm")
+        editor.setTimeZone(QTimeZone.utc())
+        editor.setDisplayFormat("dd MMM yyyy HH:mm 'UTC'")
         editor.setDateTime(QDateTime(value or fallback or datetime.now()))
         enabled.setChecked(value is not None)
         editor.setEnabled(value is not None)

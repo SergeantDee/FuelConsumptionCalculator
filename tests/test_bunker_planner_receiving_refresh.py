@@ -61,6 +61,7 @@ def test_receiving_plan_refreshes_selected_capacity_and_tank_max_lift(planner):
     page._update_lift_limits()
 
     assert page._capacity_field_labels["VLSFO"].text() == "Receiving Capacity"
+    assert page._capacity_field_labels["MDO"].text() == "Aggregate Capacity"
     assert page._vlsfo_capacity_label.text() == "1515.400 m³"
     assert page._vlsfo_capacity_label.text() != "6000.00 MT"
     assert "1 tank selected" in page.receiving_summary_label.text()

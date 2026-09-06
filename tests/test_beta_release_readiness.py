@@ -7,7 +7,8 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QTimeZone
+from PySide6.QtWidgets import QApplication, QPushButton
 
 from fuel_consumption_calculator.app import build_main_window
 from fuel_consumption_calculator.config import APPLICATION_VERSION, SCHEMA_VERSION
@@ -43,5 +44,28 @@ def test_first_run_main_window_constructs_without_a_vessel(tmp_path):
     assert window.schedule_page.empty_state.isVisible() is False or "No schedule" in window.schedule_page.empty_state.text()
     window.select_page(4)
     assert window.fuel_tanks_page.empty_label.text() == "Configure a vessel before adding fuel oil tanks."
+    window.close()
+    app.processEvents()
+
+
+def test_all_active_pages_refresh_in_first_run_and_configured_states(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    window = build_main_window(AppPaths(tmp_path / "all-pages"))
+    window.show()
+    app.processEvents()
+
+    for index, expected_name in enumerate(window.PAGE_NAMES):
+        window.select_page(index)
+        assert window.navigation_buttons[index].text() == expected_name
+        assert window.page_stack.currentIndex() == index
+
+    window.settings_page._vessel_service.configure_active_vessel("Synthetic Vessel", "1234567")
+    assert window.consumption_page.change_planned_input.timeZone().id().data() == QTimeZone.utc().id().data()
+    assert window.consumption_page.change_planned_input.displayFormat().endswith("'UTC'")
+    for index in range(window.page_stack.count()):
+        window.select_page(index)
+        app.processEvents()
+        assert all(button.text().strip() for button in window.page_stack.currentWidget().findChildren(QPushButton) if button.isVisible())
+
     window.close()
     app.processEvents()

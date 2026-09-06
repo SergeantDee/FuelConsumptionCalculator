@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import replace
 from datetime import datetime, timezone
 
-from PySide6.QtCore import QSize, QTimer, Qt, Signal
+from PySide6.QtCore import QDateTime, QSize, QTimeZone, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QGuiApplication, QPainter
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout,
+    QCheckBox, QComboBox, QDateTimeEdit, QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout,
     QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton,
     QHeaderView, QScrollArea, QSizePolicy, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
@@ -32,6 +33,7 @@ from fuel_consumption_calculator.domain.tank_forecast import TankConsumptionPlan
 
 
 NEUTRAL_LEVEL_COLOR = "#477a91"
+LOGGER = logging.getLogger(__name__)
 MDO_SLOTS = ("MDO_1_SERV", "MDO_2_SERV", "MDO_1_STOR", "MDO_2_STOR")
 SUPPORT_SLOTS = ("ULSFO_SETT", "ULSFO_SERV", "HFO_SERV", "HFO_SETT", "OVFLW_ER")
 DEEP_SLOTS = ("DEEP_3P", "DEEP_2P", "DEEP_1P", "DEEP_3S", "DEEP_2S", "DEEP_1S")
@@ -241,34 +243,6 @@ class VesselTankSetDialog(QDialog):
         )
 
 
-class LegacyTankDetailsDialog(QDialog):
-    def __init__(self, service: FuelTankService, tank: FuelTank, fuel_type: str | None, batch_name: str | None, latest: TankSounding | None, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Tank Details")
-        self.setMinimumWidth(380)
-        layout = QVBoxLayout(self)
-        layout.addWidget(QLabel(tank.name, objectName="pageTitle"))
-        form = QFormLayout()
-        values = (
-            ("Tank Type", tank.tank_type), ("Capacity", f"{tank.capacity_m3:.2f} m³"), ("Active", "Yes" if tank.is_active else "No"),
-            ("Bunker Receiving", "Yes" if tank.bunker_receiving_eligible else "No"), ("Current Fuel", fuel_type or "UNKNOWN"),
-            ("Current Batch", batch_name or "No batch assigned"), ("Latest Volume", f"{latest.calculated_volume_m3:.2f} m³" if latest else "No sounding"),
-            ("Latest MT", f"{latest.calculated_mass_mt:.2f} MT" if latest and latest.calculated_mass_mt is not None else "—"),
-            ("Fill", f"{max(0.0, min(100.0, latest.calculated_volume_m3 / tank.capacity_m3 * 100)):.1f}%" if latest else "—"),
-            ("Latest Sounding", _format_utc(latest.effective_at_utc) if latest else "No sounding"),
-        )
-        for label, value in values:
-            form.addRow(label, QLabel(value))
-        layout.addLayout(form)
-        future = QHBoxLayout()
-        update = QPushButton("Update ROB"); update.clicked.connect(lambda: UpdateTankROBDialog(service, tank, self).exec())
-        calibration = QPushButton("Calibration"); calibration.clicked.connect(lambda: CalibrationDialog(service, tank, self).exec())
-        batch = QPushButton("Fuel / Batch Details (Coming next)"); batch.setEnabled(False)
-        for button in (update, calibration, batch): future.addWidget(button)
-        layout.addLayout(future)
-        close_button = QDialogButtonBox(QDialogButtonBox.StandardButton.Close); close_button.rejected.connect(self.reject); layout.addWidget(close_button)
-
-
 class FuelBatchDialog(QDialog):
     """Reusable editor for vessel-level fuel batch details."""
 
@@ -280,7 +254,7 @@ class FuelBatchDialog(QDialog):
         layout = QVBoxLayout(self); form = QFormLayout()
         self.batch_name_input = QLineEdit(batch.batch_name if batch else "")
         self.fuel_type_input = QComboBox(); self.fuel_type_input.addItems(FUEL_BATCH_TYPES); self.fuel_type_input.setCurrentText(batch.fuel_type if batch else "VLSFO")
-        self.density_input = QDoubleSpinBox(); self.density_input.setRange(0.01, 2000); self.density_input.setDecimals(3); self.density_input.setSuffix(" kg/m3"); self.density_input.setValue(batch.density_15_kg_m3 if batch else 1)
+        self.density_input = QDoubleSpinBox(); self.density_input.setRange(0.01, 2000); self.density_input.setDecimals(3); self.density_input.setSuffix(" kg/m³"); self.density_input.setValue(batch.density_15_kg_m3 if batch else 1)
         self.sulfur_input = QLineEdit(_optional_number(batch.sulfur_percent) if batch else "")
         self.viscosity_input = QLineEdit(_optional_number(batch.viscosity_50_cst) if batch else "")
         self.flash_point_input = QLineEdit(_optional_number(batch.flash_point_c) if batch else "")
@@ -331,9 +305,9 @@ class TankFuelBatchDialog(QDialog):
         self.setWindowTitle("Fuel / Batch Details"); self.setMinimumSize(510, 350)
         layout = QVBoxLayout(self); self.tank_label = QLabel(objectName="pageTitle"); layout.addWidget(self.tank_label)
         self.current_fuel_label = QLabel(); self.current_batch_label = QLabel(); self.density_label = QLabel()
-        current = QFormLayout(); current.addRow("Current Fuel", self.current_fuel_label); current.addRow("Current Batch", self.current_batch_label); current.addRow("Density @15 C", self.density_label); layout.addLayout(current)
+        current = QFormLayout(); current.addRow("Current Fuel", self.current_fuel_label); current.addRow("Current Batch", self.current_batch_label); current.addRow("Density @15°C", self.density_label); layout.addLayout(current)
         layout.addWidget(_section("VESSEL FUEL BATCHES"))
-        self.batch_table = QTableWidget(0, 3); self.batch_table.setHorizontalHeaderLabels(("Batch Name", "Fuel Type", "Density @15 C")); self.batch_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows); self.batch_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection); self.batch_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers); self.batch_table.horizontalHeader().setStretchLastSection(True); self.batch_table.itemSelectionChanged.connect(self._update_buttons); layout.addWidget(self.batch_table)
+        self.batch_table = QTableWidget(0, 3); self.batch_table.setHorizontalHeaderLabels(("Batch Name", "Fuel Type", "Density @15°C")); self.batch_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows); self.batch_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection); self.batch_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers); self.batch_table.horizontalHeader().setStretchLastSection(True); self.batch_table.itemSelectionChanged.connect(self._update_buttons); layout.addWidget(self.batch_table)
         actions = QHBoxLayout()
         self.create_button = QPushButton("Create New"); self.create_button.clicked.connect(self._create)
         self.edit_button = QPushButton("Edit Selected"); self.edit_button.clicked.connect(self._edit)
@@ -348,12 +322,12 @@ class TankFuelBatchDialog(QDialog):
         tank = self._service.get_tank(self._tank_id)
         if tank is None: self.reject(); return
         batch = self._service.get_fuel_batch(tank.current_fuel_batch_id) if tank.current_fuel_batch_id else None
-        self.tank_label.setText(f"Tank: {tank.name}"); self.current_fuel_label.setText(batch.fuel_type if batch else "UNKNOWN"); self.current_batch_label.setText(batch.batch_name if batch else "No batch assigned"); self.density_label.setText(f"{batch.density_15_kg_m3:g} kg/m3" if batch else "--")
+        self.tank_label.setText(f"Tank: {tank.name}"); self.current_fuel_label.setText(batch.fuel_type if batch else "UNKNOWN"); self.current_batch_label.setText(batch.batch_name if batch else "No batch assigned"); self.density_label.setText(f"{batch.density_15_kg_m3:g} kg/m³" if batch else "--")
         selected_id = self.selected_batch_id(); self.batch_table.setRowCount(0)
         for row, item in enumerate(self._service.list_fuel_batches(self._vessel_id)):
             self.batch_table.insertRow(row)
             name = QTableWidgetItem(item.batch_name); name.setData(Qt.ItemDataRole.UserRole, item.id)
-            self.batch_table.setItem(row, 0, name); self.batch_table.setItem(row, 1, QTableWidgetItem(item.fuel_type)); self.batch_table.setItem(row, 2, QTableWidgetItem(f"{item.density_15_kg_m3:g} kg/m3"))
+            self.batch_table.setItem(row, 0, name); self.batch_table.setItem(row, 1, QTableWidgetItem(item.fuel_type)); self.batch_table.setItem(row, 2, QTableWidgetItem(f"{item.density_15_kg_m3:g} kg/m³"))
             if item.id == selected_id: self.batch_table.selectRow(row)
         self._update_buttons()
 
@@ -397,7 +371,7 @@ class TankDetailsDialog(QDialog):
         self.current_fuel_value = FuelBadge(fuel_type); self.current_batch_value = QLabel(batch_name or "No batch assigned"); self.density_value = QLabel()
         self._refresh_batch_details(notify=False)
         fill = max(0.0, min(100.0, latest.calculated_volume_m3 / tank.capacity_m3 * 100)) if latest else None
-        values = (("Actual ROB", f"{latest.calculated_mass_mt:.2f} MT" if latest and latest.calculated_mass_mt is not None else "--"), ("Estimated ROB", f"{predicted_mass_mt:.2f} MT" if predicted_mass_mt is not None else "--"), ("Estimated Empty", estimated_empty), ("Observed Volume", f"{latest.calculated_volume_m3:.2f} m3" if latest else "--"), ("Fill", f"{fill:.1f}%" if fill is not None else "--"), ("Current Fuel", self.current_fuel_value), ("Fuel Batch", self.current_batch_value), ("Density @15", self.density_value), ("Manual VCF", f"{latest.manual_vcf:.5f}" if latest and latest.manual_vcf is not None else "--"), ("Volume @15", f"{latest.standard_volume_15_m3:.2f} m3" if latest and latest.standard_volume_15_m3 is not None else "--"), ("Measurement / UTC", f"{latest.reading_type} / {_format_utc(latest.effective_at_utc)}" if latest else "--"), ("Tank Type", tank.tank_type), ("Capacity", f"{tank.capacity_m3:.2f} m3"))
+        values = (("Actual ROB", f"{latest.calculated_mass_mt:.2f} MT" if latest and latest.calculated_mass_mt is not None else "--"), ("Estimated ROB", f"{predicted_mass_mt:.2f} MT" if predicted_mass_mt is not None else "--"), ("Estimated Empty", estimated_empty), ("Observed Volume", f"{latest.calculated_volume_m3:.2f} m³" if latest else "--"), ("Fill", f"{fill:.1f}%" if fill is not None else "--"), ("Current Fuel", self.current_fuel_value), ("Fuel Batch", self.current_batch_value), ("Density @15°C", self.density_value), ("Manual VCF", f"{latest.manual_vcf:.5f}" if latest and latest.manual_vcf is not None else "--"), ("Volume @15°C", f"{latest.standard_volume_15_m3:.2f} m³" if latest and latest.standard_volume_15_m3 is not None else "--"), ("Measurement / UTC", f"{latest.reading_type} / {_format_utc(latest.effective_at_utc)}" if latest else "--"), ("Tank Type", tank.tank_type), ("Capacity", f"{tank.capacity_m3:.2f} m³"))
         for label, value in values: form.addRow(label, value if isinstance(value, QWidget) else QLabel(value))
         layout.addLayout(form); actions = QHBoxLayout()
         update = QPushButton("Update ROB"); update.clicked.connect(lambda: UpdateTankROBDialog(service, tank, self).exec())
@@ -413,14 +387,14 @@ class TankDetailsDialog(QDialog):
     def _refresh_batch_details(self, notify=True) -> None:
         tank = self._service.get_tank(self._tank_id)
         batch = self._service.get_fuel_batch(tank.current_fuel_batch_id) if tank and tank.current_fuel_batch_id else None
-        self.current_fuel_value.set_fuel_type(batch.fuel_type if batch else "UNKNOWN"); self.current_batch_value.setText(batch.batch_name if batch else "No batch assigned"); self.density_value.setText(f"{batch.density_15_kg_m3:g} kg/m3" if batch else "--")
+        self.current_fuel_value.set_fuel_type(batch.fuel_type if batch else "UNKNOWN"); self.current_batch_value.setText(batch.batch_name if batch else "No batch assigned"); self.density_value.setText(f"{batch.density_15_kg_m3:g} kg/m³" if batch else "--")
         if notify and self._on_changed is not None: self._on_changed()
 
 
 class ConsumptionTanksDialog(QDialog):
     def __init__(self, service: FuelTankService, vessel_id: int, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._service, self._vessel_id = service, vessel_id; self._forecast_by_tank = {}
+        self._service, self._vessel_id = service, vessel_id; self._forecast_by_tank = {}; self._forecast_issue: str | None = None
         self.setWindowTitle("Tank Consumption Plan")
         screen = QGuiApplication.primaryScreen(); available = screen.availableGeometry() if screen else None
         width = min(1100, available.width() - 48) if available else 1100; height = min(750, available.height() - 48) if available else 750
@@ -454,11 +428,15 @@ class ConsumptionTanksDialog(QDialog):
 
     def _load_forecasts(self):
         # This is a read-only presentation adapter around the existing authority.
+        self._forecast_issue = None
         parent = self.parent()
         forecast_service = getattr(parent, "_tank_forecast_service", None)
         if forecast_service is None: return {}
         try: return {item.tank_id: item for item in forecast_service.predict_plan_completion(self._vessel_id)}
-        except Exception: return {}
+        except Exception:
+            LOGGER.exception("Tank consumption-plan forecast could not be calculated for vessel %s", self._vessel_id)
+            self._forecast_issue = "Forecast unavailable — check voyage, consumption, and tank ROB inputs."
+            return {}
 
     def _refresh_phases(self) -> None:
         while self.phase_layout.count():
@@ -519,7 +497,7 @@ class ConsumptionTanksDialog(QDialog):
         members = [(tank_id, self._forecast_by_tank.get(tank_id)) for tank_id, _share in phase]; depleted = [(tank_id, item.estimated_depleted_at_utc) for tank_id, item in members if item and item.estimated_depleted_at_utc]
         start = self._effective if index == 0 else next((item.planned_phase_start_utc for _tank, item in members if item and item.planned_phase_start_utc), None)
         trigger, end = min(depleted, key=lambda item: item[1]) if depleted else (None, None)
-        reason = "Forecast unavailable" if not self._forecast_by_tank else ""
+        reason = self._forecast_issue or ("Forecast unavailable" if not self._forecast_by_tank else "")
         return {"start": start, "end": end, "trigger": trigger, "reason": reason}
 
     def _refresh_summary(self, names):
@@ -557,8 +535,11 @@ class ConsumptionTanksDialog(QDialog):
         ]
         if forecast_items:
             tank_id, when = min(forecast_items, key=lambda item: item[1]); self.depletion_summary.value.setText(f"{names.get(tank_id, tank_id)}\n{_forecast_time(when)}\n{_time_remaining(when)} remaining")
-        else: self.depletion_summary.value.setText("—")
-        self.status_summary.value.setText("ACTIVE" if self._phases else "—")
+            self.depletion_summary.value.setToolTip("")
+        else:
+            self.depletion_summary.value.setText(f"—\n{self._forecast_issue}" if self._forecast_issue else "—")
+            self.depletion_summary.value.setToolTip(self._forecast_issue or "")
+        self.status_summary.value.setText("FORECAST UNAVAILABLE" if self._phases and self._forecast_issue else ("ACTIVE" if self._phases else "—"))
 
     def _add_phase(self) -> None:
         self._edit_phase_at(len(self._phases))
@@ -627,7 +608,7 @@ class InternalTransferDialog(QDialog):
     def __init__(self, service: FuelTankService, vessel_id: int, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._service, self._vessel_id = service, vessel_id
-        self.setWindowTitle("Internal Transfer"); self.setMinimumWidth(560)
+        self.setWindowTitle("Internal Transfer"); self.setMinimumSize(720, 480); self.resize(860, 560)
         layout = QVBoxLayout(self); layout.addWidget(_muted("Move an assigned fuel quantity between two compatible tanks."))
         form = QFormLayout()
         self.from_input = QComboBox(); self.to_input = QComboBox()
@@ -636,7 +617,11 @@ class InternalTransferDialog(QDialog):
             self.from_input.addItem(label, tank.id); self.to_input.addItem(label, tank.id)
         self.quantity_input = QLineEdit(); self.quantity_input.setPlaceholderText("MT")
         self.status_input = QComboBox(); self.status_input.addItems(("PLANNED", "COMPLETED"))
-        self.time_input = QLineEdit(datetime.now(timezone.utc).isoformat(timespec="seconds"))
+        self.time_input = QDateTimeEdit()
+        self.time_input.setCalendarPopup(True)
+        self.time_input.setDisplayFormat("dd MMM yyyy HH:mm 'UTC'")
+        self.time_input.setTimeZone(QTimeZone.utc())
+        self.time_input.setDateTime(QDateTime.currentDateTimeUtc())
         self.remarks_input = QLineEdit(); self.fuel_value = QLabel("--")
         form.addRow("FROM Tank", self.from_input); form.addRow("TO Tank", self.to_input); form.addRow("Fuel", self.fuel_value)
         form.addRow("Quantity MT", self.quantity_input); form.addRow("Status", self.status_input); form.addRow("Effective Time UTC", self.time_input); form.addRow("Remarks", self.remarks_input)
@@ -664,10 +649,12 @@ class InternalTransferDialog(QDialog):
 
     def _save(self) -> None:
         try:
-            timestamp = datetime.fromisoformat(self.time_input.text().strip())
-            if timestamp.tzinfo is None: raise ValueError("Effective Time UTC must include +00:00.")
+            timestamp = self.time_input.dateTime().toUTC().toPython().replace(tzinfo=timezone.utc)
             status = self.status_input.currentText()
-            transfer = InternalFuelTransfer(None, self._vessel_id, self.from_input.currentData(), self.to_input.currentData(), self.fuel_value.text(), float(self.quantity_input.text()), status, timestamp.isoformat(), timestamp.isoformat() if status == "COMPLETED" else None, self.remarks_input.text().strip() or None)
+            quantity = _optional_float(self.quantity_input.text(), "Quantity")
+            if quantity is None:
+                raise ValueError("Quantity is required.")
+            transfer = InternalFuelTransfer(None, self._vessel_id, self.from_input.currentData(), self.to_input.currentData(), self.fuel_value.text(), quantity, status, timestamp.isoformat(), timestamp.isoformat() if status == "COMPLETED" else None, self.remarks_input.text().strip() or None)
             self._service.create_internal_fuel_transfer(transfer)
         except (ValueError, FuelTankValidationError) as error:
             QMessageBox.warning(self, "Internal transfer not saved", str(error)); return
@@ -687,13 +674,13 @@ class TankSoundingSurveyDialog(QDialog):
         layout = QVBoxLayout(self); layout.setContentsMargins(20, 18, 20, 18); layout.setSpacing(12)
         title_row = QHBoxLayout(); icon = QLabel("♒"); icon.setObjectName("surveyIcon"); title = QLabel("Tank Sounding Survey"); title.setObjectName("surveyTitle"); title_row.addWidget(icon); title_row.addWidget(title); title_row.addStretch(); layout.addLayout(title_row)
         common_box = QFrame(); common_box.setObjectName("surveyHeaderCard"); common = QGridLayout(common_box); common.setContentsMargins(14, 10, 14, 10); common.setHorizontalSpacing(10); common.setVerticalSpacing(8)
-        self.time = QLineEdit(datetime.now(timezone.utc).isoformat(timespec="seconds")); self.trim = QLineEdit("0"); self.remarks = QLineEdit()
+        self.time = QDateTimeEdit(); self.time.setCalendarPopup(True); self.time.setDisplayFormat("dd MMM yyyy HH:mm 'UTC'"); self.time.setTimeZone(QTimeZone.utc()); self.time.setDateTime(QDateTime.currentDateTimeUtc()); self.trim = QLineEdit("0"); self.remarks = QLineEdit()
         self.time.setMinimumWidth(330); self.trim.setFixedWidth(120)
         common.addWidget(QLabel("Observation UTC"), 0, 0); common.addWidget(self.time, 0, 1); utc_note = QLabel("All times are in UTC"); utc_note.setObjectName("surveyHint"); common.addWidget(utc_note, 0, 2); common.addWidget(QLabel("Trim (m)"), 0, 3); common.addWidget(self.trim, 0, 4)
         common.addWidget(QLabel("Remarks"), 1, 0); common.addWidget(self.remarks, 1, 1, 1, 4); layout.addWidget(common_box)
         common.setColumnStretch(1, 5); common.setColumnStretch(2, 2); common.setColumnStretch(4, 2)
         self.table = QTableWidget(0, 10); self.table.setObjectName("soundingSurveyTable")
-        self.table.setHorizontalHeaderLabels(("Include", "Tank", "Fuel / basis", "Measurement", "Reading cm", "Temp C", "VCF", "Volume m3", "MT", "Status"))
+        self.table.setHorizontalHeaderLabels(("Include", "Tank", "Fuel / basis", "Measurement", "Reading (cm)", "Temp (°C)", "VCF", "Volume (m³)", "MT", "Status"))
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers); self.table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self.table.verticalHeader().setVisible(False); self.table.verticalHeader().setDefaultSectionSize(52); self.table.setAlternatingRowColors(True)
         self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded); self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -757,7 +744,7 @@ class TankSoundingSurveyDialog(QDialog):
             volume_label.setText(f"{volume:.3f}")
             manual_vcf = _optional_float(vcf.text(), "Manual VCF") if vcf.text().strip() else None
             result, effective_vcf, mode = self._service.calculate_tank_sounding_mass(volume, _optional_float(temp.text(), "Temperature") if temp.text().strip() else None, batch, manual_vcf)
-            mass_label.setText(f"{result.mass_mt:.3f}"); mass_label.setToolTip(f"Volume @15: {result.standard_volume_15_m3:.3f} m3\nVCF: {effective_vcf:.5f} {mode}\nDensity @15: {batch.density_15_kg_m3:.3f} kg/m3"); vcf.setToolTip(f"{effective_vcf:.5f} {mode}"); self._set_row_status(status, "Ready")
+            mass_label.setText(f"{result.mass_mt:.3f}"); mass_label.setToolTip(f"Volume @15°C: {result.standard_volume_15_m3:.3f} m³\nVCF: {effective_vcf:.5f} {mode}\nDensity @15°C: {batch.density_15_kg_m3:.3f} kg/m³"); vcf.setToolTip(f"{effective_vcf:.5f} {mode}"); self._set_row_status(status, "Ready")
         except ValueError as error:
             message = str(error).lower(); state = "No batch density" if "batch density" in message else ("Temperature required" if "temperature required" in message else ("Fuel basis unknown" if "fuel type" in message else ("Outside range" if "range" in message else ("No calibration" if "calibration" in message else "Invalid reading")))); self._set_row_status(status, state); volume_label.setText("—"); mass_label.setText("—")
         self._refresh_totals()
@@ -792,8 +779,7 @@ class TankSoundingSurveyDialog(QDialog):
     def _save(self) -> None:
         try:
             self._save_attempted = True; self._refresh_all()
-            effective = datetime.fromisoformat(self.time.text().strip())
-            if effective.tzinfo is None: raise ValueError("Observation Time UTC must include +00:00.")
+            effective = self.time.dateTime().toUTC().toPython().replace(tzinfo=timezone.utc)
             rows = [{"include": include.isChecked(), "tank_id": tank.id, "reading_type": kind.currentText(), "reading_cm": reading.text(), "temperature_c": temp.text(), "manual_vcf": vcf.text()} for tank, include, kind, reading, temp, vcf, _status, _batch, _volume, _mass in self._rows]
             trim = _optional_float(self.trim.text(), "Trim")
             if trim is None: raise ValueError("Trim is required.")
@@ -821,6 +807,7 @@ class FuelTanksPage(QWidget):
         self._vessel_service, self._fuel_tank_service, self._tank_forecast_service, self._voyage_service = vessel_service, fuel_tank_service, tank_forecast_service, voyage_service
         self._selected_tank_id: int | None = None
         self._plan_forecasts = {}
+        self._forecast_issue: str | None = None
         self.tank_cards: list[TankCard] = []
         root = QVBoxLayout(self); root.setContentsMargins(0, 0, 0, 0)
         scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -828,6 +815,7 @@ class FuelTanksPage(QWidget):
         layout = QVBoxLayout(content); layout.setContentsMargins(32, 28, 32, 28); layout.setSpacing(14)
         layout.addWidget(PageHeader("Fuel Oil Tanks", "Vessel fuel tank overview and ROB management."))
         self.vessel_label = _muted("Vessel: Not configured"); layout.addWidget(self.vessel_label)
+        self.forecast_status = _muted(""); self.forecast_status.setObjectName("notConfiguredStatus"); self.forecast_status.hide(); layout.addWidget(self.forecast_status)
         self.empty_label = _muted(""); self.empty_label.setObjectName("notConfiguredStatus"); layout.addWidget(self.empty_label)
         self.arrangement_panel = QFrame(); self.arrangement_panel.setObjectName("tankWorkspace")
         self.arrangement_layout = QVBoxLayout(self.arrangement_panel); self.arrangement_layout.setContentsMargins(10, 8, 10, 10); self.arrangement_layout.setSpacing(14)
@@ -850,7 +838,7 @@ class FuelTanksPage(QWidget):
 
     def refresh(self) -> None:
         vessel = self._vessel_service.get_active_vessel()
-        self._selected_tank_id = None; self.tank_cards = []; self._clear_layout(self.arrangement_layout); self.history_table.setRowCount(0)
+        self._selected_tank_id = None; self.tank_cards = []; self._clear_layout(self.arrangement_layout); self.history_table.setRowCount(0); self._forecast_issue = None; self.forecast_status.hide()
         if vessel is None:
             self.vessel_label.setText("Vessel: Not configured"); self.empty_label.setText("Configure a vessel before adding fuel oil tanks.")
             self.empty_label.show(); self.arrangement_panel.hide(); self.add_tank_button.setEnabled(False); self.load_tank_set_button.setEnabled(False); self.consumption_tanks_button.setEnabled(False); self.internal_transfer_button.setEnabled(False); self.survey_button.setEnabled(False); self.history_empty_label.show(); return
@@ -859,7 +847,10 @@ class FuelTanksPage(QWidget):
         try:
             self._plan_forecasts = {item.tank_id: item for item in self._tank_forecast_service.predict_plan_completion(vessel.id)} if self._tank_forecast_service else {}
         except Exception:
+            LOGGER.exception("Tank overview forecast could not be calculated for vessel %s", vessel.id)
             self._plan_forecasts = {}
+            self._forecast_issue = "Tank forecasts are unavailable — check voyage, consumption, and tank ROB inputs."
+            self.forecast_status.setText(self._forecast_issue); self.forecast_status.show()
         if not tanks:
             self.empty_label.setText("No fuel oil tanks configured."); self.empty_label.show(); self.arrangement_panel.hide(); self.history_empty_label.show(); return
         self.empty_label.hide(); self.arrangement_panel.show()
@@ -954,8 +945,10 @@ class FuelTanksPage(QWidget):
             history.append((tank, sounding, batches.get(sounding.fuel_batch_id) or batch))
 
     def _consumption_status(self, tank: FuelTank, batch, latest: TankSounding | None) -> str:
-        if batch is None or latest is None or latest.calculated_mass_mt is None:
-            return "FORECAST UNAVAILABLE"
+        if batch is None:
+            return "FORECAST UNAVAILABLE\nNo fuel batch assigned"
+        if latest is None or latest.calculated_mass_mt is None:
+            return "FORECAST UNAVAILABLE\nNo mass-bearing tank sounding"
         plan = self._fuel_tank_service.get_active_consumption_plan(tank.vessel_id, batch.fuel_type)
         if plan is None:
             return "STANDBY"
@@ -964,8 +957,10 @@ class FuelTanksPage(QWidget):
             if allocation is None:
                 continue
             forecast = self._plan_forecasts.get(tank.id)
-            if forecast is None or forecast.predicted_mass_mt is None:
-                return "FORECAST UNAVAILABLE"
+            if forecast is None:
+                return "FORECAST UNAVAILABLE\nNo tank forecast returned"
+            if forecast.predicted_mass_mt is None:
+                return f"FORECAST UNAVAILABLE\n{forecast.issue or 'Check voyage and tank ROB inputs'}"
             active_sequence = forecast.active_phase_sequence
             if active_sequence is None:
                 if forecast.estimated_depleted_at_utc is not None:
@@ -1064,7 +1059,9 @@ class FuelTanksPage(QWidget):
                 if empty is not None:
                     empty_text = _format_utc(empty.estimated_empty_at_utc.isoformat()) if empty.estimated_empty_at_utc else (empty.issue or empty.state)
             except Exception:
+                LOGGER.exception("Tank detail forecast could not be calculated for tank %s", tank_id)
                 predicted = None
+                empty_text = "Forecast unavailable — check voyage, consumption, and tank ROB inputs."
         TankDetailsDialog(self._fuel_tank_service, tank, batch.fuel_type if batch else None, batch.batch_name if batch else None, self._fuel_tank_service.get_latest_sounding(tank_id), self, self.refresh, predicted, empty_text).exec()
 
 

@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QLabel, QScrollArea
+from PySide6.QtWidgets import QApplication, QLabel, QMessageBox, QScrollArea
 
 from fuel_consumption_calculator.app import build_main_window
 from fuel_consumption_calculator.domain.fuel_tank import FuelBatch, FuelTank, TankCalibrationPoint
@@ -76,6 +76,7 @@ def test_survey_table_calculates_volume_mass_totals_and_completeness(tmp_path, q
     tank = service.create_tank(FuelTank(None, vessel.id, "Survey Tank", "BUNKER", 100, "SOUNDING", current_fuel_batch_id=batch.id))
     service.replace_calibration_points(tank.id, [TankCalibrationPoint(None, tank.id, 0, 0, 0, 0), TankCalibrationPoint(None, tank.id, 100, None, 0, 100)])
     dialog = TankSoundingSurveyDialog(service, vessel.id)
+    assert dialog.time.displayFormat() == "dd MMM yyyy HH:mm 'UTC'"
     row = dialog._rows[0]
     row[3].setText("50")
     assert row[9].text() != "50.000"
@@ -102,6 +103,22 @@ def test_internal_transfer_action_and_dialog_construct(tmp_path, qapp):
     dialog = InternalTransferDialog(service, vessel.id)
     assert dialog.windowTitle() == "Internal Transfer"
     assert dialog.history_table.columnCount() == 7
+    assert dialog.time_input.displayFormat() == "dd MMM yyyy HH:mm 'UTC'"
+
+
+def test_internal_transfer_blank_quantity_has_operator_message(tmp_path, qapp, monkeypatch):
+    vessel_service, service = _services(tmp_path)
+    vessel = vessel_service.configure_active_vessel("Vessel", "1234567")
+    batch = service.create_fuel_batch(FuelBatch(None, vessel.id, "VLSFO", "VLSFO", 978))
+    for name in ("Source", "Destination"):
+        service.create_tank(FuelTank(None, vessel.id, name, "BUNKER", 100, "SOUNDING", current_fuel_batch_id=batch.id))
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *_args: warnings.append(_args[2]))
+
+    dialog = InternalTransferDialog(service, vessel.id)
+    dialog._save()
+
+    assert warnings == ["Quantity is required."]
 
 
 def test_consumption_plan_uses_phase_cards_and_readable_operational_footer(tmp_path, qapp):
@@ -283,6 +300,24 @@ def test_fuel_tanks_page_handles_no_vessel_and_empty_tanks(tmp_path, qapp):
     page.refresh()
     assert page.empty_label.text() == "No fuel oil tanks configured."
     assert page.add_tank_button.isEnabled()
+
+
+def test_forecast_failure_is_visible_instead_of_silently_blank(tmp_path, qapp):
+    vessel_service, tank_service = _services(tmp_path)
+    vessel = vessel_service.configure_active_vessel("Test Vessel", "1234567")
+    tank_service.create_tank(FuelTank(None, vessel.id, "HFO DEEP TK 1P", "BUNKER", 100, "SOUNDING"))
+
+    class BrokenForecastService:
+        def predict_plan_completion(self, _vessel_id):
+            raise RuntimeError("synthetic forecast failure")
+
+    page = FuelTanksPage(vessel_service, tank_service, BrokenForecastService())
+    page.refresh()
+
+    assert page.forecast_status.isHidden() is False
+    assert "forecasts are unavailable" in page.forecast_status.text().lower()
+    dialog = ConsumptionTanksDialog(tank_service, vessel.id, page)
+    assert "forecast unavailable" in dialog.depletion_summary.value.text().lower()
 
 
 def test_tank_dialog_add_and_edit_refreshes_cards(tmp_path, qapp):

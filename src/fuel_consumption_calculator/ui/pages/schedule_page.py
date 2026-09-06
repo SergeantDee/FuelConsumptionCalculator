@@ -36,7 +36,7 @@ from fuel_consumption_calculator.ui.widgets.page_header import PageHeader
 
 
 class ScheduleTableModel(QAbstractTableModel):
-    HEADERS = ("#", "Port", "Event", "Arrival", "Departure", "Port Stay", "From Previous", "Source")
+    HEADERS = ("#", "Port", "Event", "Arrival (Port LT)", "Departure (Port LT)", "Port Stay", "From Previous", "Source")
 
     def __init__(self, rows: list[ScheduleCandidate | ScheduleEvent | ScheduleTimelineRow] | None = None) -> None:
         super().__init__()
@@ -179,7 +179,7 @@ class ScheduleEventDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Edit Schedule Event" if event else "Add Schedule Event")
-        self.resize(460, 360)
+        self.resize(500, 500)
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
@@ -204,7 +204,7 @@ class ScheduleEventDialog(QDialog):
         self.arrival_input.setDisplayFormat("dd MMM yyyy HH:mm")
         arrival = event.arrival_at if event else dt.datetime.combine(default_date, dt.time(hour=8))
         self.arrival_input.setDateTime(QDateTime(arrival))
-        form.addRow("Arrival", self.arrival_input)
+        form.addRow("Arrival (Port LT)", self.arrival_input)
 
         self.has_departure_input = QCheckBox("Set departure")
         self.has_departure_input.setChecked(event.departure_at is not None if event else True)
@@ -217,7 +217,7 @@ class ScheduleEventDialog(QDialog):
         self.departure_input.setDateTime(QDateTime(departure))
         self.departure_input.setEnabled(self.has_departure_input.isChecked())
         self.has_departure_input.toggled.connect(self.departure_input.setEnabled)
-        form.addRow("Departure", self.departure_input)
+        form.addRow("Departure (Port LT)", self.departure_input)
 
         self.source_input = QLineEdit(event.source if event else "manual")
         form.addRow("Source", self.source_input)
@@ -233,6 +233,10 @@ class ScheduleEventDialog(QDialog):
         form.addRow("Source From Date", self.source_from_date_input)
 
         layout.addLayout(form)
+        time_note = QLabel("Schedule entry times use the selected port's local time; calculations use the resolved UTC timestamps.")
+        time_note.setObjectName("mutedText")
+        time_note.setWordWrap(True)
+        layout.addWidget(time_note)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Ok)
         buttons.accepted.connect(self.accept)

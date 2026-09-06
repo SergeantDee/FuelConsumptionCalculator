@@ -145,13 +145,13 @@ class DashboardPage(QWidget):
         except Exception:
             LOGGER.exception("Estimated Current ROB could not be calculated.")
         self._set_rob(None, None, None)
-        self.status_label.setText("Current ROB is unavailable.")
+        self.status_label.setText("Current ROB is unavailable — check schedule chronology, consumption settings, and ROB anchors.")
         self.status_label.setObjectName("notConfiguredStatus")
 
     def _set_rob(self, quantities: dict[str, float | None] | None, calculated_at_utc: datetime | None, actual_anchor_at_utc: datetime | None) -> None:
         for fuel, label in self._rob_values.items():
             value = quantities.get(fuel) if quantities is not None else None
-            label.setText(f"{float(value):.2f} MT" if value is not None else "- MT")
+            label.setText(f"{float(value):.2f} MT" if value is not None else "— MT")
         calculated = calculated_at_utc.astimezone(timezone.utc).strftime("%d %b %Y %H:%M UTC") if calculated_at_utc else "-"
         anchor = actual_anchor_at_utc.astimezone(timezone.utc).strftime("%d %b %Y %H:%M UTC") if actual_anchor_at_utc else "-"
         anchor_text = f"Actual Sounding ROB {anchor}" if actual_anchor_at_utc else "Projection Starting ROB"

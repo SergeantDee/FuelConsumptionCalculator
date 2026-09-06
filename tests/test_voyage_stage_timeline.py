@@ -5,7 +5,8 @@ from datetime import date, datetime, timezone
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QDialog, QLabel, QTabWidget
+from PySide6.QtCore import QTimeZone
+from PySide6.QtWidgets import QApplication, QDateTimeEdit, QDialog, QLabel, QTabWidget
 
 from fuel_consumption_calculator.calculations.voyage_engine import calculate_consumption_with_voyage, calculate_voyage_consumption, calculate_voyage_plan
 from fuel_consumption_calculator.domain.consumption import FUEL_TYPES, ConsumptionProfile, ConsumptionRate
@@ -262,6 +263,10 @@ def test_voyage_detail_dialog_uses_event_consumption_and_rob_tabs():
     assert app is not None
     assert tabs is not None
     assert [tabs.tabText(index) for index in range(tabs.count())] == ["Event", "Consumption", "ROB"]
+    actual_time_edits = dialog.findChildren(QDateTimeEdit)
+    assert actual_time_edits
+    assert all(editor.timeZone().id().data() == QTimeZone.utc().id().data() for editor in actual_time_edits)
+    assert all(editor.displayFormat().endswith("'UTC'") for editor in actual_time_edits)
 
 
 def test_voyage_grid_helpers_keep_unknown_rob_and_flag_missing_sea_distance():
@@ -317,7 +322,7 @@ def test_dashboard_keeps_rob_unavailable_when_elapsed_consumption_cannot_be_calc
         object(),
     )
 
-    assert page._rob_values["ULSFO"].text() == "- MT"
+    assert page._rob_values["ULSFO"].text() == "— MT"
     assert "Anchor: Projection Starting ROB" in page.rob_metadata.text()
     assert not hasattr(page, "update_rob_button")
     assert any(label.text() == "CURRENT ROB" for label in page.findChildren(QLabel))

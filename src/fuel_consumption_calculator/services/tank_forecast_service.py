@@ -10,18 +10,36 @@ from fuel_consumption_calculator.services.consumption_service import Consumption
 from fuel_consumption_calculator.services.fuel_tank_service import FuelTankService
 from fuel_consumption_calculator.services.schedule_service import ScheduleService
 from fuel_consumption_calculator.services.voyage_service import VoyageService
-from fuel_consumption_calculator.domain.fuel_tank import TankSounding
+from fuel_consumption_calculator.domain.fuel_tank import InternalFuelTransfer, TankSounding
 
 
 class TankForecastService:
-    """Advisory tank forecasts built from the existing authoritative voyage deductions."""
+    """Tank forecasts built from the existing authoritative voyage deductions."""
 
     def __init__(self, tanks: FuelTankService, schedule: ScheduleService, consumption: ConsumptionService, voyage: VoyageService) -> None:
         self._tanks, self._schedule, self._consumption, self._voyage = tanks, schedule, consumption, voyage
+        self._tanks.set_internal_transfer_mass_authority(self._available_source_mass_for_transfer)
 
     def predict_tank_rob_at(self, vessel_id: int, target_utc: datetime) -> list[TankForecast]:
         intervals = self._future_intervals(vessel_id)
         return self._tanks.predict_tank_rob_at(vessel_id, target_utc, intervals)
+
+    def available_tank_mass_at(
+        self, vessel_id: int, tank_id: int, target_utc: datetime,
+        *, exclude_transfer_id: int | None = None,
+    ) -> float | None:
+        return self._tanks.available_tank_mass_at(
+            vessel_id, tank_id, target_utc, self._future_intervals(vessel_id),
+            exclude_transfer_id=exclude_transfer_id,
+        )
+
+    def _available_source_mass_for_transfer(self, transfer: InternalFuelTransfer) -> float | None:
+        return self.available_tank_mass_at(
+            transfer.vessel_id,
+            transfer.from_tank_id,
+            _as_utc(transfer.effective_at_utc()),
+            exclude_transfer_id=transfer.id,
+        )
 
     def predict_plan_completion(self, vessel_id: int) -> list[TankForecast]:
         """Project through the last deterministic voyage interval for tank-card context."""

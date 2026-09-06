@@ -12,6 +12,10 @@ def test_plan_completion_passes_existing_intervals_and_returns_forecasts(monkeyp
     class Tanks:
         def __init__(self):
             self.received = None
+            self.transfer_mass_authority = None
+
+        def set_internal_transfer_mass_authority(self, authority):
+            self.transfer_mass_authority = authority
 
         def predict_tank_rob_at(self, vessel_id, target_utc, received_intervals):
             self.received = (vessel_id, target_utc, received_intervals)
@@ -23,3 +27,4 @@ def test_plan_completion_passes_existing_intervals_and_returns_forecasts(monkeyp
 
     assert service.predict_plan_completion(7) == expected
     assert tanks.received == (7, intervals[0].end_utc, intervals)
+    assert callable(tanks.transfer_mass_authority)

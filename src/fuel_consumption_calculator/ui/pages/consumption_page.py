@@ -255,15 +255,17 @@ class ConsumptionPage(QWidget):
         self.change_to_input.addItems(FUEL_TYPES)
         self.change_planned_input = QDateTimeEdit()
         self.change_planned_input.setCalendarPopup(True)
-        self.change_planned_input.setDisplayFormat("dd MMM yyyy HH:mm")
+        self.change_planned_input.setTimeZone(QTimeZone.utc())
+        self.change_planned_input.setDisplayFormat("dd MMM yyyy HH:mm 'UTC'")
         self.change_actual_input = QDateTimeEdit()
         self.change_actual_input.setCalendarPopup(True)
-        self.change_actual_input.setDisplayFormat("dd MMM yyyy HH:mm")
+        self.change_actual_input.setTimeZone(QTimeZone.utc())
+        self.change_actual_input.setDisplayFormat("dd MMM yyyy HH:mm 'UTC'")
         self.change_actual_enabled = QCheckBox("Actual time entered")
         self.change_actual_enabled.toggled.connect(self.change_actual_input.setEnabled)
         self.change_actual_input.setEnabled(False)
-        self.change_planned_input.setDateTime(QDateTime.currentDateTime())
-        self.change_actual_input.setDateTime(QDateTime.currentDateTime())
+        self.change_planned_input.setDateTime(QDateTime.currentDateTimeUtc())
+        self.change_actual_input.setDateTime(QDateTime.currentDateTimeUtc())
         edit_grid.addWidget(QLabel("Machinery"), 0, 0)
         edit_grid.addWidget(self.change_machinery_input, 0, 1)
         edit_grid.addWidget(QLabel("From"), 0, 2)
@@ -541,8 +543,8 @@ class ConsumptionPage(QWidget):
                 event.machinery,
                 event.from_fuel_type,
                 event.to_fuel_type,
-                event.planned_at_utc.isoformat(timespec="minutes"),
-                event.actual_at_utc.isoformat(timespec="minutes") if event.actual_at_utc else "",
+                _format_utc(event.planned_at_utc),
+                _format_utc(event.actual_at_utc) if event.actual_at_utc else "",
                 "ACTUAL" if event.actual_at_utc else event.status,
             ]
             for column, value in enumerate(values):
@@ -843,6 +845,10 @@ class ApplyChangeoverCalculationDialog(QDialog):
 
 def _as_utc(value: datetime) -> datetime:
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
+def _format_utc(value: datetime) -> str:
+    return _as_utc(value).strftime("%d %b %Y %H:%M UTC")
 
 
 def _format_mt(value: float | None) -> str:

@@ -10,21 +10,36 @@ from fuel_consumption_calculator.domain.tank_forecast import FuelDepletionInterv
 
 def transfer_net_mt(
     tank_id: int, transfers: list[InternalFuelTransfer], start_utc: datetime, target_utc: datetime,
+    *, target_event_kinds: frozenset[str] = frozenset({"TRANSFER_OUT", "TRANSFER_IN"}),
 ) -> float:
     """Return the signed MT movement for one tank; transfers never affect vessel ROB."""
     total = 0.0
     for transfer in transfers:
         effective = _transfer_time(transfer)
         if _utc(start_utc) < effective <= _utc(target_utc):
-            if transfer.from_tank_id == tank_id:
+            at_target = effective == _utc(target_utc)
+            if transfer.from_tank_id == tank_id and (not at_target or "TRANSFER_OUT" in target_event_kinds):
                 total -= transfer.quantity_mt
-            if transfer.to_tank_id == tank_id:
+            if transfer.to_tank_id == tank_id and (not at_target or "TRANSFER_IN" in target_event_kinds):
                 total += transfer.quantity_mt
     return total
 
 
-def bunker_receipt_net_mt(tank_id: int, receipts: list[BunkerTankReceipt], start_utc: datetime, target_utc: datetime) -> float:
-    return sum(receipt.quantity_mt for receipt in receipts if receipt.tank_id == tank_id and _utc(datetime.fromisoformat(receipt.effective_at_utc)) > _utc(start_utc) and _utc(datetime.fromisoformat(receipt.effective_at_utc)) <= _utc(target_utc))
+def bunker_receipt_net_mt(
+    tank_id: int, receipts: list[BunkerTankReceipt], start_utc: datetime, target_utc: datetime,
+    *, include_target: bool = True,
+) -> float:
+    return sum(
+        receipt.quantity_mt
+        for receipt in receipts
+        if receipt.tank_id == tank_id
+        and _utc(datetime.fromisoformat(receipt.effective_at_utc)) > _utc(start_utc)
+        and (
+            _utc(datetime.fromisoformat(receipt.effective_at_utc)) <= _utc(target_utc)
+            if include_target
+            else _utc(datetime.fromisoformat(receipt.effective_at_utc)) < _utc(target_utc)
+        )
+    )
 
 
 def allocate_tank_depletion(
