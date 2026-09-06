@@ -8,6 +8,7 @@ from fuel_consumption_calculator.calculations.bunker_projection_engine import Ev
 from fuel_consumption_calculator.calculations.rob_projection_engine import EventROBProjection
 from fuel_consumption_calculator.ui.pages.bunker_page import BunkerProjectionTableModel
 from fuel_consumption_calculator.ui.pages.consumption_page import _format_utc
+from fuel_consumption_calculator.ui.pages.fuel_tanks_page import _format_utc as _format_tank_utc
 from fuel_consumption_calculator.ui.pages.rob_page import ROBProjectionTableModel
 from fuel_consumption_calculator.ui.pages.schedule_page import ScheduleTableModel
 
@@ -16,6 +17,7 @@ def test_user_facing_time_labels_are_explicit_and_readable():
     source = datetime(2026, 9, 6, 16, 30, tzinfo=timezone(timedelta(hours=8)))
 
     assert _format_utc(source) == "06 Sep 2026 08:30 UTC"
+    assert _format_tank_utc(source.isoformat()) == "06 Sep 2026 08:30 UTC"
     assert ScheduleTableModel.HEADERS[3:5] == ("Arrival (Port LT)", "Departure (Port LT)")
 
 

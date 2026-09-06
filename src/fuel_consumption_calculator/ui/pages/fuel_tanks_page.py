@@ -626,7 +626,13 @@ class InternalTransferDialog(QDialog):
         form.addRow("FROM Tank", self.from_input); form.addRow("TO Tank", self.to_input); form.addRow("Fuel", self.fuel_value)
         form.addRow("Quantity MT", self.quantity_input); form.addRow("Status", self.status_input); form.addRow("Effective Time UTC", self.time_input); form.addRow("Remarks", self.remarks_input)
         layout.addLayout(form)
-        self.history_table = QTableWidget(0, 7); self.history_table.setHorizontalHeaderLabels(("Time UTC", "Status", "From", "To", "Fuel", "Quantity MT", "Remarks")); self.history_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers); self.history_table.horizontalHeader().setStretchLastSection(True); self.history_table.setMaximumHeight(180); layout.addWidget(self.history_table)
+        self.history_table = QTableWidget(0, 7); self.history_table.setHorizontalHeaderLabels(("Time UTC", "Status", "From", "To", "Fuel", "Quantity MT", "Remarks")); self.history_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        history_header = self.history_table.horizontalHeader()
+        history_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        history_header.setStretchLastSection(False)
+        for column, width in enumerate((150, 100, 170, 170, 90, 115, 260)):
+            self.history_table.setColumnWidth(column, width)
+        self.history_table.setMaximumHeight(180); layout.addWidget(self.history_table)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Close)
         buttons.accepted.connect(self._save); buttons.rejected.connect(self.reject); layout.addWidget(buttons)
         self.from_input.currentIndexChanged.connect(self._refresh_fuel); self._refresh_fuel(); self._refresh_history()
@@ -1105,7 +1111,10 @@ def _muted(text: str) -> QLabel:
 
 
 def _format_utc(value: str) -> str:
-    try: return datetime.fromisoformat(value).strftime("%d %b %Y %H:%M")
+    try:
+        parsed = datetime.fromisoformat(value)
+        parsed = parsed.astimezone(timezone.utc) if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+        return parsed.strftime("%d %b %Y %H:%M UTC")
     except ValueError: return value
 
 

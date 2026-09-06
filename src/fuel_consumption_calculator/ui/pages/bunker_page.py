@@ -144,7 +144,7 @@ class BunkerProjectionTableModel(QAbstractTableModel):
 
 
 class PortProjectionTableModel(QAbstractTableModel):
-    HEADERS = ("Status", "Port", "Arrival UTC", "Arrival ROB", "ROB Source", "Max Lift", "Planned Bunker", "Plan Status", "Departure ROB", "Issue")
+    HEADERS = ("Status", "Port", "Arrival UTC", "Arrival Total ROB", "ROB Source", "Max Lift", "Planned Bunker", "Plan Status", "EOE ROB", "Issue")
 
     def __init__(self) -> None:
         super().__init__()
@@ -402,7 +402,13 @@ class ReceivingTanksDialog(QDialog):
 class BunkerDistributionDialog(QDialog):
     def __init__(self, service: BunkerService, plan, parent=None):
         super().__init__(parent); self._service, self._plan = service, plan; self.setWindowTitle("Bunker Distribution"); self.resize(620, 360)
-        layout = QVBoxLayout(self); self.table = QTableWidget(0, 3); self.table.setHorizontalHeaderLabels(("Tank", "Available MT", "Receipt MT")); self.table.verticalHeader().setVisible(False); self.table.horizontalHeader().setStretchLastSection(True); layout.addWidget(self.table)
+        layout = QVBoxLayout(self); self.table = QTableWidget(0, 3); self.table.setHorizontalHeaderLabels(("Tank", "Available MT", "Receipt MT")); self.table.verticalHeader().setVisible(False)
+        distribution_header = self.table.horizontalHeader()
+        distribution_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        distribution_header.setStretchLastSection(True)
+        self.table.setColumnWidth(0, 190)
+        self.table.setColumnWidth(1, 125)
+        layout.addWidget(self.table)
         incoming = service.load_incoming_fuel_snapshot(plan); batch = next((item for item in service.list_fuel_batches(plan.vessel_id) if item.id == incoming.fuel_batch_id), None)
         effective_vcf, _vcf_issue = service.effective_vcf(plan)
         self._fuel = batch.fuel_type if batch else None; self._total = plan.quantity_for(self._fuel) if self._fuel else 0.0
@@ -617,7 +623,9 @@ class BunkerPage(QWidget):
         for column in (3, 5, 6, 8): self.projection_table.setItemDelegateForColumn(column, self._fuel_text_delegate)
         self.projection_table.verticalHeader().setDefaultSectionSize(32)
         self.projection_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        self.projection_table.horizontalHeader().setStretchLastSection(True)
+        self.projection_table.horizontalHeader().setStretchLastSection(False)
+        for column, width in enumerate((110, 180, 145, 220, 145, 220, 220, 110, 220, 240)):
+            self.projection_table.setColumnWidth(column, width)
         self.projection_table.doubleClicked.connect(self._open_port_details)
         layout.addWidget(QLabel("PORT PROJECTION"))
         layout.addWidget(self.projection_table, 1)
@@ -1001,7 +1009,11 @@ class BunkerPage(QWidget):
 
         details = QDialog(self)
         details.setWindowTitle(f"Port Bunker Details - {row.event.port}")
-        details.resize(980, 650)
+        screen = QGuiApplication.primaryScreen()
+        available = screen.availableGeometry() if screen else self.geometry()
+        width, height = min(1250, available.width() - 50), min(760, available.height() - 50)
+        details.setMinimumSize(min(980, width), min(620, height))
+        details.resize(width, height)
 
         dialog_layout = QVBoxLayout(details)
         dialog_layout.setContentsMargins(12, 12, 12, 12)
@@ -1044,31 +1056,36 @@ class BunkerPage(QWidget):
             vessel.id, end_at,
         ) if vessel else ({fuel: None for fuel in FUEL_TYPES}, "Vessel unavailable.")
 
-        summary_row = QHBoxLayout()
-        summary_row.setSpacing(12)
+        summary_grid = QGridLayout()
+        summary_grid.setHorizontalSpacing(12)
+        summary_grid.setVerticalSpacing(12)
         event_panel = _detail_card("ARRIVAL SUMMARY")
-        event_grid = QGridLayout(); event_panel.layout().addItem(event_grid)
-        event_grid.addWidget(QLabel("Arrival ROB Source"), 0, 0); event_grid.addWidget(QLabel(row.rob_source), 0, 1)
+        event_grid = QGridLayout(); event_panel.layout().addLayout(event_grid)
+        event_grid.addWidget(QLabel("Arrival Total ROB Source"), 0, 0); event_grid.addWidget(QLabel(row.rob_source), 0, 1)
         event_grid.addWidget(QLabel("Arrival Time UTC"), 1, 0); event_grid.addWidget(QLabel(row.event.effective_arrival_at.strftime("%d %b %Y %H:%M")), 1, 1)
         event_grid.addWidget(QLabel("Vessel / IMO"), 2, 0); event_grid.addWidget(QLabel(f"{vessel.name} / {vessel.imo}" if vessel else "—"), 2, 1)
-        summary_row.addWidget(event_panel, 2)
+        summary_grid.addWidget(event_panel, 0, 0)
         total_panel = _detail_card("TOTAL VESSEL ROB")
-        total_grid = QGridLayout(); total_panel.layout().addItem(total_grid)
+        total_grid = QGridLayout(); total_panel.layout().addLayout(total_grid)
         total_grid.addWidget(QLabel("Arrival Total ROB"), 0, 0); total_grid.addWidget(QLabel(_format_fuels(row.arrival_rob_mt)), 0, 1)
         total_grid.addWidget(QLabel("EOE ROB (end of current event)"), 1, 0); total_grid.addWidget(QLabel(_format_fuels(row.departure_rob_mt)), 1, 1)
         total_grid.addWidget(QLabel("Aggregate voyage authority"), 2, 0, 1, 2)
-        summary_row.addWidget(total_panel, 3)
+        summary_grid.addWidget(total_panel, 0, 1)
         bunker_panel = _detail_card("BUNKER TANKS ROB")
-        bunker_grid = QGridLayout(); bunker_panel.layout().addItem(bunker_grid)
+        bunker_grid = QGridLayout(); bunker_panel.layout().addLayout(bunker_grid)
         bunker_grid.addWidget(QLabel("Arrival Bunker Tanks ROB"), 0, 0); bunker_grid.addWidget(QLabel(_format_fuels(arrival_bunker)), 0, 1)
         bunker_grid.addWidget(QLabel("Current Bunker Tanks ROB (now)"), 1, 0); bunker_grid.addWidget(QLabel(_format_fuels(current_bunker)), 1, 1)
         bunker_grid.addWidget(QLabel("EOE Bunker Tanks ROB"), 2, 0); bunker_grid.addWidget(QLabel(_format_fuels(eoe_bunker)), 2, 1)
         bunker_grid.addWidget(QLabel(arrival_bunker_issue or current_bunker_issue or eoe_bunker_issue or "Tank-forecast advisory only"), 3, 0, 1, 2)
-        summary_row.addWidget(bunker_panel, 3)
+        summary_grid.addWidget(bunker_panel, 1, 0)
         explanation = _detail_card("WHAT'S THE DIFFERENCE?")
-        explanation.layout().addWidget(QLabel("Total Vessel ROB = all fuel remaining onboard.\n\nBunker Tanks ROB = fuel remaining in configured bunker/storage tanks.\n\nMax Lift = selected physical tank space, converted with incoming density and VCF."))
-        summary_row.addWidget(explanation, 2)
-        layout.addLayout(summary_row)
+        explanation_text = QLabel("Total Vessel ROB = all fuel remaining onboard.\n\nBunker Tanks ROB = fuel remaining in configured bunker/storage tanks.\n\nMax Lift = selected physical tank space, converted with incoming density and VCF.")
+        explanation_text.setWordWrap(True)
+        explanation.layout().addWidget(explanation_text)
+        summary_grid.addWidget(explanation, 1, 1)
+        summary_grid.setColumnStretch(0, 1)
+        summary_grid.setColumnStretch(1, 1)
+        layout.addLayout(summary_grid)
 
         # BUNKER PLAN
         planning_panel = QFrame()

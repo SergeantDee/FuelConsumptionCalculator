@@ -50,7 +50,7 @@ class DashboardPage(QWidget):
         fuel_cards = QHBoxLayout()
         fuel_cards.setSpacing(14)
         self._rob_values: dict[str, QLabel] = {}
-        estimated_title = QLabel("CURRENT ROB")
+        estimated_title = QLabel("CURRENT PREDICTED ROB")
         estimated_title.setObjectName("sectionTitle")
         layout.addWidget(estimated_title)
         for fuel in ("ULSFO", "VLSFO", "MDO"):
@@ -122,7 +122,7 @@ class DashboardPage(QWidget):
                     energy_config=plan.energy_config,
                 )
                 self._set_rob(estimated, now, actual.effective_at_utc)
-                self.status_label.setText("Estimated Current ROB is calculated from the latest Actual ROB anchor.")
+                self.status_label.setText("Current Predicted ROB is calculated from the latest Actual ROB anchor.")
                 self.status_label.setObjectName("configuredStatus")
                 return
             starting_rob = self._rob_service.load_starting_rob(vessel_id)
@@ -139,13 +139,13 @@ class DashboardPage(QWidget):
                 energy_config=plan.energy_config,
             )
             self._set_rob(estimated, now, None)
-            self.status_label.setText("Estimated Current ROB is calculated from the Projection Starting ROB anchor.")
+            self.status_label.setText("Current Predicted ROB is calculated from the Projection Starting ROB anchor.")
             self.status_label.setObjectName("configuredStatus")
             return
         except Exception:
-            LOGGER.exception("Estimated Current ROB could not be calculated.")
+            LOGGER.exception("Current Predicted ROB could not be calculated.")
         self._set_rob(None, None, None)
-        self.status_label.setText("Current ROB is unavailable — check schedule chronology, consumption settings, and ROB anchors.")
+        self.status_label.setText("Current Predicted ROB is unavailable — check schedule chronology, consumption settings, and ROB anchors.")
         self.status_label.setObjectName("notConfiguredStatus")
 
     def _set_rob(self, quantities: dict[str, float | None] | None, calculated_at_utc: datetime | None, actual_anchor_at_utc: datetime | None) -> None:

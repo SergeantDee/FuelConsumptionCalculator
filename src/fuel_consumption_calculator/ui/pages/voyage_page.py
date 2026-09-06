@@ -203,7 +203,6 @@ class VoyagePage(QWidget):
         header.customContextMenuRequested.connect(self._show_column_menu)
         self._apply_default_column_layout()
         self.stage_table.setColumnWidth(14, 240)
-        self.stage_table.setColumnWidth(16, 180)
         self.stage_table.cellDoubleClicked.connect(self._open_stage_details)
         layout.addWidget(self.stage_table, 1)
 
@@ -310,7 +309,7 @@ class VoyagePage(QWidget):
         for logical_index in range(len(self.TABLE_COLUMNS)):
             self.stage_table.setColumnHidden(logical_index, logical_index in self.DEFAULT_HIDDEN_COLUMNS)
             header.moveSection(header.visualIndex(logical_index), logical_index)
-        widths = (92, 235, 150, 138, 138, 96, 100, 80, 76, 84, 84, 150, 165, 155, 220, 150, 180)
+        widths = (92, 310, 150, 138, 138, 96, 100, 135, 76, 84, 84, 150, 165, 155, 240)
         for logical_index, width in enumerate(widths):
             self.stage_table.setColumnWidth(logical_index, width)
 
