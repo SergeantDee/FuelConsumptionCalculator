@@ -119,7 +119,7 @@ class VoyageService:
         return point
 
     def build_legs(self, vessel_id: int, events: list[ScheduleEvent]) -> list[VoyageLeg]:
-        ordered_events = sorted(events, key=lambda event: (event.sequence_number, event.effective_arrival_at, event.id))
+        ordered_events = sorted(events, key=lambda event: (event.sequence_number, _utc_instant(event.effective_arrival_at), event.id))
         overrides = self._matching_overrides(vessel_id, ordered_events)
         legs: list[VoyageLeg] = []
         for origin, destination in zip(ordered_events, ordered_events[1:]):

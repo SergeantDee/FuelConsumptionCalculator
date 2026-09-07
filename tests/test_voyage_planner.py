@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 from fuel_consumption_calculator.calculations.rob_projection_engine import project_schedule_rob
 from fuel_consumption_calculator.calculations.bunker_projection_engine import project_schedule_rob_with_bunkers
@@ -21,8 +21,8 @@ def test_pilot_times_and_required_speed_are_derived_from_berth_times():
     plan = calculate_voyage_plan([_leg()], _profile(), [])
     row = plan.legs[0]
 
-    assert row.pilot_off == datetime(2026, 1, 1, 2)
-    assert row.pilot_on == datetime(2026, 1, 2, 10)
+    assert row.pilot_off == datetime(2026, 1, 1, 2, tzinfo=timezone.utc)
+    assert row.pilot_on == datetime(2026, 1, 2, 10, tzinfo=timezone.utc)
     assert row.sea_hours == 32
     assert row.required_speed_knots == 10
 

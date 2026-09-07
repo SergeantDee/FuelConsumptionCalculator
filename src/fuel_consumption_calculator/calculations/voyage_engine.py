@@ -62,10 +62,22 @@ def calculate_voyage_plan(
             override.sea_distance_nm if override else None,
             leg.route.sea_distance_nm,
         )
-        berth_departure = (override.actual_berth_departure if override and override.actual_berth_departure else None) or leg.scheduled_berth_departure
-        berth_arrival = (override.actual_berth_arrival if override and override.actual_berth_arrival else None) or leg.scheduled_berth_arrival
-        pilot_off = (override.actual_pilot_off if override and override.actual_pilot_off else None) or (berth_departure + timedelta(hours=dep_pilotage_hours))
-        pilot_on = (override.actual_pilot_on if override and override.actual_pilot_on else None) or (berth_arrival - timedelta(hours=arr_pilotage_hours))
+        berth_departure = _utc_instant(
+            (override.actual_berth_departure if override and override.actual_berth_departure else None)
+            or leg.scheduled_berth_departure
+        )
+        berth_arrival = _utc_instant(
+            (override.actual_berth_arrival if override and override.actual_berth_arrival else None)
+            or leg.scheduled_berth_arrival
+        )
+        pilot_off = _utc_instant(
+            (override.actual_pilot_off if override and override.actual_pilot_off else None)
+            or (berth_departure + timedelta(hours=dep_pilotage_hours))
+        )
+        pilot_on = _utc_instant(
+            (override.actual_pilot_on if override and override.actual_pilot_on else None)
+            or (berth_arrival - timedelta(hours=arr_pilotage_hours))
+        )
         sea_hours = (pilot_on - pilot_off).total_seconds() / 3600
         leg_warnings: list[str] = []
         required_speed = None
@@ -582,7 +594,7 @@ def _port_hours(event: ScheduleEvent, actual_arrival, actual_departure, fallback
     departure = actual_departure or event.effective_departure_at
     if departure is None:
         return None if fallback is None else max(0.0, fallback)
-    return max(0.0, (departure - arrival).total_seconds() / 3600)
+    return max(0.0, (_utc_instant(departure) - _utc_instant(arrival)).total_seconds() / 3600)
 
 
 def _consume(hours: float, rate_mt_per_day: float) -> float:
@@ -602,7 +614,7 @@ def _maneuvering_consumption(
     start_utc,
     end_utc,
 ) -> dict[str, float | None]:
-    if end_utc <= start_utc:
+    if _utc_instant(end_utc) <= _utc_instant(start_utc):
         return empty_fuel_totals()
 
     rates = {
