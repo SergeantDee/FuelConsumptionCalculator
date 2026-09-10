@@ -20,10 +20,13 @@ class ROBService:
         return StartingROB(
             vessel_id=vessel_id,
             quantities=tuple(
-                ROBQuantity(fuel_type=fuel_type, quantity_mt=stored_quantities.get(fuel_type, 0.0))
+                ROBQuantity(fuel_type=fuel_type, quantity_mt=stored_quantities.get(fuel_type))
                 for fuel_type in FUEL_TYPES
             ),
         )
+
+    def has_starting_rob(self, vessel_id: int) -> bool:
+        return self._repository.has_starting_rob(vessel_id)
 
     def build_starting_rob(self, vessel_id: int, quantities: dict[str, float]) -> StartingROB:
         starting_rob = StartingROB(
@@ -55,7 +58,7 @@ class ROBService:
                 raise ValueError(f"Unsupported fuel type: {quantity.fuel_type}.")
             if quantity.fuel_type in seen_fuels:
                 raise ValueError(f"Duplicate starting ROB fuel type: {quantity.fuel_type}.")
-            if quantity.quantity_mt < 0:
+            if quantity.quantity_mt is None or quantity.quantity_mt < 0:
                 raise ValueError("Starting ROB quantities cannot be negative.")
             seen_fuels.add(quantity.fuel_type)
         if seen_fuels != expected_fuels:

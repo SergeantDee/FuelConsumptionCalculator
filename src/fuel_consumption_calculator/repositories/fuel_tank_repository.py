@@ -2,7 +2,16 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fuel_consumption_calculator.domain.fuel_tank import FuelBatch, FuelTank, InternalFuelTransfer, TankCalibrationPoint, TankSounding, TankSoundingSurvey
+from fuel_consumption_calculator.domain.fuel_tank import (
+    FuelBatch,
+    FuelTank,
+    InternalFuelTransfer,
+    PhysicalTankMassAnchor,
+    TankCalibrationPoint,
+    TankMassObservation,
+    TankSounding,
+    TankSoundingSurvey,
+)
 from fuel_consumption_calculator.domain.bunker import BunkerTankReceipt
 from fuel_consumption_calculator.domain.tank_forecast import TankConsumptionAllocationEvent, TankConsumptionPlan, TankConsumptionPlanPhase, TankConsumptionPlanPhaseTank
 from fuel_consumption_calculator.repositories.database import Database
@@ -162,6 +171,76 @@ class FuelTankRepository:
                 (tank_id, effective_at_utc),
             ).fetchone()
         return _sounding_from_row(row) if row else None
+
+    def save_mass_observation(self, observation: TankMassObservation) -> TankMassObservation:
+        created_at = _timestamp()
+        with self._database.connect() as connection:
+            cursor = connection.execute(
+                """INSERT INTO tank_mass_observations
+                   (tank_id, observed_at_utc, fuel_type, mass_mt, source, remarks, created_at_utc)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    observation.tank_id,
+                    observation.observed_at_utc,
+                    observation.fuel_type,
+                    observation.mass_mt,
+                    observation.source,
+                    observation.remarks,
+                    created_at,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM tank_mass_observations WHERE id = ?", (cursor.lastrowid,)
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("Tank mass observation could not be read after saving.")
+        return _mass_observation_from_row(row)
+
+    def list_mass_observations(self, tank_id: int) -> list[TankMassObservation]:
+        with self._database.connect() as connection:
+            rows = connection.execute(
+                """SELECT * FROM tank_mass_observations
+                   WHERE tank_id = ? ORDER BY observed_at_utc DESC, id DESC""",
+                (tank_id,),
+            ).fetchall()
+        return [_mass_observation_from_row(row) for row in rows]
+
+    def list_physical_mass_anchors(self, tank_id: int) -> list[PhysicalTankMassAnchor]:
+        """Return mass-bearing manual observations and soundings in deterministic authority order."""
+        with self._database.connect() as connection:
+            manual_rows = connection.execute(
+                "SELECT * FROM tank_mass_observations WHERE tank_id = ?", (tank_id,)
+            ).fetchall()
+            sounding_rows = connection.execute(
+                """SELECT s.*, b.fuel_type AS snapshot_fuel_type
+                   FROM tank_soundings AS s
+                   LEFT JOIN fuel_batches AS b ON b.id = s.fuel_batch_id
+                   WHERE s.tank_id = ? AND s.calculated_mass_mt IS NOT NULL""",
+                (tank_id,),
+            ).fetchall()
+        anchors = [
+            PhysicalTankMassAnchor(
+                row["id"], row["tank_id"], row["observed_at_utc"], row["fuel_type"],
+                float(row["mass_mt"]), row["source"], None,
+            )
+            for row in manual_rows
+        ]
+        anchors.extend(
+            PhysicalTankMassAnchor(
+                row["id"], row["tank_id"], row["effective_at_utc"], row["snapshot_fuel_type"],
+                float(row["calculated_mass_mt"]), "SOUNDING", float(row["calculated_volume_m3"]),
+            )
+            for row in sounding_rows
+        )
+        return sorted(
+            anchors,
+            key=lambda item: (
+                _as_utc(item.observed_at_utc),
+                1 if item.source == "SOUNDING" else 0,
+                item.source_id,
+            ),
+            reverse=True,
+        )
 
     def list_consumption_allocation_events(self, vessel_id: int) -> list[TankConsumptionAllocationEvent]:
         with self._database.connect() as connection:
@@ -344,6 +423,18 @@ def _sounding_from_row(row) -> TankSounding:
                          float(row["trim_m"]), row["temperature_c"], float(row["calculated_volume_m3"]), row["calculated_density_kg_m3"],
                          row["calculated_mass_mt"], row["fuel_batch_id"], row["remarks"], row["created_at"], row["updated_at"],
                          row["manual_vcf"], row["standard_volume_15_m3"], row["survey_id"])
+
+
+def _mass_observation_from_row(row) -> TankMassObservation:
+    return TankMassObservation(
+        row["id"], row["tank_id"], row["observed_at_utc"], row["fuel_type"],
+        float(row["mass_mt"]), row["source"], row["remarks"], row["created_at_utc"],
+    )
+
+
+def _as_utc(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    return parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 def _transfer_from_row(row) -> InternalFuelTransfer:

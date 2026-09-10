@@ -23,14 +23,16 @@ LOGGER = logging.getLogger(__name__)
 class SettingsPage(QWidget):
     vessel_saved = Signal()
     vessel_time_offset_changed = Signal(int)
+    setup_requested = Signal()
 
-    def __init__(self, vessel_service: VesselService, schedule_service: ScheduleService, settings_service: SettingsService, voyage_service: VoyageService, rob_service: ROBService, parent: QWidget | None = None) -> None:
+    def __init__(self, vessel_service: VesselService, schedule_service: ScheduleService, settings_service: SettingsService, voyage_service: VoyageService, rob_service: ROBService, readiness_service=None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._vessel_service = vessel_service
         self._schedule_service = schedule_service
         self._settings_service = settings_service
         self._voyage_service = voyage_service
         self._rob_service = rob_service
+        self._readiness_service = readiness_service
         self._starting_rob_inputs: dict[str, QDoubleSpinBox] = {}
 
         root_layout = QVBoxLayout(self)
@@ -48,6 +50,18 @@ class SettingsPage(QWidget):
         layout.setContentsMargins(32, 28, 32, 28)
         layout.setSpacing(14)
         layout.addWidget(PageHeader("Settings", "Configure the active vessel used by this installation."))
+
+        setup_panel = QFrame()
+        setup_panel.setObjectName("card")
+        setup_layout = QHBoxLayout(setup_panel)
+        setup_copy = QLabel("Review initial setup without resetting current values.")
+        setup_copy.setWordWrap(True)
+        self.run_setup_button = QPushButton("Review Initial Setup")
+        self.run_setup_button.setObjectName("primaryButton")
+        self.run_setup_button.clicked.connect(self.setup_requested.emit)
+        setup_layout.addWidget(setup_copy, 1)
+        setup_layout.addWidget(self.run_setup_button)
+        layout.addWidget(setup_panel)
 
         panel = QFrame()
         panel.setObjectName("card")
@@ -100,6 +114,7 @@ class SettingsPage(QWidget):
             value.setRange(0.0, 999999.99)
             value.setSingleStep(10.0)
             value.setSuffix(" MT")
+            value.setSpecialValueText("Not set")
             rob_grid.addWidget(value, 1, column)
             self._starting_rob_inputs[fuel] = value
         rob_layout.addLayout(rob_grid)
@@ -209,11 +224,14 @@ class SettingsPage(QWidget):
         self.imo_input.setText(vessel.imo if vessel else "")
         self.save_starting_rob_button.setEnabled(vessel is not None)
         if vessel is not None:
+            has_starting_rob = self._rob_service.has_starting_rob(vessel.id)
             starting_rob = self._rob_service.load_starting_rob(vessel.id)
             for fuel, input_widget in self._starting_rob_inputs.items():
-                input_widget.setValue(starting_rob.quantity_for(fuel))
+                input_widget.setSpecialValueText("" if has_starting_rob else "Not set")
+                input_widget.setValue(starting_rob.quantity_for(fuel) or 0.0)
         else:
             for input_widget in self._starting_rob_inputs.values():
+                input_widget.setSpecialValueText("Not set")
                 input_widget.setValue(0.0)
         mode = self._settings_service.scraper_browser_mode()
         self.scraper_mode_input.setCurrentIndex(1 if mode == "headless" else 0)
@@ -240,6 +258,7 @@ class SettingsPage(QWidget):
             QMessageBox.warning(self, "Starting ROB not saved", str(exc))
             return
         for fuel, input_widget in self._starting_rob_inputs.items():
+            input_widget.setSpecialValueText("")
             input_widget.setValue(saved.quantity_for(fuel))
 
     def _build_routes_tab(self) -> QWidget:

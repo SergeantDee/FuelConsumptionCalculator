@@ -443,6 +443,7 @@ class BunkerPage(QWidget):
         consumption_service: ConsumptionService,
         rob_service: ROBService,
         voyage_service: VoyageService,
+        readiness_service=None,
     ) -> None:
         super().__init__()
         self._vessel_service = vessel_service
@@ -451,6 +452,7 @@ class BunkerPage(QWidget):
         self._consumption_service = consumption_service
         self._rob_service = rob_service
         self._voyage_service = voyage_service
+        self._readiness_service = readiness_service
         self._events: list[ScheduleEvent] = []
         self._last_projection_rows: list[PortBunkerProjectionRow] = []
         self._capacity_inputs: dict[str, QDoubleSpinBox] = {}
@@ -662,7 +664,23 @@ class BunkerPage(QWidget):
         self._populate_events()
         self._refresh_projection(vessel.id)
         self._selection_changed()
-        self.status_label.setText("Bunker planner loaded." if self._events else "No schedule events available.")
+        if self._readiness_service is not None:
+            from fuel_consumption_calculator.services.planning_readiness_service import (
+                AGGREGATE_ROB_AVAILABLE,
+                TANK_PHYSICAL_ROB_AVAILABLE,
+            )
+            readiness = self._readiness_service.evaluate()
+            aggregate = readiness.check(AGGREGATE_ROB_AVAILABLE)
+            physical = readiness.check(TANK_PHYSICAL_ROB_AVAILABLE)
+            if not aggregate.available:
+                self.status_label.setText(f"Aggregate ROB unavailable — {aggregate.reason}")
+            elif not physical.available:
+                detail = physical.reason or physical.label
+                self.status_label.setText(f"Aggregate ROB available; tank physical forecast unavailable — {detail}")
+            else:
+                self.status_label.setText("Aggregate ROB and tank physical forecast available.")
+        else:
+            self.status_label.setText("Bunker planner loaded." if self._events else "No schedule events available.")
 
     def _update_actual_sounding(self) -> None:
         vessel = self._vessel_service.get_active_vessel()

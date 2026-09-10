@@ -9,11 +9,13 @@ FuelTankType = Literal["BUNKER", "SETTLING", "SERVICE", "OTHER"]
 MeasurementType = Literal["SOUNDING", "ULLAGE"]
 FuelType = Literal["ULSFO", "VLSFO", "MDO"]
 TransferStatus = Literal["PLANNED", "COMPLETED"]
+TankMassObservationSource = Literal["MANUAL_INITIAL_ROB"]
 
 FUEL_TANK_TYPES = ("BUNKER", "SETTLING", "SERVICE", "OTHER")
 MEASUREMENT_TYPES = ("SOUNDING", "ULLAGE")
 FUEL_BATCH_TYPES = ("ULSFO", "VLSFO", "MDO")
 INTERNAL_TRANSFER_STATUSES = ("PLANNED", "COMPLETED")
+TANK_MASS_OBSERVATION_SOURCES = ("MANUAL_INITIAL_ROB",)
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +89,33 @@ class TankSounding:
             raise ValueError("Manual VCF must be finite and greater than 0.")
         if self.standard_volume_15_m3 is not None and (not isfinite(self.standard_volume_15_m3) or self.standard_volume_15_m3 < 0):
             raise ValueError("Standard volume at 15 C must be finite and at least 0.")
+
+
+@dataclass(frozen=True, slots=True)
+class TankMassObservation:
+    """Operator-declared physical tank mass with no implied volume basis."""
+
+    id: int | None
+    tank_id: int
+    observed_at_utc: str
+    fuel_type: FuelType
+    mass_mt: float
+    source: TankMassObservationSource = "MANUAL_INITIAL_ROB"
+    remarks: str | None = None
+    created_at_utc: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PhysicalTankMassAnchor:
+    """Normalized mass-bearing observation used only by tank forecasts."""
+
+    source_id: int
+    tank_id: int
+    observed_at_utc: str
+    fuel_type: FuelType | None
+    mass_mt: float
+    source: str
+    observed_volume_m3: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

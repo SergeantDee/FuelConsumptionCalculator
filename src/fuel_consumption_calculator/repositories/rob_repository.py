@@ -29,6 +29,20 @@ class ROBRepository:
             ),
         )
 
+    def has_starting_rob(self, vessel_id: int) -> bool:
+        """Return whether a complete aggregate projection anchor was explicitly saved."""
+        with self._database.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT COUNT(DISTINCT fuel_type) AS fuel_count
+                FROM vessel_starting_rob
+                WHERE vessel_id = ?
+                  AND fuel_type IN ('ULSFO', 'VLSFO', 'MDO')
+                """,
+                (vessel_id,),
+            ).fetchone()
+        return bool(row and int(row["fuel_count"]) == 3)
+
     def save_starting_rob(self, starting_rob: StartingROB) -> StartingROB:
         timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
         with self._database.connect() as connection:

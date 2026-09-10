@@ -20,6 +20,7 @@ from fuel_consumption_calculator.domain.fuel_tank import (
     FuelBatch,
     FuelTank,
     InternalFuelTransfer,
+    PhysicalTankMassAnchor,
     TankSounding,
 )
 from fuel_consumption_calculator.services.fuel_tank_service import FuelTankService, FuelTankValidationError
@@ -71,28 +72,37 @@ class TankCard(QFrame):
     selected = Signal(int)
     activated = Signal(int)
 
-    def __init__(self, tank: FuelTank, fuel_type: str | None, batch_name: str | None, latest: TankSounding | None, kind: str = "other", parent: QWidget | None = None, consumption_status: str | None = None) -> None:
+    def __init__(self, tank: FuelTank, fuel_type: str | None, batch_name: str | None, latest: TankSounding | None, kind: str = "other", parent: QWidget | None = None, consumption_status: str | None = None, physical_anchor: PhysicalTankMassAnchor | None = None) -> None:
         super().__init__(parent)
         self._tank_id = tank.id
         self.setObjectName("tankCard")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.kind = kind; self.setMinimumHeight(180); self.setProperty("fuel", (fuel_type or "UNASSIGNED").upper())
         self.setToolTip(tank.name)
-        fill_percent = None if latest is None else latest.calculated_volume_m3 / tank.capacity_m3 * 100
+        authoritative_sounding = (
+            latest
+            if latest is not None
+            and physical_anchor is not None
+            and physical_anchor.source == "SOUNDING"
+            and physical_anchor.source_id == latest.id
+            else None
+        )
+        fill_percent = None if authoritative_sounding is None else authoritative_sounding.calculated_volume_m3 / tank.capacity_m3 * 100
         layout = QHBoxLayout(self); layout.setContentsMargins(17, 16, 16, 16); layout.setSpacing(14)
         details = QVBoxLayout()
         details.setSpacing(5)
         name = QLabel(_short_display_name(tank.name)); name.setObjectName("tankName")
         marker = FuelBadge(fuel_type or "UNASSIGNED")
         top = QHBoxLayout(); top.setContentsMargins(0, 0, 0, 0); top.addWidget(name, 1); top.addWidget(marker); details.addLayout(top)
-        if latest is None:
+        if physical_anchor is None:
             details.addWidget(_card_value("—")); details.addWidget(_card_meta("No ROB available")); details.addWidget(_card_meta("FILL  —"))
         else:
-            if latest.calculated_mass_mt is not None:
-                details.addWidget(_card_value(f"{latest.calculated_mass_mt:.2f} MT"))
-            else:
-                details.addWidget(_card_value("—"))
-            details.addWidget(_card_meta("ACTUAL ROB")); percent = QLabel(f"{max(0.0, min(100.0, fill_percent or 0.0)):.0f}%"); percent.setObjectName("tankFill"); percent.setStyleSheet(f"color:{fuel_color(fuel_type or 'UNKNOWN')};"); details.addWidget(percent)
+            details.addWidget(_card_value(f"{physical_anchor.mass_mt:.2f} MT"))
+            details.addWidget(_card_meta("MANUAL MASS ROB" if physical_anchor.source == "MANUAL_INITIAL_ROB" else "ACTUAL ROB"))
+            percent = QLabel(f"{max(0.0, min(100.0, fill_percent)):.0f}%" if fill_percent is not None else "FILL  —")
+            percent.setObjectName("tankFill")
+            percent.setStyleSheet(f"color:{fuel_color(fuel_type or 'UNKNOWN')};")
+            details.addWidget(percent)
         if consumption_status:
             status = _card_meta(consumption_status); status.setWordWrap(True); details.addWidget(status)
         details.addStretch()
@@ -506,11 +516,11 @@ class ConsumptionTanksDialog(QDialog):
         masses = []
         unknown = 0
         for tank_id in eligible_ids:
-            sounding = self._service.get_latest_sounding(tank_id)
-            if sounding is None or sounding.calculated_mass_mt is None:
+            anchor = self._service.get_latest_physical_mass_anchor(tank_id)
+            if anchor is None:
                 unknown += 1
             else:
-                masses.append(sounding.calculated_mass_mt)
+                masses.append(anchor.mass_mt)
         if unknown:
             reason = f"{unknown} bunker tank ROB{'s' if unknown != 1 else ''} unavailable"
             self.rob_summary.value.setText(f"—\n{reason}")
@@ -893,9 +903,9 @@ class FuelTanksPage(QWidget):
             self._add_tank_card(self.arrangement_layout, tank, batches, history, "other")
 
     def _group_total(self, tanks) -> tuple[str | None, int]:
-        values = [self._fuel_tank_service.get_latest_sounding(tank.id) for tank in tanks]
-        unknown = sum(1 for item in values if item is None or item.calculated_mass_mt is None)
-        return (None if unknown else f"{sum(item.calculated_mass_mt for item in values):,.2f} MT", unknown)
+        values = [self._fuel_tank_service.get_latest_physical_mass_anchor(tank.id) for tank in tanks]
+        unknown = sum(1 for item in values if item is None)
+        return (None if unknown else f"{sum(item.mass_mt for item in values):,.2f} MT", unknown)
 
     def _build_tank_plan(self, slots: dict[str, FuelTank], batches, history) -> QWidget:
         plan = QWidget()
@@ -939,8 +949,10 @@ class FuelTanksPage(QWidget):
         else:
             batches, history, kind = args
         latest = self._fuel_tank_service.get_latest_sounding(tank.id)
+        physical_anchor = self._fuel_tank_service.get_latest_physical_mass_anchor(tank.id)
         batch = batches.get(tank.current_fuel_batch_id)
-        card = TankCard(tank, batch.fuel_type if batch else None, batch.batch_name if batch else None, latest, kind, consumption_status=self._consumption_status(tank, batch, latest))
+        fuel_type = batch.fuel_type if batch else (physical_anchor.fuel_type if physical_anchor else None)
+        card = TankCard(tank, fuel_type, batch.batch_name if batch else None, latest, kind, consumption_status=self._consumption_status(tank, batch, physical_anchor), physical_anchor=physical_anchor)
         card.selected.connect(self._select_tank); card.activated.connect(self._show_tank_details)
         if isinstance(layout, QGridLayout):
             layout.addWidget(card, row, column)
@@ -950,11 +962,11 @@ class FuelTanksPage(QWidget):
         for sounding in self._fuel_tank_service.list_sounding_history(tank.id):
             history.append((tank, sounding, batches.get(sounding.fuel_batch_id) or batch))
 
-    def _consumption_status(self, tank: FuelTank, batch, latest: TankSounding | None) -> str:
+    def _consumption_status(self, tank: FuelTank, batch, physical_anchor: PhysicalTankMassAnchor | None) -> str:
         if batch is None:
             return "FORECAST UNAVAILABLE\nNo fuel batch assigned"
-        if latest is None or latest.calculated_mass_mt is None:
-            return "FORECAST UNAVAILABLE\nNo mass-bearing tank sounding"
+        if physical_anchor is None:
+            return "FORECAST UNAVAILABLE\nNo physical tank mass observation"
         plan = self._fuel_tank_service.get_active_consumption_plan(tank.vessel_id, batch.fuel_type)
         if plan is None:
             return "STANDBY"

@@ -25,6 +25,7 @@ from fuel_consumption_calculator.services.rob_service import ROBService
 from fuel_consumption_calculator.services.schedule_service import ScheduleService
 from fuel_consumption_calculator.services.scraper_service import ScraperService
 from fuel_consumption_calculator.services.settings_service import SettingsService
+from fuel_consumption_calculator.services.planning_readiness_service import PlanningReadinessService
 from fuel_consumption_calculator.services.vessel_service import VesselService
 from fuel_consumption_calculator.services.voyage_service import VoyageService
 from fuel_consumption_calculator.services.tank_forecast_service import TankForecastService
@@ -48,7 +49,15 @@ def build_main_window(paths: AppPaths) -> MainWindow:
     tank_forecast_service = TankForecastService(fuel_tank_service, schedule_service, consumption_service, voyage_service)
     bunker_service = BunkerService(BunkerRepository(database), tank_forecast_service)
     scraper_service = ScraperService()
-    return MainWindow(vessel_service, schedule_service, scraper_service, consumption_service, rob_service, bunker_service, fuel_tank_service, voyage_service, settings_service, tank_forecast_service)
+    readiness_service = PlanningReadinessService(
+        vessel_service, schedule_service, consumption_service, voyage_service,
+        rob_service, fuel_tank_service,
+    )
+    return MainWindow(
+        vessel_service, schedule_service, scraper_service, consumption_service,
+        rob_service, bunker_service, fuel_tank_service, voyage_service,
+        settings_service, tank_forecast_service, readiness_service,
+    )
 
 
 def install_global_exception_handler() -> None:
@@ -105,4 +114,5 @@ def run(paths: AppPaths | None = None) -> int:
 
     app.aboutToQuit.connect(lambda: logger.info("Application shutdown"))
     window.show()
+    window.maybe_offer_setup()
     return app.exec()

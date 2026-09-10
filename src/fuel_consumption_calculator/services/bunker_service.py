@@ -147,6 +147,17 @@ class BunkerService:
         if not tanks:
             return values, "No eligible bunker/storage tanks are configured."
         forecasts = [item for item in self._tank_forecast_service.predict_tank_rob_at(vessel_id, target_utc) if item.tank_id in tanks]
+        forecasts_by_tank = {item.tank_id: item for item in forecasts}
+        unattributed = [
+            tank_id for tank_id in tanks
+            if tank_id not in forecasts_by_tank or forecasts_by_tank[tank_id].fuel_type not in FUEL_TYPES
+        ]
+        if unattributed:
+            count = len(unattributed)
+            return values, (
+                f"{count} eligible bunker/storage tank forecast{'s are' if count != 1 else ' is'} unavailable or has unknown fuel. "
+                "Assign fuel and record a physical mass before using bunker-tank totals."
+            )
         issues = []
         for fuel_type in FUEL_TYPES:
             matching = [item for item in forecasts if item.fuel_type == fuel_type]

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton, QStackedWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton, QStackedWidget, QVBoxLayout, QWidget
 
 from fuel_consumption_calculator.config import APPLICATION_NAME, APPLICATION_VERSION
 from fuel_consumption_calculator.services.bunker_service import BunkerService
@@ -13,6 +13,7 @@ from fuel_consumption_calculator.services.rob_service import ROBService
 from fuel_consumption_calculator.services.schedule_service import ScheduleService
 from fuel_consumption_calculator.services.scraper_service import ScraperService
 from fuel_consumption_calculator.services.settings_service import SettingsService
+from fuel_consumption_calculator.services.planning_readiness_service import PlanningReadinessService
 from fuel_consumption_calculator.services.vessel_service import VesselService
 from fuel_consumption_calculator.services.voyage_service import VoyageService
 from fuel_consumption_calculator.services.tank_forecast_service import TankForecastService
@@ -23,6 +24,7 @@ from fuel_consumption_calculator.ui.pages.fuel_tanks_page import FuelTanksPage
 from fuel_consumption_calculator.ui.pages.schedule_page import SchedulePage
 from fuel_consumption_calculator.ui.pages.settings_page import SettingsPage
 from fuel_consumption_calculator.ui.pages.voyage_page import VoyagePage
+from fuel_consumption_calculator.ui.setup_wizard import SetupWizard
 from fuel_consumption_calculator.ui.widgets.vessel_clock import (
     MAX_OFFSET_MINUTES,
     MIN_OFFSET_MINUTES,
@@ -47,12 +49,21 @@ class MainWindow(QMainWindow):
         voyage_service: VoyageService,
         settings_service: SettingsService,
         tank_forecast_service: TankForecastService | None = None,
+        readiness_service: PlanningReadinessService | None = None,
     ) -> None:
         super().__init__()
         self.setWindowTitle(f"{APPLICATION_NAME} {APPLICATION_VERSION}")
         self.setMinimumSize(1000, 650)
         self.resize(1180, 760)
         self._settings_service = settings_service
+        self._readiness_service = readiness_service or PlanningReadinessService(
+            vessel_service, schedule_service, consumption_service, voyage_service,
+            rob_service, fuel_tank_service,
+        )
+        self._setup_services = (
+            vessel_service, schedule_service, consumption_service, voyage_service,
+            rob_service, fuel_tank_service, settings_service, self._readiness_service,
+        )
         self._vessel_time_offset_minutes = settings_service.vessel_time_offset_minutes()
 
         central = QWidget()
@@ -78,16 +89,22 @@ class MainWindow(QMainWindow):
         version = QLabel(f"Desktop  •  v{APPLICATION_VERSION}")
         version.setObjectName("brandVersion")
         sidebar_layout.addWidget(version)
+        self.setup_status_label = QLabel()
+        self.setup_status_label.setWordWrap(True)
+        sidebar_layout.addWidget(self.setup_status_label)
         sidebar_layout.addSpacing(22)
 
         self.page_stack = QStackedWidget()
-        self.dashboard_page = DashboardPage(vessel_service, schedule_service, consumption_service, voyage_service, rob_service)
+        self.dashboard_page = DashboardPage(
+            vessel_service, schedule_service, consumption_service, voyage_service,
+            rob_service, self._readiness_service, settings_service,
+        )
         self.schedule_page = SchedulePage(vessel_service, schedule_service, scraper_service, settings_service)
         self.voyage_page = VoyagePage(vessel_service, schedule_service, consumption_service, voyage_service, rob_service, settings_service)
         self.consumption_page = ConsumptionPage(vessel_service, consumption_service, schedule_service, voyage_service)
         self.fuel_tanks_page = FuelTanksPage(vessel_service, fuel_tank_service, tank_forecast_service, voyage_service)
-        self.bunker_page = BunkerPage(vessel_service, bunker_service, schedule_service, consumption_service, rob_service, voyage_service)
-        self.settings_page = SettingsPage(vessel_service, schedule_service, settings_service, voyage_service, rob_service)
+        self.bunker_page = BunkerPage(vessel_service, bunker_service, schedule_service, consumption_service, rob_service, voyage_service, self._readiness_service)
+        self.settings_page = SettingsPage(vessel_service, schedule_service, settings_service, voyage_service, rob_service, self._readiness_service)
         pages = (
             self.dashboard_page,
             self.schedule_page,
@@ -117,6 +134,8 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Ready")
 
         self.settings_page.vessel_saved.connect(self._vessel_configuration_changed)
+        self.settings_page.setup_requested.connect(self.show_setup_wizard)
+        self.dashboard_page.resolve_requested.connect(self.show_setup_wizard)
         self.bunker_page.actual_sounding_saved.connect(self._actual_sounding_saved)
         self.consumption_page.changeover_saved.connect(self._fuel_changeover_saved)
         self.settings_page.vessel_time_offset_changed.connect(self._set_vessel_time_offset)
@@ -125,6 +144,57 @@ class MainWindow(QMainWindow):
         self._clock_timer.start(1000)
         self._refresh_clock()
         self.select_page(0)
+        self._update_readiness_indicator()
+
+    def maybe_offer_setup(self) -> None:
+        readiness = self._readiness_service.evaluate()
+        vessel = self._setup_services[0].get_active_vessel()
+        if readiness.setup_complete:
+            return
+        if vessel is None and not self._settings_service.initialization_wizard_seen():
+            self.show_setup_wizard()
+            return
+        answer = QMessageBox.question(
+            self,
+            "Setup incomplete",
+            "Fuel planning setup is incomplete. Continue Setup now?\n\n"
+            f"Reason: {readiness.setup_blocking_reason or 'Required configuration is missing.'}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self.show_setup_wizard()
+
+    def show_setup_wizard(self) -> None:
+        wizard = SetupWizard(*self._setup_services, parent=self)
+        wizard.page_requested.connect(self.select_page)
+        wizard.exec()
+        self._configuration_changed()
+
+    def _configuration_changed(self) -> None:
+        for page in (
+            self.dashboard_page, self.schedule_page, self.voyage_page,
+            self.consumption_page, self.fuel_tanks_page, self.bunker_page,
+            self.settings_page,
+        ):
+            page.refresh()
+        self._vessel_time_offset_minutes = self._settings_service.vessel_time_offset_minutes()
+        self._refresh_clock()
+        self._update_readiness_indicator()
+
+    def _update_readiness_indicator(self) -> None:
+        readiness = self._readiness_service.evaluate()
+        if readiness.setup_complete and readiness.ready:
+            self.setup_status_label.setText("✓ PLANNING READY")
+            self.setup_status_label.setObjectName("configuredStatus")
+        elif readiness.setup_complete:
+            self.setup_status_label.setText("✓ SETUP COMPLETE\n⚠ PLANNING WARNING")
+            self.setup_status_label.setObjectName("notConfiguredStatus")
+        else:
+            self.setup_status_label.setText("✕ SETUP INCOMPLETE")
+            self.setup_status_label.setObjectName("notConfiguredStatus")
+        self.setup_status_label.style().unpolish(self.setup_status_label)
+        self.setup_status_label.style().polish(self.setup_status_label)
 
     def _build_clock_row(self) -> QFrame:
         row = QFrame()
@@ -200,15 +270,18 @@ class MainWindow(QMainWindow):
         self.consumption_page.refresh()
         self.fuel_tanks_page.refresh()
         self.bunker_page.refresh()
+        self._update_readiness_indicator()
         self.statusBar().showMessage("Vessel configuration saved", 4000)
 
     def _actual_sounding_saved(self) -> None:
         self.dashboard_page.refresh()
         self.voyage_page.refresh()
         self.bunker_page.refresh()
+        self._update_readiness_indicator()
         self.statusBar().showMessage("Actual Sounding ROB saved", 4000)
 
     def _fuel_changeover_saved(self) -> None:
         self.voyage_page.refresh()
         self.dashboard_page.refresh()
+        self._update_readiness_indicator()
         self.statusBar().showMessage("Fuel changeover saved; voyage and ROB projections refreshed", 4000)

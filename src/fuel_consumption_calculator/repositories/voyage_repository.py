@@ -334,6 +334,14 @@ class VoyageRepository:
             auxiliary_engine_loss_allowance_mt_per_day=float(row["auxiliary_engine_loss_allowance_mt_per_day"]),
         )
 
+    def has_energy_config(self, vessel_id: int) -> bool:
+        with self._database.connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM vessel_energy_config WHERE vessel_id = ?",
+                (vessel_id,),
+            ).fetchone()
+        return row is not None
+
     def save_energy_config(self, config: VesselEnergyConfig) -> VesselEnergyConfig:
         timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
         with self._database.connect() as connection:

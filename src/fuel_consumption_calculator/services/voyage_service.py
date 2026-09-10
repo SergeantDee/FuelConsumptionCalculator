@@ -32,6 +32,9 @@ class VoyageService:
     def load_energy_config(self, vessel_id: int) -> VesselEnergyConfig:
         return self._repository.load_energy_config(vessel_id)
 
+    def has_energy_config(self, vessel_id: int) -> bool:
+        return self._repository.has_energy_config(vessel_id)
+
     def save_energy_config(self, config: VesselEnergyConfig) -> VesselEnergyConfig:
         self._validate_energy_config(config)
         return self._repository.save_energy_config(config)

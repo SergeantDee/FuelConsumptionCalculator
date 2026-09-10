@@ -3,7 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import logging
 
-from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from fuel_consumption_calculator.calculations.current_rob_engine import estimate_current_rob
 from fuel_consumption_calculator.domain.voyage_stages import build_voyage_stage_timeline
@@ -20,13 +21,17 @@ LOGGER = logging.getLogger(__name__)
 
 
 class DashboardPage(QWidget):
-    def __init__(self, vessel_service: VesselService, schedule_service: ScheduleService, consumption_service: ConsumptionService, voyage_service: VoyageService, rob_service: ROBService, parent: QWidget | None = None) -> None:
+    resolve_requested = Signal()
+
+    def __init__(self, vessel_service: VesselService, schedule_service: ScheduleService, consumption_service: ConsumptionService, voyage_service: VoyageService, rob_service: ROBService, readiness_service=None, settings_service=None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._vessel_service = vessel_service
         self._schedule_service = schedule_service
         self._consumption_service = consumption_service
         self._voyage_service = voyage_service
         self._rob_service = rob_service
+        self._readiness_service = readiness_service
+        self._settings_service = settings_service
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(32, 28, 32, 28)
@@ -61,7 +66,13 @@ class DashboardPage(QWidget):
         layout.addWidget(self.rob_metadata)
 
         self.status_label = QLabel()
+        self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
+        self.resolve_button = QPushButton("Resolve Missing Inputs")
+        self.resolve_button.setObjectName("primaryButton")
+        self.resolve_button.clicked.connect(self.resolve_requested.emit)
+        self.resolve_button.hide()
+        layout.addWidget(self.resolve_button)
         layout.addStretch()
         self.refresh()
 
@@ -91,6 +102,7 @@ class DashboardPage(QWidget):
             self.imo_value.setText("—")
             self.status_label.setText("Vessel not configured — open Settings to get started.")
             self.status_label.setObjectName("notConfiguredStatus")
+            self.resolve_button.show()
         else:
             self.vessel_name_value.setText(vessel.name)
             self.imo_value.setText(vessel.imo)
@@ -122,9 +134,14 @@ class DashboardPage(QWidget):
                     energy_config=plan.energy_config,
                 )
                 self._set_rob(estimated, now, actual.effective_at_utc)
+                if any(value is None for value in estimated.values()):
+                    raise ValueError("Current stage consumption is incomplete")
                 self.status_label.setText("Current Predicted ROB is calculated from the latest Actual ROB anchor.")
                 self.status_label.setObjectName("configuredStatus")
+                self.resolve_button.hide()
                 return
+            if not self._rob_service.has_starting_rob(vessel_id):
+                raise ValueError("Aggregate ROB anchor is missing")
             starting_rob = self._rob_service.load_starting_rob(vessel_id)
             starting_quantities = {fuel: starting_rob.quantity_for(fuel) for fuel in self._rob_values}
             stage_starts = [_utc_instant(stage.start_utc) for stage in timeline.stages if stage.start_utc is not None]
@@ -139,14 +156,30 @@ class DashboardPage(QWidget):
                 energy_config=plan.energy_config,
             )
             self._set_rob(estimated, now, None)
+            if any(value is None for value in estimated.values()):
+                raise ValueError("Current stage consumption is incomplete")
             self.status_label.setText("Current Predicted ROB is calculated from the Projection Starting ROB anchor.")
             self.status_label.setObjectName("configuredStatus")
+            self.resolve_button.hide()
             return
         except Exception:
             LOGGER.exception("Current Predicted ROB could not be calculated.")
         self._set_rob(None, None, None)
-        self.status_label.setText("Current Predicted ROB is unavailable — check schedule chronology, consumption settings, and ROB anchors.")
+        reason = None
+        if self._readiness_service is not None:
+            readiness = self._readiness_service.evaluate()
+            reason = readiness.blocking_reason
+            if readiness.first_blocking_stage:
+                reason = f"{readiness.first_blocking_stage}: {reason}"
+        heading = "Current Predicted ROB unavailable"
+        if self._settings_service is not None and not self._settings_service.initialization_wizard_seen():
+            heading = "Current Predicted ROB requires initial setup"
+        self.status_label.setText(
+            heading + "\nReason: "
+            + (reason or "Check schedule chronology, consumption settings, and ROB anchors.")
+        )
         self.status_label.setObjectName("notConfiguredStatus")
+        self.resolve_button.show()
 
     def _set_rob(self, quantities: dict[str, float | None] | None, calculated_at_utc: datetime | None, actual_anchor_at_utc: datetime | None) -> None:
         for fuel, label in self._rob_values.items():

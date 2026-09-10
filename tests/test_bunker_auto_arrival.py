@@ -99,3 +99,22 @@ def test_bunker_tank_rob_is_advisory_and_excludes_non_eligible_tanks(setup):
 
     assert values == {"ULSFO": None, "VLSFO": 75.0, "MDO": None}
     assert issue is None
+
+
+def test_bunker_tank_rob_is_unavailable_when_eligible_tank_fuel_is_unknown(setup):
+    database, tank, event = setup
+    second = FuelTankRepository(database).save_tank(
+        FuelTank(None, 1, "Unknown receiving", "BUNKER", 500, "SOUNDING", True)
+    )
+    known = TankForecast(tank.id, "VLSFO", ARRIVAL, 100, 0, 75)
+    unknown = TankForecast(second.id, None, None, None, None, "No physical tank mass observation available.")
+
+    class ForecastsStub(ForecastStub):
+        def predict_tank_rob_at(self, vessel_id, target_utc):
+            return [known, unknown]
+
+    service = BunkerService(BunkerRepository(database), ForecastsStub(known, None))
+    values, issue = service.bunker_tank_rob_at(1, ARRIVAL)
+
+    assert values == {"ULSFO": None, "VLSFO": None, "MDO": None}
+    assert "unknown fuel" in issue

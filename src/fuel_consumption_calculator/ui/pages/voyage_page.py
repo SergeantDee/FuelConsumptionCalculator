@@ -571,7 +571,7 @@ class VoyagePage(QWidget):
                 _fmt_fuel_line(stage.consumption_mt),
                 _fmt_compact_rob(stage.rob.end_mt),
                 _fmt_observation(self._latest_observation_for(stage)),
-                _stage_issue(stage),
+                _stage_issue(stage, self._active_fuel_state, self._energy_config),
             )
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
@@ -1853,19 +1853,47 @@ def _stage_dg_load(stage: OperationalStage) -> str:
     return "-"
 
 
-def _stage_issue(stage: OperationalStage) -> str:
+def _stage_issue(stage: OperationalStage, fuel_state=None, energy_config=None) -> str:
     if (
         stage.stage_type == STAGE_SEA_PASSAGE
         and (stage.leg is None or stage.leg.sea_distance_nm is None or stage.leg.sea_distance_nm <= 0)
     ):
         return "Missing sea distance"
     if stage.total_consumption_mt is None:
-        return "Consumption incomplete"
+        if stage.stage_type == STAGE_PORT_STAY and stage.port_breakdown and stage.port_breakdown.warnings:
+            return _clean_calculation_warning(stage.port_breakdown.warnings[0])
+        if stage.stage_type in (STAGE_DEPARTURE_MANEUVERING, STAGE_ARRIVAL_MANEUVERING):
+            missing = []
+            if energy_config is None or any(
+                getattr(energy_config, key) is None
+                for key in (
+                    "maneuvering_main_engine_mt_per_hour",
+                    "maneuvering_generators_mt_per_hour",
+                    "maneuvering_aux_boiler_mt_per_hour",
+                )
+            ):
+                missing.append("maneuvering rates")
+            if fuel_state is None:
+                missing.append("initial machinery fuel state")
+            return "Missing " + " and ".join(missing) if missing else "Maneuvering inputs incomplete"
+        if stage.stage_type == STAGE_SEA_PASSAGE and stage.leg and stage.leg.warnings:
+            relevant = next(
+                (warning for warning in stage.leg.warnings if "missing" in warning.lower() or "incomplete" in warning.lower() or "unavailable" in warning.lower()),
+                stage.leg.warnings[0],
+            )
+            return _clean_calculation_warning(relevant)
+        return "Consumption incomplete — review required operational inputs"
     if any(value is None for value in stage.rob.end_mt.values()):
         return "Predicted ROB unavailable"
     if stage.changeovers:
         return "Fuel changeover scheduled"
     return ""
+
+
+def _clean_calculation_warning(value: str) -> str:
+    text = str(value).strip().rstrip(".")
+    prefix = "Calculation incomplete: "
+    return text[len(prefix):] if text.startswith(prefix) else text
 
 
 def _fmt_mt(value: float | None) -> str:

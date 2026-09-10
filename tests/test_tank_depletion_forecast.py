@@ -61,7 +61,7 @@ def test_effective_dated_selection_splits_interval_without_gap_or_overlap():
     assert sum(allocations.values()) == pytest.approx(6.0)
 
 
-def test_latest_mass_sounding_reanchors_prediction_and_missing_mass_stays_unknown(tmp_path):
+def test_latest_mass_sounding_reanchors_prediction_and_later_volume_only_sounding_is_ignored(tmp_path):
     database = Database(tmp_path / "forecast.db"); database.initialize()
     VesselRepository(database).save_active("Vessel", "1234567")
     repository = FuelTankRepository(database); service = FuelTankService(repository)
@@ -75,9 +75,9 @@ def test_latest_mass_sounding_reanchors_prediction_and_missing_mass_stays_unknow
     assert forecast.allocated_depletion_mt == pytest.approx(12.0)
     assert forecast.predicted_mass_mt == pytest.approx(68.0)
     repository.save_sounding(TankSounding(None, tank.id, (START + timedelta(hours=13)).isoformat(), "SOUNDING", 1, 0, None, 8, calculated_mass_mt=None, fuel_batch_id=batch.id))
-    unavailable = service.predict_tank_rob_at(1, START + timedelta(hours=14), [_interval(24, VLSFO=24.0)])[0]
-    assert unavailable.predicted_mass_mt is None
-    assert "no mass snapshot" in unavailable.issue
+    forecast = service.predict_tank_rob_at(1, START + timedelta(hours=14), [_interval(24, VLSFO=24.0)])[0]
+    assert forecast.anchor_mass_mt == 80
+    assert forecast.predicted_mass_mt == pytest.approx(66.0)
 
 
 def test_depletion_is_not_clamped_below_zero(tmp_path):

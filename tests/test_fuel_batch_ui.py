@@ -125,3 +125,18 @@ def test_unassigned_card_and_tank_details_show_no_mass_and_batch_data(services, 
     page.refresh()
     assigned_card = next(card for card in page.tank_cards if card._tank_id == tank.id)
     assert "—" in {label.text() for label in assigned_card.findChildren(QLabel)}
+
+
+def test_manual_mass_anchor_is_visible_without_fabricating_fill_volume(services, qapp):
+    vessel_service, tank_service, _vessel, tank = services
+    tank_service.save_manual_tank_rob(tank_id=tank.id, fuel_type="VLSFO", mass_mt=42)
+
+    page = FuelTanksPage(vessel_service, tank_service)
+    page.refresh()
+    card = next(item for item in page.tank_cards if item._tank_id == tank.id)
+    labels = {label.text() for label in card.findChildren(QLabel)}
+
+    assert "42.00 MT" in labels
+    assert "MANUAL MASS ROB" in labels
+    assert "FILL  —" in labels
+    assert card.findChild(FuelBadge, "fuelBadge").text() == "VLSFO"

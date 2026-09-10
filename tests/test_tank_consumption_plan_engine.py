@@ -67,6 +67,34 @@ def test_later_mass_bearing_sounding_reanchors_the_remaining_forecast():
     assert forecast.tank_masses_mt[1] == pytest.approx(24.0)
 
 
+def test_manual_mass_reanchors_plan_and_equal_time_sounding_has_final_authority():
+    forecast = forecast_tank_consumption_plan(
+        _plan(((1, 1.0),)),
+        [_interval(10, 10)],
+        {1: 20.0},
+        START + timedelta(hours=10),
+        [
+            (START + timedelta(hours=4), "SOUNDING", 1, 30.0),
+            (START + timedelta(hours=4), "MANUAL_INITIAL_ROB", 1, 25.0),
+        ],
+    )
+    assert forecast.tank_masses_mt[1] == pytest.approx(24.0)
+
+
+def test_later_manual_mass_reanchors_older_sounding_in_plan():
+    forecast = forecast_tank_consumption_plan(
+        _plan(((1, 1.0),)),
+        [_interval(10, 10)],
+        {1: 20.0},
+        START + timedelta(hours=10),
+        [
+            (START + timedelta(hours=2), "SOUNDING", 1, 30.0),
+            (START + timedelta(hours=6), "MANUAL_INITIAL_ROB", 1, 18.0),
+        ],
+    )
+    assert forecast.tank_masses_mt[1] == pytest.approx(14.0)
+
+
 def test_transfer_and_confirmed_receipt_before_depletion_are_chronological():
     forecast = forecast_tank_consumption_plan(
         _plan(((1, 1.0),)), [_interval(10, 10)], {1: 5.0}, START + timedelta(hours=10),

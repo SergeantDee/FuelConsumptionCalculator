@@ -93,7 +93,7 @@ def estimate_tank_empty_time(
     tank_fuels: dict[int, str | None], transfers: list[InternalFuelTransfer] | None = None, receipts: list[BunkerTankReceipt] | None = None,
 ) -> tuple[datetime | None, str, str | None]:
     if anchor_mass_mt is None:
-        return None, "UNAVAILABLE", "No mass-bearing sounding available"
+        return None, "UNAVAILABLE", "No physical tank mass observation available"
     if fuel_type is None:
         return None, "UNAVAILABLE", "Fuel type unknown"
     mass = anchor_mass_mt

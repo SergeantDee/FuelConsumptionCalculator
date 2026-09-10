@@ -32,7 +32,7 @@ def test_fresh_release_database_contains_schema_only_and_no_vessel_data(tmp_path
     with sqlite3.connect(paths.database_file) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         assert connection.execute("SELECT value FROM application_metadata WHERE key = 'schema_version'").fetchone()[0] == str(SCHEMA_VERSION)
-        for table in ("vessels", "schedule_events", "fuel_tanks", "fuel_batches", "tank_soundings", "tank_sounding_surveys", "actual_rob_observations", "internal_fuel_transfers", "planned_bunker_quantities", "fuel_changeover_events"):
+        for table in ("vessels", "schedule_events", "fuel_tanks", "fuel_batches", "tank_soundings", "tank_sounding_surveys", "tank_mass_observations", "actual_rob_observations", "internal_fuel_transfers", "planned_bunker_quantities", "fuel_changeover_events"):
             assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
 
 

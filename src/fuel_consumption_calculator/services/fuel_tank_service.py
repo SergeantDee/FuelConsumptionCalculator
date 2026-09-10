@@ -21,7 +21,9 @@ from fuel_consumption_calculator.domain.fuel_tank import (
     FuelTank,
     InternalFuelTransfer,
     INTERNAL_TRANSFER_STATUSES,
+    PhysicalTankMassAnchor,
     TankCalibrationPoint,
+    TankMassObservation,
     TankSounding,
     TankSoundingSurvey,
 )
@@ -232,6 +234,62 @@ class FuelTankService:
             tank_id, target_utc.astimezone(timezone.utc).isoformat(timespec="seconds")
         )
 
+    def save_manual_tank_rob(
+        self,
+        *,
+        tank_id: int,
+        fuel_type: str,
+        mass_mt: float,
+        observed_at_utc: datetime | str | None = None,
+        remarks: str | None = None,
+    ) -> TankMassObservation:
+        """Persist a physical mass declaration without implying volume or sounding data."""
+        tank = self.get_tank(tank_id)
+        if tank is None:
+            raise FuelTankValidationError("Fuel tank does not exist.")
+        if fuel_type not in FUEL_BATCH_TYPES:
+            raise FuelTankValidationError("Fuel type must be ULSFO, VLSFO, or MDO.")
+        self._validate_number(mass_mt, "Manual tank ROB", minimum=0)
+        return self._repository.save_mass_observation(TankMassObservation(
+            None,
+            tank_id,
+            _utc_timestamp(observed_at_utc),
+            fuel_type,
+            float(mass_mt),
+            "MANUAL_INITIAL_ROB",
+            remarks.strip() or None if remarks else None,
+        ))
+
+    def list_manual_tank_rob_history(self, tank_id: int) -> list[TankMassObservation]:
+        return self._repository.list_mass_observations(tank_id)
+
+    def list_physical_mass_anchors(self, tank_id: int) -> list[PhysicalTankMassAnchor]:
+        return self._repository.list_physical_mass_anchors(tank_id)
+
+    def get_latest_physical_mass_anchor_at_or_before(
+        self, tank_id: int, target_utc: datetime | str,
+    ) -> PhysicalTankMassAnchor | None:
+        target = _parse_utc(target_utc if isinstance(target_utc, str) else target_utc.isoformat())
+        return next(
+            (item for item in self.list_physical_mass_anchors(tank_id)
+             if _parse_utc(item.observed_at_utc) <= target),
+            None,
+        )
+
+    def get_latest_physical_mass_anchor(self, tank_id: int) -> PhysicalTankMassAnchor | None:
+        anchors = self.list_physical_mass_anchors(tank_id)
+        return anchors[0] if anchors else None
+
+    def get_authoritative_volume_sounding_at_or_before(
+        self, tank_id: int, target_utc: datetime,
+    ) -> TankSounding | None:
+        """Return volume only when the authoritative mass anchor is itself a sounding."""
+        anchor = self.get_latest_physical_mass_anchor_at_or_before(tank_id, target_utc)
+        if anchor is None or anchor.source != "SOUNDING":
+            return None
+        sounding = self.get_latest_sounding_at_or_before(tank_id, _parse_utc(anchor.observed_at_utc))
+        return sounding if sounding and sounding.id == anchor.source_id else None
+
     def save_sounding_survey(self, vessel_id: int, effective_at_utc: datetime, trim_m: float, remarks: str | None, rows: list[dict]) -> list[TankSounding]:
         """Validate every included row before atomically persisting one survey."""
         self._validate_number(trim_m, "Trim")
@@ -433,7 +491,32 @@ class FuelTankService:
             target_utc = target_utc.replace(tzinfo=timezone.utc)
         tanks = self.list_tanks(vessel_id)
         batches = {batch.id: batch for batch in self.list_fuel_batches(vessel_id)}
-        tank_fuels = {tank.id: (batches[tank.current_fuel_batch_id].fuel_type if tank.current_fuel_batch_id in batches else None) for tank in tanks}
+        target_anchors = {
+            tank.id: self._forecast_anchor_at_or_before(
+                tank.id, target_utc, include_equal=not before_new_transfer_out,
+            )
+            for tank in tanks
+        }
+        observed_fuels = {
+            tank.id: next(
+                (
+                    observation.fuel_type
+                    for observation in self.list_physical_mass_anchors(tank.id)
+                    if _parse_utc(observation.observed_at_utc) <= target_utc
+                    and observation.fuel_type is not None
+                ),
+                None,
+            )
+            for tank in tanks
+        }
+        tank_fuels = {
+            tank.id: (
+                batches[tank.current_fuel_batch_id].fuel_type
+                if tank.current_fuel_batch_id in batches
+                else observed_fuels[tank.id]
+            )
+            for tank in tanks
+        }
         events = self.list_consumption_allocation_events(vessel_id)
         transfers = [
             item for item in self.list_internal_fuel_transfers(vessel_id)
@@ -454,19 +537,24 @@ class FuelTankService:
                 for item in phase.tanks:
                     plan_tank_ids.add(item.tank_id)
                     anchor = self._forecast_anchor_at_or_before(
-                        item.tank_id, plan.effective_from_utc, mass_bearing_only=mass_bearing_anchors,
+                        item.tank_id, plan.effective_from_utc,
                     )
-                    plan_masses[item.tank_id] = anchor.calculated_mass_mt if anchor and anchor.calculated_mass_mt is not None else None
-                    # A later mass-bearing observation is a physical re-anchor, not a
-                    # second deduction.  The engine applies it in UTC chronology.
-                    for sounding in self.list_sounding_history(item.tank_id):
-                        at = _parse_utc(sounding.effective_at_utc)
-                        if (
-                            at > _parse_utc(plan.effective_from_utc.isoformat())
-                            and (at < target_utc or (at == target_utc and not before_new_transfer_out))
-                            and sounding.calculated_mass_mt is not None
-                        ):
-                            physical_events.append((at, "SOUNDING", item.tank_id, sounding.calculated_mass_mt))
+                    plan_masses[item.tank_id] = anchor.mass_mt if anchor else None
+            # A later mass-bearing observation is a physical re-anchor, not a
+            # second deduction. Equal-time entries collapse to the repository's
+            # deterministic SOUNDING > MANUAL authority order.
+            for tank_id in plan_tank_ids:
+                seen_observation_times: set[datetime] = set()
+                for observation in self.list_physical_mass_anchors(tank_id):
+                    at = _parse_utc(observation.observed_at_utc)
+                    if at in seen_observation_times:
+                        continue
+                    seen_observation_times.add(at)
+                    if (
+                        at > _parse_utc(plan.effective_from_utc.isoformat())
+                        and (at < target_utc or (at == target_utc and not before_new_transfer_out))
+                    ):
+                        physical_events.append((at, observation.source, tank_id, observation.mass_mt))
             for transfer in transfers:
                 at = _parse_utc(transfer.effective_at_utc())
                 if at <= _parse_utc(plan.effective_from_utc.isoformat()) or at > target_utc or transfer.fuel_type != fuel:
@@ -486,45 +574,38 @@ class FuelTankService:
             plan_results[fuel] = (plan, forecast_tank_consumption_plan(plan, intervals, plan_masses, target_utc, physical_events))
         forecasts: list[TankForecast] = []
         for tank in tanks:
-            anchor = self._forecast_anchor_at_or_before(
-                tank.id, target_utc,
-                include_equal=not before_new_transfer_out,
-                mass_bearing_only=mass_bearing_anchors,
-            )
+            anchor = target_anchors[tank.id]
             fuel = tank_fuels[tank.id]
             if anchor is None:
-                forecasts.append(TankForecast(tank.id, fuel, None, None, None, None, "No actual tank sounding available."))
-                continue
-            if anchor.calculated_mass_mt is None:
-                forecasts.append(TankForecast(tank.id, fuel, _parse_utc(anchor.effective_at_utc), None, None, None, "Latest actual tank sounding has no mass snapshot."))
+                forecasts.append(TankForecast(tank.id, fuel, None, None, None, None, "No physical tank mass observation available."))
                 continue
             if fuel is None:
-                forecasts.append(TankForecast(tank.id, None, _parse_utc(anchor.effective_at_utc), anchor.calculated_mass_mt, None, None, "Tank fuel is unknown."))
+                forecasts.append(TankForecast(tank.id, None, _parse_utc(anchor.observed_at_utc), anchor.mass_mt, None, None, "Tank fuel is unknown."))
                 continue
             if fuel in plan_results:
                 plan, plan_result = plan_results[fuel]
                 if tank.id in plan_result.tank_masses_mt:
                     predicted = plan_result.tank_masses_mt[tank.id]
-                    depletion = None if predicted is None else max(0.0, anchor.calculated_mass_mt - predicted)
+                    depletion = None if predicted is None else max(0.0, anchor.mass_mt - predicted)
                     issue = "; ".join(plan_result.issues) or None
                     ordered = sorted(phase.sequence_number for phase in plan.phases)
                     active = plan_result.active_phase_sequence
                     next_phase = next((sequence for sequence in ordered if active is not None and sequence > active), None)
                     own_phase = next((phase.sequence_number for phase in plan.phases if any(item.tank_id == tank.id for item in phase.tanks)), None)
-                    forecasts.append(TankForecast(tank.id, fuel, _parse_utc(anchor.effective_at_utc), anchor.calculated_mass_mt, depletion, predicted, issue, plan_result.depletion_at_utc.get(tank.id), active, next_phase, plan_result.phase_starts_utc.get(own_phase)))
+                    forecasts.append(TankForecast(tank.id, fuel, _parse_utc(anchor.observed_at_utc), anchor.mass_mt, depletion, predicted, issue, plan_result.depletion_at_utc.get(tank.id), active, next_phase, plan_result.phase_starts_utc.get(own_phase)))
                     continue
-            allocations, issues = allocate_tank_depletion(intervals, events, tank_fuels, _parse_utc(anchor.effective_at_utc), target_utc)
+            allocations, issues = allocate_tank_depletion(intervals, events, tank_fuels, _parse_utc(anchor.observed_at_utc), target_utc)
             depletion = allocations.get(tank.id)
             issue = issues.get(tank.id)
             transfer_net = transfer_net_mt(
-                tank.id, transfers, _parse_utc(anchor.effective_at_utc), target_utc,
+                tank.id, transfers, _parse_utc(anchor.observed_at_utc), target_utc,
                 target_event_kinds=(frozenset({"TRANSFER_OUT"}) if before_new_transfer_out else frozenset({"TRANSFER_OUT", "TRANSFER_IN"})),
             )
             receipt_net = bunker_receipt_net_mt(
-                tank.id, receipts, _parse_utc(anchor.effective_at_utc), target_utc,
+                tank.id, receipts, _parse_utc(anchor.observed_at_utc), target_utc,
                 include_target=not before_new_transfer_out,
             )
-            forecasts.append(TankForecast(tank.id, fuel, _parse_utc(anchor.effective_at_utc), anchor.calculated_mass_mt, depletion, None if depletion is None else anchor.calculated_mass_mt - depletion + transfer_net + receipt_net, issue))
+            forecasts.append(TankForecast(tank.id, fuel, _parse_utc(anchor.observed_at_utc), anchor.mass_mt, depletion, None if depletion is None else anchor.mass_mt - depletion + transfer_net + receipt_net, issue))
         return forecasts
 
     def available_tank_mass_at(
@@ -550,14 +631,11 @@ class FuelTankService:
     def _forecast_anchor_at_or_before(
         self, tank_id: int, target_utc: datetime, *, include_equal: bool = True,
         mass_bearing_only: bool = False,
-    ) -> TankSounding | None:
-        if not mass_bearing_only and include_equal:
-            return self.get_latest_sounding_at_or_before(tank_id, target_utc)
+    ) -> PhysicalTankMassAnchor | None:
         target = _parse_utc(target_utc.isoformat())
         return next((
-            sounding for sounding in self.list_sounding_history(tank_id)
-            if (_parse_utc(sounding.effective_at_utc) <= target if include_equal else _parse_utc(sounding.effective_at_utc) < target)
-            and (sounding.calculated_mass_mt is not None or not mass_bearing_only)
+            observation for observation in self.list_physical_mass_anchors(tank_id)
+            if (_parse_utc(observation.observed_at_utc) <= target if include_equal else _parse_utc(observation.observed_at_utc) < target)
         ), None)
 
     def _validate_tank(self, tank: FuelTank) -> None:

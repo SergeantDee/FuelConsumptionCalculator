@@ -96,6 +96,8 @@ class Database:
                 self._migrate_to_v20(connection)
             if current_version < 21:
                 self._migrate_to_v21(connection)
+            if current_version < 22:
+                self._migrate_to_v22(connection)
             if current_version >= 9:
                 self._ensure_default_port_timezones(connection)
                 self._resolve_existing_schedule_timezones(connection)
@@ -835,6 +837,27 @@ class Database:
             """
         )
         LOGGER.info("Database migrated to schema version 21.")
+
+    def _migrate_to_v22(self, connection: sqlite3.Connection) -> None:
+        """Add manual physical tank mass observations without rewriting history."""
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS tank_mass_observations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tank_id INTEGER NOT NULL,
+                observed_at_utc TEXT NOT NULL,
+                fuel_type TEXT NOT NULL CHECK (fuel_type IN ('ULSFO', 'VLSFO', 'MDO')),
+                mass_mt REAL NOT NULL CHECK (mass_mt >= 0),
+                source TEXT NOT NULL CHECK (source IN ('MANUAL_INITIAL_ROB')),
+                remarks TEXT,
+                created_at_utc TEXT NOT NULL,
+                FOREIGN KEY (tank_id) REFERENCES fuel_tanks(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_tank_mass_observations_tank_time
+                ON tank_mass_observations (tank_id, observed_at_utc DESC, id DESC);
+            """
+        )
+        LOGGER.info("Database migrated to schema version 22.")
 
     def _ensure_default_port_timezones(self, connection: sqlite3.Connection) -> None:
         timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")

@@ -53,3 +53,18 @@ class SettingsService:
         settings = self.load()
         settings["vessel_time_offset_minutes"] = normalized
         self.save(settings)
+
+    def initialization_wizard_seen(self) -> bool:
+        return bool(self.load().get("initialization_wizard_seen", False))
+
+    def initialization_wizard_completed(self) -> bool:
+        return bool(self.load().get("initialization_wizard_completed", False))
+
+    def save_initialization_wizard_state(
+        self, *, seen: bool = True, completed: bool | None = None,
+    ) -> None:
+        settings = self.load()
+        settings["initialization_wizard_seen"] = bool(seen)
+        if completed is not None:
+            settings["initialization_wizard_completed"] = bool(completed)
+        self.save(settings)

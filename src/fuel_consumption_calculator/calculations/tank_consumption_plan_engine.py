@@ -16,7 +16,7 @@ def forecast_tank_consumption_plan(
     """Forecast one fuel plan in UTC order.
 
     Events are (time, kind, tank_id, mass): transfers, receipts, and mass-bearing
-    soundings. A sounding replaces the forecasted mass at that instant (re-anchor).
+    physical observations. An observation replaces forecast mass at that instant.
     Voyage deductions remain the only consumption authority.
     """
     target, cursor = _utc(target_utc), _utc(plan.effective_from_utc)
@@ -27,7 +27,7 @@ def forecast_tank_consumption_plan(
         return TankPlanForecast(masses, depleted, starts, None, 0.0, ("No consumption phase configured",) if not plan.phases else ())
     starts[plan.phases[0].sequence_number] = cursor
     issues: list[str] = []; unallocated = 0.0; phase_index = 0
-    events = sorted(((_utc(at), kind, tank_id, float(mass)) for at, kind, tank_id, mass in physical_events if cursor < _utc(at) <= target), key=lambda event: (event[0], {"TRANSFER_OUT": 0, "TRANSFER_IN": 1, "RECEIPT": 2, "SOUNDING": 3}.get(event[1], 9), event[2]))
+    events = sorted(((_utc(at), kind, tank_id, float(mass)) for at, kind, tank_id, mass in physical_events if cursor < _utc(at) <= target), key=lambda event: (event[0], {"TRANSFER_OUT": 0, "TRANSFER_IN": 1, "RECEIPT": 2, "MANUAL_INITIAL_ROB": 3, "SOUNDING": 4}.get(event[1], 9), event[2]))
     boundaries = {cursor, target, *(at for at, *_ in events)}
     for interval in intervals: boundaries.update((_utc(interval.start_utc), _utc(interval.end_utc)))
     boundaries = sorted(boundary for boundary in boundaries if cursor <= boundary <= target)
@@ -73,7 +73,7 @@ def _consume(plan, masses, depleted, starts, phase_index, begin, end, rate):
 def _apply_events_and_transition(plan, masses, depleted, starts, phase_index, instant, events):
     for kind, tank_id, mass in events:
         if tank_id not in masses: continue
-        if kind == "SOUNDING": masses[tank_id] = max(0.0, mass)
+        if kind in {"SOUNDING", "MANUAL_INITIAL_ROB"}: masses[tank_id] = max(0.0, mass)
         elif masses[tank_id] is not None: masses[tank_id] = max(0.0, float(masses[tank_id]) + (-mass if kind == "TRANSFER_OUT" else mass))
     while phase_index < len(plan.phases):
         phase = plan.phases[phase_index]; limiting = [item for item in phase.tanks if masses.get(item.tank_id) is not None and float(masses[item.tank_id]) <= phase.depletion_threshold_mt + _EPSILON]

@@ -48,8 +48,8 @@ class TankForecastService:
         return self._tanks.predict_tank_rob_at(vessel_id, max(ends), intervals) if ends else []
 
     def anchor_sounding_at(self, tank_id: int, target_utc: datetime) -> TankSounding | None:
-        """Return the exact historical sounding anchor used by arrival forecasting."""
-        return self._tanks.get_latest_sounding_at_or_before(tank_id, target_utc)
+        """Return volume basis only when the authoritative mass anchor is a sounding."""
+        return self._tanks.get_authoritative_volume_sounding_at_or_before(tank_id, target_utc)
 
     def predict_tank_empty_times(self, vessel_id: int, forecast_start_utc: datetime) -> list[TankEmptyForecast]:
         intervals = self._future_intervals(vessel_id)
@@ -60,11 +60,13 @@ class TankForecastService:
         receipts = self._tanks.list_confirmed_complete_bunker_receipts(vessel_id)
         results = []
         for tank in tanks:
-            anchor = self._tanks.get_latest_sounding(tank.id)
-            anchor_time = _as_utc(anchor.effective_at_utc) if anchor else forecast_start_utc
+            anchor = self._tanks.get_latest_physical_mass_anchor_at_or_before(tank.id, forecast_start_utc)
+            anchor_time = _as_utc(anchor.observed_at_utc) if anchor else forecast_start_utc
+            fuel_type = fuels[tank.id] or (anchor.fuel_type if anchor else None)
             relevant_transfers = [item for item in transfers if _as_utc(item.effective_at_utc()) > anchor_time]
-            empty_at, state, issue = estimate_tank_empty_time(tank.id, fuels[tank.id], anchor.calculated_mass_mt if anchor else None, forecast_start_utc, intervals, events, fuels, relevant_transfers, [item for item in receipts if _as_utc(item.effective_at_utc) > anchor_time])
-            results.append(TankEmptyForecast(tank.id, fuels[tank.id], forecast_start_utc, _as_utc(anchor.effective_at_utc) if anchor else None, anchor.calculated_mass_mt if anchor else None, None, empty_at, state, issue))
+            effective_fuels = dict(fuels); effective_fuels[tank.id] = fuel_type
+            empty_at, state, issue = estimate_tank_empty_time(tank.id, fuel_type, anchor.mass_mt if anchor else None, forecast_start_utc, intervals, events, effective_fuels, relevant_transfers, [item for item in receipts if _as_utc(item.effective_at_utc) > anchor_time])
+            results.append(TankEmptyForecast(tank.id, fuel_type, forecast_start_utc, _as_utc(anchor.observed_at_utc) if anchor else None, anchor.mass_mt if anchor else None, None, empty_at, state, issue))
         return results
 
     def _future_intervals(self, vessel_id: int) -> list[FuelDepletionInterval]:
