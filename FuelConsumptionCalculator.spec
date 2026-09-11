@@ -18,6 +18,19 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+
+# Poppler's ICU copies conflict with Qt's runtime resolution when bundled at
+# application level. Exclude only the two conflicting Poppler binaries.
+conflicting_poppler_icu = {"icuuc.dll", "icudt78.dll"}
+a.binaries = [
+    entry
+    for entry in a.binaries
+    if not (
+        Path(entry[0]).name.casefold() in conflicting_poppler_icu
+        and "poppler" in {part.casefold() for part in Path(entry[1]).parts}
+    )
+]
+
 pyz = PYZ(a.pure)
 
 exe = EXE(
