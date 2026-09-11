@@ -40,21 +40,11 @@ from fuel_consumption_calculator.services.planning_readiness_service import (
     VOYAGE_PROJECTION_AVAILABLE,
 )
 from fuel_consumption_calculator.ui.pages.fuel_tanks_page import VesselTankSetDialog
-from fuel_consumption_calculator.ui.widgets.vessel_clock import format_gmt_offset
-from fuel_consumption_calculator.ui.widgets.vessel_clock import vessel_local_time
+from fuel_consumption_calculator.ui.widgets.vessel_clock import VESSEL_GMT_OFFSETS_MINUTES, format_gmt_offset, vessel_local_time
 
 
 LOGGER = logging.getLogger(__name__)
 
-
-# Recognized civil offsets currently used around the world, including the
-# practical half-hour and quarter-hour ship-clock choices.
-VESSEL_GMT_OFFSETS_MINUTES = (
-    -720, -660, -600, -570, -540, -480, -420, -360, -300, -240, -210,
-    -180, -150, -120, -60, 0, 60, 120, 180, 210, 240, 270, 300, 330, 345,
-    360, 390, 420, 480, 525, 540, 570, 600, 630, 660, 720, 765, 780, 825,
-    840,
-)
 
 # Zero-valued fields omitted here are storage/engine fallbacks rather than
 # vessel defaults. Use Defaults must not overwrite operator values with them.
@@ -142,7 +132,7 @@ class SetupWizard(QDialog):
         root.setContentsMargins(24, 22, 24, 20)
         root.setSpacing(12)
         self.progress_label = QLabel()
-        self.progress_label.setObjectName("sectionTitle")
+        self.progress_label.setObjectName("pageEyebrow")
         self.title_label = QLabel()
         self.title_label.setObjectName("pageTitle")
         root.addWidget(self.progress_label)
@@ -228,6 +218,7 @@ class SetupWizard(QDialog):
         layout.addWidget(self.time_preview)
         layout.addWidget(_muted("Manually selected vessel local clock. Voyage calculations and persisted operational timestamps remain UTC."))
         self.vessel_validation = _warning("")
+        self.vessel_validation.hide()
         layout.addWidget(self.vessel_validation)
         layout.addStretch()
         return page
@@ -238,7 +229,7 @@ class SetupWizard(QDialog):
         )
         top = QHBoxLayout()
         self.profile_type_label = QLabel("DEFAULT PROFILE")
-        self.profile_type_label.setObjectName("cardValue")
+        self.profile_type_label.setObjectName("sectionCardTitle")
         defaults = QPushButton("Use Defaults")
         defaults.clicked.connect(self._use_performance_defaults)
         top.addWidget(self.profile_type_label)
@@ -471,6 +462,7 @@ class SetupWizard(QDialog):
                 self._settings_service.save_vessel_time_offset_minutes(int(self.timezone_input.currentData()))
                 self._load_performance(vessel.id)
                 self.vessel_validation.clear()
+                self.vessel_validation.hide()
             elif index == 1:
                 self._save_performance()
             elif index == 2:
@@ -503,6 +495,7 @@ class SetupWizard(QDialog):
         except ValueError as exc:
             if index == 0:
                 self.vessel_validation.setText(str(exc))
+                self.vessel_validation.show()
             else:
                 QMessageBox.warning(self, "Setup step not saved", str(exc))
             return False

@@ -77,7 +77,7 @@ class TankCard(QFrame):
         self._tank_id = tank.id
         self.setObjectName("tankCard")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.kind = kind; self.setMinimumHeight(180); self.setProperty("fuel", (fuel_type or "UNASSIGNED").upper())
+        self.kind = kind; self.setMinimumHeight(172); self.setProperty("fuel", (fuel_type or "UNASSIGNED").upper())
         self.setToolTip(tank.name)
         authoritative_sounding = (
             latest
@@ -88,7 +88,7 @@ class TankCard(QFrame):
             else None
         )
         fill_percent = None if authoritative_sounding is None else authoritative_sounding.calculated_volume_m3 / tank.capacity_m3 * 100
-        layout = QHBoxLayout(self); layout.setContentsMargins(17, 16, 16, 16); layout.setSpacing(14)
+        layout = QHBoxLayout(self); layout.setContentsMargins(14, 13, 13, 13); layout.setSpacing(10)
         details = QVBoxLayout()
         details.setSpacing(5)
         name = QLabel(_short_display_name(tank.name)); name.setObjectName("tankName")
@@ -410,13 +410,13 @@ class ConsumptionTanksDialog(QDialog):
         width = min(1100, available.width() - 48) if available else 1100; height = min(750, available.height() - 48) if available else 750
         self.setMinimumSize(min(800, width), min(560, height)); self.resize(width, height)
         layout = QVBoxLayout(self); layout.setContentsMargins(24, 20, 24, 18); layout.setSpacing(14)
-        title_row = QHBoxLayout(); title = QLabel("TANK CONSUMPTION PLAN"); title.setObjectName("pageTitle"); title_row.addWidget(title); title_row.addStretch(); title_row.addWidget(QLabel("Fuel")); self.fuel_input = QComboBox(); self.fuel_input.addItems(FUEL_BATCH_TYPES); self.fuel_input.setMinimumWidth(140); title_row.addWidget(self.fuel_input); layout.addLayout(title_row)
+        title_row = QHBoxLayout(); title = QLabel("Tank Consumption Plan"); title.setObjectName("sectionCardTitle"); title_row.addWidget(title); title_row.addStretch(); title_row.addWidget(QLabel("Fuel")); self.fuel_input = QComboBox(); self.fuel_input.addItems(FUEL_BATCH_TYPES); self.fuel_input.setMinimumWidth(140); title_row.addWidget(self.fuel_input); layout.addLayout(title_row)
         self.summary = QFrame(); self.summary.setObjectName("planSummaryCard"); summary_layout = QHBoxLayout(self.summary); summary_layout.setContentsMargins(16, 12, 16, 12); summary_layout.setSpacing(34)
         self.rob_summary = self._summary_value("CURRENT BUNKER-TANK ROB"); self.depletion_summary = self._summary_value("NEXT DEPLETION"); self.status_summary = self._summary_value("PLAN STATUS")
         summary_layout.addWidget(self.rob_summary); summary_layout.addWidget(self.depletion_summary, 1); summary_layout.addWidget(self.status_summary); layout.addWidget(self.summary)
         self.phase_scroll = QScrollArea(); self.phase_scroll.setWidgetResizable(True); self.phase_scroll.setFrameShape(QFrame.Shape.NoFrame); self.phase_content = QWidget(); self.phase_layout = QVBoxLayout(self.phase_content); self.phase_layout.setContentsMargins(0, 2, 6, 2); self.phase_layout.setSpacing(10); self.phase_layout.addStretch(); self.phase_scroll.setWidget(self.phase_content); layout.addWidget(self.phase_scroll, 1)
         self.add_phase_button = QPushButton("+ Add Phase"); self.add_phase_button.setObjectName("secondaryButton"); self.add_phase_button.clicked.connect(self._add_phase); layout.addWidget(self.add_phase_button, alignment=Qt.AlignmentFlag.AlignLeft)
-        footer = QHBoxLayout(); self.effective_label = _muted(""); footer.addWidget(self.effective_label); footer.addStretch(); cancel = QPushButton("Cancel"); cancel.clicked.connect(self.reject); self.save_button = QPushButton("Save Active Plan"); self.save_button.setObjectName("primaryButton"); self.save_button.clicked.connect(self._apply); footer.addWidget(cancel); footer.addWidget(self.save_button); layout.addLayout(footer)
+        footer = QHBoxLayout(); self.effective_label = _muted(""); self.effective_label.setMinimumWidth(220); footer.addWidget(self.effective_label); footer.addStretch(); cancel = QPushButton("Cancel"); cancel.clicked.connect(self.reject); self.save_button = QPushButton("Save Active Plan"); self.save_button.setObjectName("primaryButton"); self.save_button.clicked.connect(self._apply); footer.addWidget(cancel); footer.addWidget(self.save_button); layout.addLayout(footer)
         self._phases: list[list[tuple[int, float]]] = []; self._effective = datetime.now(timezone.utc)
         self.fuel_input.currentTextChanged.connect(self._load_plan)
         self._load_plan()
@@ -584,7 +584,7 @@ class _PhaseEditorDialog(QDialog):
         super().__init__(parent); self.setWindowTitle("Edit Consumption Phase")
         screen = QGuiApplication.primaryScreen(); available = screen.availableGeometry() if screen else None; width = min(850, available.width() - 48) if available else 850; height = min(600, available.height() - 48) if available else 600
         self.setMinimumSize(min(680, width), min(470, height)); self.resize(width, height); layout = QVBoxLayout(self); layout.setContentsMargins(22, 18, 22, 16); layout.setSpacing(12)
-        heading = QLabel("EDIT CONSUMPTION PHASE"); heading.setObjectName("pageTitle"); layout.addWidget(heading); layout.addWidget(_muted("The phase ends when the first selected tank reaches 0 MT. The next planned phase then becomes active."))
+        heading = QLabel("Edit Consumption Phase"); heading.setObjectName("sectionCardTitle"); layout.addWidget(heading); layout.addWidget(_muted("The phase ends when the first selected tank reaches 0 MT. The next planned phase then becomes active."))
         self.table = QTableWidget(0, 4); self.table.setHorizontalHeaderLabels(("Use", "Tank", "ROB / Forecast ROB", "Allocation %")); self.table.setSelectionMode(QTableWidget.SelectionMode.NoSelection); self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers); self.table.verticalHeader().setVisible(False); self.table.verticalHeader().setDefaultSectionSize(46); self.table.horizontalHeader().setStretchLastSection(False); layout.addWidget(self.table, 1)
         selected_by_id = dict(selected)
         for row, (tank_id, name) in enumerate(tanks):
@@ -619,7 +619,8 @@ class InternalTransferDialog(QDialog):
         super().__init__(parent)
         self._service, self._vessel_id = service, vessel_id
         self.setWindowTitle("Internal Transfer"); self.setMinimumSize(720, 480); self.resize(860, 560)
-        layout = QVBoxLayout(self); layout.addWidget(_muted("Move an assigned fuel quantity between two compatible tanks."))
+        layout = QVBoxLayout(self); layout.setContentsMargins(20, 18, 20, 18); layout.setSpacing(10)
+        title = QLabel("Internal Transfer"); title.setObjectName("sectionCardTitle"); layout.addWidget(title); layout.addWidget(_muted("Move an assigned fuel quantity between two compatible tanks. Total Vessel ROB is unchanged."))
         form = QFormLayout()
         self.from_input = QComboBox(); self.to_input = QComboBox()
         for tank in service.list_tanks(vessel_id):
@@ -634,9 +635,9 @@ class InternalTransferDialog(QDialog):
         self.time_input.setDateTime(QDateTime.currentDateTimeUtc())
         self.remarks_input = QLineEdit(); self.fuel_value = QLabel("--")
         form.addRow("FROM Tank", self.from_input); form.addRow("TO Tank", self.to_input); form.addRow("Fuel", self.fuel_value)
-        form.addRow("Quantity MT", self.quantity_input); form.addRow("Status", self.status_input); form.addRow("Effective Time UTC", self.time_input); form.addRow("Remarks", self.remarks_input)
+        form.addRow("Quantity (MT)", self.quantity_input); form.addRow("Status", self.status_input); form.addRow("Effective Time (UTC)", self.time_input); form.addRow("Remarks", self.remarks_input)
         layout.addLayout(form)
-        self.history_table = QTableWidget(0, 7); self.history_table.setHorizontalHeaderLabels(("Time UTC", "Status", "From", "To", "Fuel", "Quantity MT", "Remarks")); self.history_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.history_table = QTableWidget(0, 7); self.history_table.setHorizontalHeaderLabels(("Time (UTC)", "Status", "From", "To", "Fuel", "Quantity (MT)", "Remarks")); self.history_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers); self.history_table.verticalHeader().setVisible(False)
         history_header = self.history_table.horizontalHeader()
         history_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         history_header.setStretchLastSection(False)
@@ -644,6 +645,7 @@ class InternalTransferDialog(QDialog):
             self.history_table.setColumnWidth(column, width)
         self.history_table.setMaximumHeight(180); layout.addWidget(self.history_table)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Close)
+        buttons.button(QDialogButtonBox.StandardButton.Save).setObjectName("primaryButton")
         buttons.accepted.connect(self._save); buttons.rejected.connect(self.reject); layout.addWidget(buttons)
         self.from_input.currentIndexChanged.connect(self._refresh_fuel); self._refresh_fuel(); self._refresh_history()
 
@@ -692,11 +694,11 @@ class TankSoundingSurveyDialog(QDialog):
         common_box = QFrame(); common_box.setObjectName("surveyHeaderCard"); common = QGridLayout(common_box); common.setContentsMargins(14, 10, 14, 10); common.setHorizontalSpacing(10); common.setVerticalSpacing(8)
         self.time = QDateTimeEdit(); self.time.setCalendarPopup(True); self.time.setDisplayFormat("dd MMM yyyy HH:mm 'UTC'"); self.time.setTimeZone(QTimeZone.utc()); self.time.setDateTime(QDateTime.currentDateTimeUtc()); self.trim = QLineEdit("0"); self.remarks = QLineEdit()
         self.time.setMinimumWidth(330); self.trim.setFixedWidth(120)
-        common.addWidget(QLabel("Observation UTC"), 0, 0); common.addWidget(self.time, 0, 1); utc_note = QLabel("All times are in UTC"); utc_note.setObjectName("surveyHint"); common.addWidget(utc_note, 0, 2); common.addWidget(QLabel("Trim (m)"), 0, 3); common.addWidget(self.trim, 0, 4)
+        common.addWidget(QLabel("Observation Time (UTC)"), 0, 0); common.addWidget(self.time, 0, 1); utc_note = QLabel("All times are in UTC"); utc_note.setObjectName("surveyHint"); common.addWidget(utc_note, 0, 2); common.addWidget(QLabel("Trim (m)"), 0, 3); common.addWidget(self.trim, 0, 4)
         common.addWidget(QLabel("Remarks"), 1, 0); common.addWidget(self.remarks, 1, 1, 1, 4); layout.addWidget(common_box)
         common.setColumnStretch(1, 5); common.setColumnStretch(2, 2); common.setColumnStretch(4, 2)
         self.table = QTableWidget(0, 10); self.table.setObjectName("soundingSurveyTable")
-        self.table.setHorizontalHeaderLabels(("Include", "Tank", "Fuel / basis", "Measurement", "Reading (cm)", "Temp (°C)", "VCF", "Volume (m³)", "MT", "Status"))
+        self.table.setHorizontalHeaderLabels(("Include", "Tank", "Fuel / Basis", "Measurement", "Reading (cm)", "Temp (°C)", "VCF", "Volume (m³)", "MT", "Status"))
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers); self.table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self.table.verticalHeader().setVisible(False); self.table.verticalHeader().setDefaultSectionSize(52); self.table.setAlternatingRowColors(True)
         self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded); self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -827,7 +829,7 @@ class FuelTanksPage(QWidget):
         self.tank_cards: list[TankCard] = []
         root = QVBoxLayout(self); root.setContentsMargins(0, 0, 0, 0)
         scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.Shape.NoFrame)
-        content = QWidget(); content.setMinimumWidth(900)
+        content = QWidget(); content.setMinimumWidth(820)
         layout = QVBoxLayout(content); layout.setContentsMargins(32, 28, 32, 28); layout.setSpacing(14)
         layout.addWidget(PageHeader("Fuel Oil Tanks", "Vessel fuel tank overview and ROB management."))
         self.vessel_label = _muted("Vessel: Not configured"); layout.addWidget(self.vessel_label)
@@ -846,7 +848,7 @@ class FuelTanksPage(QWidget):
         layout.addLayout(self.primary_actions_layout)
         layout.addWidget(self.arrangement_panel)
         recent_title = QLabel("RECENT SOUNDINGS / ROB HISTORY"); recent_title.setObjectName("sectionTitle"); layout.addWidget(recent_title)
-        self.history_table = QTableWidget(0, 12); self.history_table.setHorizontalHeaderLabels(("UTC", "Tank", "Type", "Reading (cm)", "Trim (m)", "Temp (°C)", "Observed (m³)", "VCF", "Volume @15°C (m³)", "MT", "Fuel", "Batch"))
+        self.history_table = QTableWidget(0, 12); self.history_table.setHorizontalHeaderLabels(("Time (UTC)", "Tank", "Type", "Reading (cm)", "Trim (m)", "Temp (°C)", "Observed (m³)", "VCF", "Volume @15°C (m³)", "MT", "Fuel", "Batch"))
         self.history_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers); self.history_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection); self.history_table.setAlternatingRowColors(True)
         self.history_table.verticalHeader().setVisible(False); self.history_table.horizontalHeader().setStretchLastSection(True); self.history_table.setMinimumHeight(190); layout.addWidget(self.history_table)
         self.history_empty_label = _muted("No tank soundings recorded."); layout.addWidget(self.history_empty_label); layout.addStretch()
@@ -890,9 +892,12 @@ class FuelTanksPage(QWidget):
             if not tanks: continue
             section = QWidget(); layout = QVBoxLayout(section); layout.setContentsMargins(0, 0, 0, 0); layout.setSpacing(8)
             total, unknown = self._group_total(tanks)
-            heading = QLabel(f"{title}     Total ROB: {total if total is not None else '—'}" + (f"  ·  {unknown} tank unknown" if unknown else "")); heading.setObjectName("tankGroupHeading"); heading.setStyleSheet(f"color:{fuel_color(fuel)};"); layout.addWidget(heading)
+            unknown_text = f"  ·  {unknown} {'tank' if unknown == 1 else 'tanks'} unknown" if unknown else ""
+            heading = QLabel(f"{title}     Total ROB: {total if total is not None else '—'}{unknown_text}"); heading.setObjectName("tankGroupHeading"); heading.setStyleSheet(f"color:{fuel_color(fuel)};"); layout.addWidget(heading)
             grid = QGridLayout(); grid.setHorizontalSpacing(10); grid.setVerticalSpacing(10)
-            split = 5 if title == "VLSFO Tanks" else len(tanks)
+            # Four cards remain readable at common 1280/1366-wide workstations;
+            # additional tanks wrap instead of extending beyond the viewport.
+            split = min(4, len(tanks))
             for index, tank in enumerate(tanks): self._add_tank_card(grid, tank, index // split, index % split, batches, history, fuel.lower())
             for column in range(split): grid.setColumnStretch(column, 1)
             layout.addLayout(grid); self.arrangement_layout.addWidget(section)

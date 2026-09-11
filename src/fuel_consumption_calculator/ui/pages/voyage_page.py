@@ -1384,7 +1384,7 @@ class NewChangeoverDialog(QDialog):
         self.planned.setCalendarPopup(True)
         self.planned.setTimeZone(QTimeZone.utc())
         self.planned.setDisplayFormat("dd MMM yyyy HH:mm 'UTC'")
-        grid.addWidget(QLabel("Planned UTC"), 0, 0)
+        grid.addWidget(QLabel("Planned (UTC)"), 0, 0)
         grid.addWidget(self.planned, 0, 1, 1, 2)
         for row, (machinery, label) in enumerate((("MAIN_ENGINE", "Main Engine"), ("GENERATORS", "Auxiliary Engines"), ("AUX_BOILER", "Auxiliary Boiler")), start=1):
             enabled = QCheckBox(label)
@@ -1457,7 +1457,7 @@ class ChangeoverDetailsDialog(QDialog):
         self.actual.setDisplayFormat("dd MMM yyyy HH:mm 'UTC'")
         self.actual.setEnabled(self.actual_enabled.isChecked())
         self.actual_enabled.toggled.connect(self.actual.setEnabled)
-        grid.addWidget(QLabel("Planned UTC"), 0, 0)
+        grid.addWidget(QLabel("Planned (UTC)"), 0, 0)
         grid.addWidget(self.planned, 0, 1)
         grid.addWidget(self.actual_enabled, 1, 0)
         grid.addWidget(self.actual, 1, 1)

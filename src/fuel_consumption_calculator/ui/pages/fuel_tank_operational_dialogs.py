@@ -7,7 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import QDateTime, QTimeZone
 from PySide6.QtWidgets import (
     QComboBox, QDateTimeEdit, QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout,
-    QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QTableWidget,
+    QGridLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QTableWidget,
     QTableWidgetItem, QTextEdit, QVBoxLayout,
 )
 
@@ -72,13 +72,14 @@ def generate_calibration_points(tank_id: int, max_reading: float, reading_interv
 class CalibrationDialog(QDialog):
     def __init__(self, service: FuelTankService, tank: FuelTank, parent=None) -> None:
         super().__init__(parent); self._service, self._tank = service, tank; self.setWindowTitle("Tank Calibration"); self.resize(760, 520)
-        layout = QVBoxLayout(self); layout.addWidget(QLabel(f"{tank.name}  ·  Capacity {tank.capacity_m3:.2f} m³"))
-        self.status = QLabel(); layout.addWidget(self.status)
-        self.table = QTableWidget(0, 4); self.table.setHorizontalHeaderLabels(("Sounding cm", "Ullage cm", "Trim m", "Volume m³")); layout.addWidget(self.table)
-        actions = QHBoxLayout()
-        for text, callback in (("Add Row", self.add_row), ("Delete Selected Row", self.delete_rows), ("Import Excel", self.import_excel), ("Export Excel", self.export_excel), ("Generate Table", self.generate)):
-            button = QPushButton(text); button.clicked.connect(callback); actions.addWidget(button)
-        layout.addLayout(actions); buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel); buttons.accepted.connect(self.save); buttons.rejected.connect(self.reject); layout.addWidget(buttons)
+        layout = QVBoxLayout(self); layout.setContentsMargins(20, 18, 20, 18); layout.setSpacing(10)
+        title = QLabel(f"{tank.name}  ·  Capacity {tank.capacity_m3:.2f} m³"); title.setObjectName("sectionCardTitle"); layout.addWidget(title)
+        self.status = QLabel(); self.status.setObjectName("mutedText"); layout.addWidget(self.status)
+        self.table = QTableWidget(0, 4); self.table.setHorizontalHeaderLabels(("Sounding (cm)", "Ullage (cm)", "Trim (m)", "Volume (m³)")); self.table.verticalHeader().setVisible(False); self.table.horizontalHeader().setStretchLastSection(True); layout.addWidget(self.table)
+        actions = QGridLayout(); actions.setHorizontalSpacing(8); actions.setVerticalSpacing(8)
+        for index, (text, callback) in enumerate((("Add Row", self.add_row), ("Delete Selected", self.delete_rows), ("Import Excel", self.import_excel), ("Export Excel", self.export_excel), ("Generate Table", self.generate))):
+            button = QPushButton(text); button.clicked.connect(callback); actions.addWidget(button, index // 3, index % 3)
+        layout.addLayout(actions); buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel); buttons.button(QDialogButtonBox.StandardButton.Save).setObjectName("primaryButton"); buttons.accepted.connect(self.save); buttons.rejected.connect(self.reject); layout.addWidget(buttons)
         self.set_points(service.list_calibration_points(tank.id)); self._refresh_status()
 
     def set_points(self, points: list[TankCalibrationPoint]) -> None:
@@ -126,12 +127,12 @@ class CalibrationDialog(QDialog):
 
 class GenerateCalibrationDialog(QDialog):
     def __init__(self, tank: FuelTank, parent=None) -> None:
-        super().__init__(parent); self.setWindowTitle("Generate Calibration Table")
-        layout=QVBoxLayout(self); form=QFormLayout(); self.inputs=[]
+        super().__init__(parent); self.setWindowTitle("Generate Calibration Table"); self.resize(620, 520)
+        layout=QVBoxLayout(self); layout.setContentsMargins(20, 18, 20, 18); layout.setSpacing(10); form=QFormLayout(); form.setVerticalSpacing(8); self.inputs=[]
         fields=(("Max Sounding / Reference Height cm",100), ("Sounding Interval cm",10), ("Max Forward Trim m",2), ("Max Aft Trim m",2), ("Trim Interval m",1), ("Max Volume at Even Keel m³",tank.capacity_m3), ("Max Volume at Maximum Forward Trim m³",tank.capacity_m3), ("Max Volume at Maximum Aft Trim m³",tank.capacity_m3))
         for label, default in fields:
             widget=QDoubleSpinBox(); widget.setRange(0,100000); widget.setDecimals(3); widget.setValue(default); form.addRow(label,widget); self.inputs.append(widget)
-        layout.addLayout(form); layout.addWidget(QLabel("Forward trim is negative; aft trim is positive. Generated values are an approximation for review.")); buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Ok|QDialogButtonBox.StandardButton.Cancel); buttons.accepted.connect(self.accept); buttons.rejected.connect(self.reject); layout.addWidget(buttons)
+        layout.addLayout(form); note=QLabel("Forward trim is negative; aft trim is positive. Generated values are an approximation for review."); note.setObjectName("mutedText"); note.setWordWrap(True); layout.addWidget(note); buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Ok|QDialogButtonBox.StandardButton.Cancel); buttons.button(QDialogButtonBox.StandardButton.Ok).setObjectName("primaryButton"); buttons.accepted.connect(self.accept); buttons.rejected.connect(self.reject); layout.addWidget(buttons)
     def values(self) -> tuple[float,...]: return tuple(widget.value() for widget in self.inputs)
 
 
@@ -143,7 +144,10 @@ class UpdateTankROBDialog(QDialog):
         self._snapshot = None
         self._valid = False
         self.setWindowTitle("Update Tank ROB")
+        self.resize(620, 620)
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(10)
         points = service.list_calibration_points(tank.id)
         self.types = [kind for kind in MEASUREMENT_TYPES if any((p.sounding_cm if kind == "SOUNDING" else p.ullage_cm) is not None for p in points)]
         if not self.types:
@@ -155,13 +159,15 @@ class UpdateTankROBDialog(QDialog):
         self.type = QComboBox(); self.type.addItems(self.types)
         self.reading = QLineEdit(); self.trim = QLineEdit("0"); self.temperature = QLineEdit(); self.manual_vcf = QLineEdit(); self.manual_vcf.setPlaceholderText("Optional, e.g. 0.98500")
         self.remarks = QTextEdit()
-        form.addRow("Observation Time UTC", self.time); form.addRow("Measurement Type", self.type); form.addRow("Reading cm", self.reading); form.addRow("Trim m", self.trim); form.addRow("Temperature °C", self.temperature)
+        self.remarks.setMaximumHeight(84)
+        form.addRow("Observation Time (UTC)", self.time); form.addRow("Measurement Type", self.type); form.addRow("Reading (cm)", self.reading); form.addRow("Trim (m)", self.trim); form.addRow("Temperature (°C)", self.temperature)
         form.addRow("Fuel", QLabel(self._batch.fuel_type if self._batch else "UNKNOWN")); form.addRow("Batch", QLabel(self._batch.batch_name if self._batch else "No batch assigned")); form.addRow("Density @15°C", QLabel(f"{self._batch.density_15_kg_m3:.3f} kg/m³" if self._batch else "--")); form.addRow("Manual VCF", self.manual_vcf); form.addRow("Remarks", self.remarks)
         layout.addLayout(form)
         layout.addWidget(_muted_label("AUTO VCF uses this tank sounding's temperature and assigned batch density @15°C. Enter Manual VCF only for an explicit override."))
         self.preview = QLabel("Enter reading and trim to calculate volume."); self.preview.setWordWrap(True); layout.addWidget(self.preview)
         layout.addWidget(_muted_label("A valid batch density and temperature create a mass-bearing ROB anchor."))
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Save).setObjectName("primaryButton")
         buttons.accepted.connect(self.save); buttons.rejected.connect(self.reject); layout.addWidget(buttons)
         self.reading.textChanged.connect(self.update_preview); self.trim.textChanged.connect(self.update_preview); self.type.currentTextChanged.connect(self.update_preview); self.manual_vcf.textChanged.connect(self.update_preview)
         self.update_preview()

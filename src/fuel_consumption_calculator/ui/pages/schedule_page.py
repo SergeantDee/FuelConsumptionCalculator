@@ -154,6 +154,7 @@ class SchedulePreviewDialog(QDialog):
         table = QTableView()
         table.setModel(ScheduleTableModel(candidates))
         table.setAlternatingRowColors(True)
+        table.verticalHeader().setVisible(False)
         table.horizontalHeader().setStretchLastSection(True)
         table.resizeColumnsToContents()
         layout.addWidget(table, 1)
@@ -182,7 +183,14 @@ class ScheduleEventDialog(QDialog):
         self.resize(500, 500)
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(12)
+        heading = QLabel("Edit Schedule Event" if event else "Add Schedule Event")
+        heading.setObjectName("sectionCardTitle")
+        layout.addWidget(heading)
         form = QFormLayout()
+        form.setHorizontalSpacing(18)
+        form.setVerticalSpacing(9)
 
         self.sequence_input = QSpinBox()
         self.sequence_input.setMinimum(1)
@@ -239,6 +247,8 @@ class ScheduleEventDialog(QDialog):
         layout.addWidget(time_note)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Ok)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Save Event")
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setObjectName("primaryButton")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -340,6 +350,7 @@ class SchedulePage(QWidget):
         self.table_view.setAlternatingRowColors(True)
         self.table_view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table_view.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table_view.verticalHeader().setVisible(False)
         self.table_view.verticalHeader().setDefaultSectionSize(32)
         self.table_view.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.table_view.horizontalHeader().setStretchLastSection(True)
@@ -533,7 +544,7 @@ class SchedulePage(QWidget):
             self.status_label.setText(message)
 
     def _resize_table_columns(self) -> None:
-        for index, width in enumerate((48, 170, 105, 145, 145, 95, 110)):
+        for index, width in enumerate((44, 145, 90, 145, 145, 80, 100, 78)):
             self.table_view.setColumnWidth(index, width)
 
 

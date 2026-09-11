@@ -95,6 +95,15 @@ def test_wizard_preloads_existing_vessel_and_preserves_it(tmp_path, qapp):
     assert services[7].initialization_wizard_seen()
 
 
+def test_wizard_validation_banner_is_hidden_until_vessel_input_is_invalid(tmp_path, qapp):
+    wizard = _wizard(_services(tmp_path))
+
+    assert wizard.vessel_validation.isHidden()
+    assert not wizard._save_step(0)
+    assert not wizard.vessel_validation.isHidden()
+    assert wizard.vessel_validation.text()
+
+
 @pytest.mark.parametrize(
     ("minutes", "display"),
     ((60, "GMT +01:00"), (-210, "GMT -03:30")),
@@ -414,5 +423,24 @@ def test_main_window_handles_incomplete_setup_and_dashboard_explains_it(tmp_path
         assert "Current Predicted ROB unavailable" in text
         assert "Reason:" in text
         assert window.dashboard_page.resolve_button.isVisibleTo(window.dashboard_page)
+    finally:
+        window.close()
+
+
+def test_compact_window_reclaims_sidebar_width_and_uses_gmt_selector(tmp_path, qapp):
+    window = build_main_window(AppPaths(tmp_path))
+    try:
+        window.resize(1180, 760)
+        window.show()
+        qapp.processEvents()
+        assert window.sidebar.width() == 188
+        assert not window.schedule_page.table_view.verticalHeader().isVisible()
+        offset_input = window.settings_page.vessel_time_offset_input
+        assert offset_input.currentText().startswith("GMT ")
+        assert "minutes" not in offset_input.currentText().lower()
+
+        window.resize(1366, 768)
+        qapp.processEvents()
+        assert window.sidebar.width() == 205
     finally:
         window.close()

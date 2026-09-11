@@ -79,10 +79,11 @@ class MainWindow(QMainWindow):
 
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(220)
+        self.sidebar = sidebar
+        sidebar.setFixedWidth(205)
         sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(16, 24, 16, 18)
-        sidebar_layout.setSpacing(7)
+        sidebar_layout.setContentsMargins(14, 22, 14, 16)
+        sidebar_layout.setSpacing(6)
         brand = QLabel("FUEL PLANNER")
         brand.setObjectName("brandTitle")
         sidebar_layout.addWidget(brand)
@@ -92,7 +93,7 @@ class MainWindow(QMainWindow):
         self.setup_status_label = QLabel()
         self.setup_status_label.setWordWrap(True)
         sidebar_layout.addWidget(self.setup_status_label)
-        sidebar_layout.addSpacing(22)
+        sidebar_layout.addSpacing(16)
 
         self.page_stack = QStackedWidget()
         self.dashboard_page = DashboardPage(
@@ -202,7 +203,7 @@ class MainWindow(QMainWindow):
         layout = QHBoxLayout(row)
         layout.setContentsMargins(16, 5, 16, 5)
         layout.setSpacing(10)
-        local_title = QLabel("VESSEL LOCAL TIME")
+        local_title = QLabel("VESSEL LOCAL")
         local_title.setObjectName("fieldLabel")
         self.vessel_time_label = QLabel()
         self.vessel_time_label.setObjectName("cardValue")
@@ -214,10 +215,11 @@ class MainWindow(QMainWindow):
         self.utc_time_label = QLabel()
         self.utc_time_label.setObjectName("mutedText")
         separator_two = QLabel("|")
-        self.vessel_time_minus_button = QPushButton("-1 HOUR")
-        self.vessel_time_plus_button = QPushButton("+1 HOUR")
+        self.vessel_time_minus_button = QPushButton("−1 h")
+        self.vessel_time_plus_button = QPushButton("+1 h")
         for button in (self.vessel_time_minus_button, self.vessel_time_plus_button):
             button.setMinimumHeight(26)
+            button.setFixedWidth(72)
         self.vessel_time_minus_button.clicked.connect(lambda: self._adjust_vessel_time_offset(-60))
         self.vessel_time_plus_button.clicked.connect(lambda: self._adjust_vessel_time_offset(60))
         for widget in (local_title, self.vessel_time_label, self.gmt_offset_label, separator_one, utc_title, self.utc_time_label, separator_two, self.vessel_time_minus_button, self.vessel_time_plus_button):
@@ -241,6 +243,11 @@ class MainWindow(QMainWindow):
         self._vessel_time_offset_minutes = clamp_offset_minutes(minutes)
         self._settings_service.save_vessel_time_offset_minutes(self._vessel_time_offset_minutes)
         self._refresh_clock()
+
+    def resizeEvent(self, event) -> None:
+        """Reclaim content width on compact workstations without changing navigation."""
+        self.sidebar.setFixedWidth(188 if event.size().width() < 1200 else 205)
+        super().resizeEvent(event)
 
     def select_page(self, index: int) -> None:
         if not 0 <= index < self.page_stack.count():

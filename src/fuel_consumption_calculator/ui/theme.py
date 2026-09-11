@@ -35,8 +35,9 @@ QPushButton#navigationButton:checked {
     color: #ffffff;
     font-weight: 600;
 }
-#pageTitle { color: #ffffff; font-size: 22pt; font-weight: 700; }
+#pageTitle { color: #ffffff; font-size: 21pt; font-weight: 700; }
 #pageSubtitle { color: #86a7b9; font-size: 10pt; }
+#pageEyebrow { color: #59cbe8; font-size: 9pt; font-weight: 700; }
 #card {
     background-color: #122838;
     border: 1px solid #23475d;
@@ -137,6 +138,11 @@ QLabel#fieldLabel { color: #a8c1cf; font-weight: 600; }
 QLabel#sectionTitle {
     color: #f4fbff;
     font-size: 11pt;
+    font-weight: 700;
+}
+QLabel#sectionCardTitle {
+    color: #f4fbff;
+    font-size: 14pt;
     font-weight: 700;
 }
 QLabel#emptyState {
@@ -265,13 +271,14 @@ QTabBar::tab:hover {
 }
 QScrollArea { border: none; background: transparent; }
 QDialogButtonBox { padding-top: 6px; }
+QDialogButtonBox QPushButton { min-width: 96px; }
 QScrollBar:vertical, QScrollBar:horizontal {
     background-color: #0b1824;
     border: 1px solid #263f50;
     margin: 0;
 }
-QScrollBar:vertical { width: 15px; }
-QScrollBar:horizontal { height: 15px; }
+QScrollBar:vertical { width: 12px; }
+QScrollBar:horizontal { height: 12px; }
 QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
     background-color: #31556b;
     border-radius: 5px;
@@ -299,7 +306,7 @@ QStatusBar { background-color: #0d1d29; color: #7798aa; }
 #tankCard[fuel="VLSFO"] { border-color: #66538d; }
 #tankCard:hover { background-color: #143246; border-color: #7bbbd2; }
 #tankName { color: #f4fbff; font-size: 14px; font-weight: 600; }
-#tankRob { color: #f5fbff; font-size: 29px; font-weight: 600; }
+#tankRob { color: #f5fbff; font-size: 25px; font-weight: 650; }
 #tankFill { font-size: 18px; font-weight: 700; }
 #tankMeta { color: #8caabd; font-size: 10px; }
 #tankGaugeMark { color: #b2c5d0; font-size: 9px; }

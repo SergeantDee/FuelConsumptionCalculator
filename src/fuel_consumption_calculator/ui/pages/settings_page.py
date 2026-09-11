@@ -14,7 +14,7 @@ from fuel_consumption_calculator.services.settings_service import SettingsServic
 from fuel_consumption_calculator.services.vessel_service import VesselService, VesselValidationError
 from fuel_consumption_calculator.services.voyage_service import VoyageService
 from fuel_consumption_calculator.ui.widgets.page_header import PageHeader
-from fuel_consumption_calculator.ui.widgets.vessel_clock import format_gmt_offset
+from fuel_consumption_calculator.ui.widgets.vessel_clock import VESSEL_GMT_OFFSETS_MINUTES, format_gmt_offset
 
 
 LOGGER = logging.getLogger(__name__)
@@ -36,8 +36,9 @@ class SettingsPage(QWidget):
         self._starting_rob_inputs: dict[str, QDoubleSpinBox] = {}
 
         root_layout = QVBoxLayout(self)
-        root_layout.setContentsMargins(0, 0, 0, 0)
-        root_layout.setSpacing(0)
+        root_layout.setContentsMargins(32, 28, 32, 28)
+        root_layout.setSpacing(12)
+        root_layout.addWidget(PageHeader("Settings", "Configure vessel, route, and application presentation settings."))
         self.tabs = QTabWidget()
         root_layout.addWidget(self.tabs)
 
@@ -45,11 +46,10 @@ class SettingsPage(QWidget):
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.content = QWidget()
-        self.content.setMinimumWidth(900)
+        self.content.setMinimumWidth(820)
         layout = QVBoxLayout(self.content)
-        layout.setContentsMargins(32, 28, 32, 28)
+        layout.setContentsMargins(18, 16, 18, 18)
         layout.setSpacing(14)
-        layout.addWidget(PageHeader("Settings", "Configure the active vessel used by this installation."))
 
         setup_panel = QFrame()
         setup_panel.setObjectName("card")
@@ -70,7 +70,7 @@ class SettingsPage(QWidget):
         panel_layout.setContentsMargins(20, 18, 20, 18)
         panel_layout.setSpacing(12)
         section_title = QLabel("Vessel configuration")
-        section_title.setObjectName("cardValue")
+        section_title.setObjectName("sectionCardTitle")
         panel_layout.addWidget(section_title)
 
         form = QFormLayout()
@@ -90,7 +90,7 @@ class SettingsPage(QWidget):
 
         actions = QHBoxLayout()
         actions.addStretch()
-        self.save_button = QPushButton("Save vessel")
+        self.save_button = QPushButton("Save Vessel")
         self.save_button.setObjectName("primaryButton")
         self.save_button.clicked.connect(self._save_vessel)
         actions.addWidget(self.save_button)
@@ -101,7 +101,9 @@ class SettingsPage(QWidget):
         rob_panel.setObjectName("card")
         rob_layout = QVBoxLayout(rob_panel)
         rob_layout.setContentsMargins(20, 18, 20, 18)
-        rob_layout.addWidget(QLabel("Projection Starting ROB"))
+        rob_title = QLabel("Projection Starting ROB")
+        rob_title.setObjectName("sectionCardTitle")
+        rob_layout.addWidget(rob_title)
         rob_note = QLabel("Used only as the initial projection anchor when no later Actual ROB observation is available.")
         rob_note.setObjectName("mutedText")
         rob_note.setWordWrap(True)
@@ -130,7 +132,7 @@ class SettingsPage(QWidget):
         timezone_layout.setContentsMargins(20, 18, 20, 18)
         timezone_layout.setSpacing(10)
         timezone_title = QLabel("Port timezones")
-        timezone_title.setObjectName("cardValue")
+        timezone_title.setObjectName("sectionCardTitle")
         timezone_layout.addWidget(timezone_title)
         timezone_form = QFormLayout()
         timezone_form.setVerticalSpacing(10)
@@ -145,7 +147,7 @@ class SettingsPage(QWidget):
         timezone_form.addRow(self._field_label("Timezone ID"), self.timezone_input)
         timezone_layout.addLayout(timezone_form)
         tz_actions = QHBoxLayout()
-        self.save_timezone_button = QPushButton("Save timezone")
+        self.save_timezone_button = QPushButton("Save Timezone")
         self.save_timezone_button.clicked.connect(self._save_timezone)
         tz_actions.addWidget(self.save_timezone_button)
         tz_actions.addStretch()
@@ -167,7 +169,7 @@ class SettingsPage(QWidget):
         scraper_layout.setContentsMargins(20, 18, 20, 18)
         scraper_layout.setSpacing(10)
         scraper_title = QLabel("Scraper")
-        scraper_title.setObjectName("cardValue")
+        scraper_title.setObjectName("sectionCardTitle")
         scraper_layout.addWidget(scraper_title)
         scraper_form = QFormLayout()
         scraper_form.setVerticalSpacing(10)
@@ -179,12 +181,10 @@ class SettingsPage(QWidget):
         self.ui_scale_input = QComboBox()
         self.ui_scale_input.addItems(["80%", "90%", "100%", "110%", "125%"])
         scraper_form.addRow(self._field_label("UI Scale"), self.ui_scale_input)
-        self.vessel_time_offset_input = QDoubleSpinBox()
-        self.vessel_time_offset_input.setDecimals(0)
-        self.vessel_time_offset_input.setRange(-720, 840)
-        self.vessel_time_offset_input.setSingleStep(30)
-        self.vessel_time_offset_input.setSuffix(" minutes")
-        scraper_form.addRow(self._field_label("Vessel Time GMT Offset"), self.vessel_time_offset_input)
+        self.vessel_time_offset_input = QComboBox()
+        for offset_minutes in VESSEL_GMT_OFFSETS_MINUTES:
+            self.vessel_time_offset_input.addItem(format_gmt_offset(offset_minutes), offset_minutes)
+        scraper_form.addRow(self._field_label("Vessel GMT Offset"), self.vessel_time_offset_input)
         scraper_layout.addLayout(scraper_form)
         scale_note = QLabel("UI Scale is applied the next time the application starts.")
         scale_note.setObjectName("mutedText")
@@ -193,13 +193,13 @@ class SettingsPage(QWidget):
         self.vessel_time_note.setObjectName("mutedText")
         scraper_layout.addWidget(self.vessel_time_note)
         scraper_actions = QHBoxLayout()
-        self.save_scraper_button = QPushButton("Save scraper settings")
+        self.save_scraper_button = QPushButton("Save Browser Mode")
         self.save_scraper_button.clicked.connect(self._save_scraper_settings)
         scraper_actions.addWidget(self.save_scraper_button)
-        self.save_ui_scale_button = QPushButton("Save UI scale")
+        self.save_ui_scale_button = QPushButton("Save UI Scale")
         self.save_ui_scale_button.clicked.connect(self._save_ui_scale)
         scraper_actions.addWidget(self.save_ui_scale_button)
-        self.save_vessel_time_button = QPushButton("Save vessel time offset")
+        self.save_vessel_time_button = QPushButton("Save Vessel Time")
         self.save_vessel_time_button.clicked.connect(self._save_vessel_time_offset)
         scraper_actions.addWidget(self.save_vessel_time_button)
         scraper_actions.addStretch()
@@ -238,7 +238,11 @@ class SettingsPage(QWidget):
         scale = self._settings_service.load().get("ui_scale_percent", 100)
         self.ui_scale_input.setCurrentText(f"{scale}%" if str(scale) in {"80", "90", "100", "110", "125"} else "100%")
         offset = self._settings_service.vessel_time_offset_minutes()
-        self.vessel_time_offset_input.setValue(offset)
+        offset_index = self.vessel_time_offset_input.findData(offset)
+        if offset_index < 0:
+            self.vessel_time_offset_input.addItem(format_gmt_offset(offset), offset)
+            offset_index = self.vessel_time_offset_input.count() - 1
+        self.vessel_time_offset_input.setCurrentIndex(offset_index)
         self.vessel_time_note.setText(f"Vessel clock display only. {format_gmt_offset(offset)}; voyage calculations remain UTC.")
         self._refresh_timezones()
         self._refresh_routes()
@@ -264,7 +268,7 @@ class SettingsPage(QWidget):
     def _build_routes_tab(self) -> QWidget:
         tab = QWidget()
         layout = QHBoxLayout(tab)
-        layout.setContentsMargins(32, 28, 32, 28)
+        layout.setContentsMargins(18, 16, 18, 18)
         layout.setSpacing(14)
 
         library_panel = QFrame()
@@ -272,7 +276,6 @@ class SettingsPage(QWidget):
         library_layout = QVBoxLayout(library_panel)
         library_layout.setContentsMargins(20, 18, 20, 18)
         library_layout.setSpacing(10)
-        library_layout.addWidget(PageHeader("Routes & Distances", "Manage route-library distances used by voyage calculations."))
         note = QLabel("Rows marked MISSING have no sea distance; downstream speed, consumption, and ROB may be unavailable.")
         note.setObjectName("mutedText")
         note.setWordWrap(True)
@@ -281,15 +284,16 @@ class SettingsPage(QWidget):
         self.routes_table.setHorizontalHeaderLabels((
             "Origin",
             "Destination",
-            "Departure Pilot Distance NM",
-            "Departure Pilot Duration",
-            "Sea Distance NM",
-            "Arrival Pilot Distance NM",
-            "Arrival Pilot Duration",
+            "Depart Pilot\nDistance (NM)",
+            "Depart Pilot\nDuration",
+            "Sea Distance\n(NM)",
+            "Arrival Pilot\nDistance (NM)",
+            "Arrival Pilot\nDuration",
         ))
         self.routes_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.routes_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.routes_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.routes_table.verticalHeader().setVisible(False)
         self.routes_table.verticalHeader().setDefaultSectionSize(30)
         self.routes_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.routes_table.horizontalHeader().setStretchLastSection(True)
@@ -304,7 +308,7 @@ class SettingsPage(QWidget):
         editor_layout.setContentsMargins(20, 18, 20, 18)
         editor_layout.setSpacing(12)
         title = QLabel("Route editor")
-        title.setObjectName("cardValue")
+        title.setObjectName("sectionCardTitle")
         editor_layout.addWidget(title)
         editor_layout.addWidget(QLabel("Select a route to edit it, or enter a new port pair."))
         form = QFormLayout()
@@ -393,7 +397,7 @@ class SettingsPage(QWidget):
         QMessageBox.information(self, "UI scale saved", "UI Scale will be applied when the application is restarted.")
 
     def _save_vessel_time_offset(self) -> None:
-        offset = int(self.vessel_time_offset_input.value())
+        offset = int(self.vessel_time_offset_input.currentData())
         self._settings_service.save_vessel_time_offset_minutes(offset)
         self.vessel_time_note.setText(f"Vessel clock display only. {format_gmt_offset(offset)}; voyage calculations remain UTC.")
         self.vessel_time_offset_changed.emit(offset)

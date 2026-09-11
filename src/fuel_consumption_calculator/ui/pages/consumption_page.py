@@ -272,7 +272,7 @@ class ConsumptionPage(QWidget):
         edit_grid.addWidget(self.change_from_input, 0, 3)
         edit_grid.addWidget(QLabel("To"), 1, 0)
         edit_grid.addWidget(self.change_to_input, 1, 1)
-        edit_grid.addWidget(QLabel("Planned UTC"), 1, 2)
+        edit_grid.addWidget(QLabel("Planned (UTC)"), 1, 2)
         edit_grid.addWidget(self.change_planned_input, 1, 3)
         edit_grid.addWidget(self.change_actual_enabled, 2, 0)
         edit_grid.addWidget(self.change_actual_input, 2, 1)
@@ -285,7 +285,7 @@ class ConsumptionPage(QWidget):
         edit_grid.addWidget(self.delete_changeover_button, 2, 3)
         changeover_layout.addWidget(edit_panel)
         self.changeover_table = QTableWidget(0, 7)
-        self.changeover_table.setHorizontalHeaderLabels(["ID", "Machinery", "From", "To", "Planned UTC", "Actual UTC", "Status"])
+        self.changeover_table.setHorizontalHeaderLabels(["ID", "Machinery", "From", "To", "Planned (UTC)", "Actual (UTC)", "Status"])
         self.changeover_table.verticalHeader().setDefaultSectionSize(32)
         self.changeover_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self._changeover_fuel_delegate = FuelTextDelegate(self.changeover_table)
@@ -354,8 +354,8 @@ class ConsumptionPage(QWidget):
         self.changeover_to_temperature = QLineEdit()
         self.changeover_from_temperature.setMinimumHeight(32)
         self.changeover_to_temperature.setMinimumHeight(32)
-        self.changeover_from_temperature_label = QLabel("FROM Temperature (C)")
-        self.changeover_to_temperature_label = QLabel("TO Temperature (C)")
+        self.changeover_from_temperature_label = QLabel("FROM Temperature (°C)")
+        self.changeover_to_temperature_label = QLabel("TO Temperature (°C)")
         temp_grid.addWidget(self.changeover_from_temperature_label, 1, 0)
         temp_grid.addWidget(self.changeover_from_temperature, 1, 1)
         temp_grid.addWidget(self.changeover_to_temperature_label, 2, 0)
@@ -785,8 +785,8 @@ class ApplyChangeoverCalculationDialog(QDialog):
             ("Target Sulphur", self.target_sulfur_value),
             ("FROM Sulphur", self.from_sulfur_value),
             ("TO Sulphur", self.to_sulfur_value),
-            ("Effective / Completion Time UTC", self.effective_input),
-            ("Recommended Start Time UTC", self.recommended_start_value),
+            ("Effective / Completion Time (UTC)", self.effective_input),
+            ("Recommended Start Time (UTC)", self.recommended_start_value),
             ("Remarks", self.remarks_input),
         )):
             grid.addWidget(QLabel(label), row, 0)

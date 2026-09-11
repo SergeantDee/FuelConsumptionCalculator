@@ -6,6 +6,15 @@ from datetime import datetime, timedelta, timezone
 MIN_OFFSET_MINUTES = -12 * 60
 MAX_OFFSET_MINUTES = 14 * 60
 
+# Recognized civil offsets currently used around the world, including the
+# practical half-hour and quarter-hour ship-clock choices.
+VESSEL_GMT_OFFSETS_MINUTES = (
+    -720, -660, -600, -570, -540, -480, -420, -360, -300, -240, -210,
+    -180, -150, -120, -60, 0, 60, 120, 180, 210, 240, 270, 300, 330, 345,
+    360, 390, 420, 480, 525, 540, 570, 600, 630, 660, 720, 765, 780, 825,
+    840,
+)
+
 
 def clamp_offset_minutes(minutes: int) -> int:
     return max(MIN_OFFSET_MINUTES, min(MAX_OFFSET_MINUTES, int(minutes)))
