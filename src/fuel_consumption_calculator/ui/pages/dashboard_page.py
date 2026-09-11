@@ -34,12 +34,12 @@ class DashboardPage(QWidget):
         self._settings_service = settings_service
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(32, 28, 32, 28)
-        layout.setSpacing(12)
+        layout.setContentsMargins(30, 26, 30, 26)
+        layout.setSpacing(11)
         layout.addWidget(PageHeader("Dashboard", "Current vessel and fuel-planning overview."))
 
         identity = QFrame()
-        identity.setObjectName("card")
+        identity.setObjectName("identityCard")
         identity_layout = QGridLayout(identity)
         identity_layout.setContentsMargins(20, 18, 20, 18)
         identity_layout.addWidget(self._label("VESSEL"), 0, 0)
@@ -52,7 +52,7 @@ class DashboardPage(QWidget):
         identity_layout.addWidget(self.imo_value, 1, 1)
 
         fuel_cards = QHBoxLayout()
-        fuel_cards.setSpacing(14)
+        fuel_cards.setSpacing(12)
         self._rob_values: dict[str, QLabel] = {}
         estimated_title = QLabel("CURRENT PREDICTED ROB")
         estimated_title.setObjectName("sectionTitle")
@@ -84,9 +84,11 @@ class DashboardPage(QWidget):
 
     def _fuel_card(self, fuel: str) -> QFrame:
         card = QFrame()
-        card.setObjectName("card")
+        card.setObjectName("robCard")
+        card.setProperty("fuel", fuel)
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(14, 12, 14, 12)
+        card_layout.setContentsMargins(15, 12, 15, 12)
+        card_layout.setSpacing(8)
         card_layout.addWidget(FuelBadge(fuel))
         value = QLabel("— MT")
         value.setObjectName("cardValue")

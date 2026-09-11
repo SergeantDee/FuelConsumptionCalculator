@@ -7,8 +7,8 @@ class PageHeader(QWidget):
     def __init__(self, title: str, subtitle: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 12)
-        layout.setSpacing(4)
+        layout.setContentsMargins(0, 0, 0, 10)
+        layout.setSpacing(3)
         title_label = QLabel(title)
         title_label.setObjectName("pageTitle")
         subtitle_label = QLabel(subtitle)

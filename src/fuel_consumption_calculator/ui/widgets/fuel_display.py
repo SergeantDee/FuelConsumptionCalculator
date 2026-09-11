@@ -6,6 +6,7 @@ from PySide6.QtCore import QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QPainter, QTextDocument, QAbstractTextDocumentLayout
 from PySide6.QtWidgets import (
     QLabel,
+    QSizePolicy,
     QStyle,
     QStyledItemDelegate,
 )
@@ -51,11 +52,12 @@ class FuelBadge(QLabel):
         fuel = self.text()
         self.setObjectName("fuelBadge")
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.setStyleSheet(
             "QLabel#fuelBadge {"
             f" background: {FUEL_BADGE_BACKGROUNDS.get(fuel, '#34434d')};"
             f" color: {FUEL_COLORS.get(fuel, '#C2CDD3')};"
-            " border-radius: 7px; padding: 2px 6px; font-size: 8pt; font-weight: 700; }"
+            " border-radius: 5px; padding: 2px 7px; font-size: 8pt; font-weight: 700; }"
         )
 
 
